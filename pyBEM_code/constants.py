@@ -1,3 +1,10 @@
+# True == writes debug info to model_name.log file
+DEBUG = True
+
+# Flag that should turn to "INTERIOR" or "EXTERIOR",
+# after pre-processing and checking on the BEM model volume sign.
+BEM_TYPE = None
+
 # List of all supported Abaqus/PrePoMax keywords for pyBEM
 SUPPORTED_KEYWORDS = [
     '*HEADING', 
@@ -29,18 +36,15 @@ def TOP_LOG_LINES(self): return f"""
 *** MODEL SUMMARY ***
     =============
     INPUT file: "{self.file_path}"
-    MODEL name: {self.project_name}
+    MODEL name: "{self.project_name}"
     NODES: {len(self.nodes)}
     ELEMENTS: {len(self.elements)}
-    NSETS: {list(self.nsets.keys())}
-    ELSETS: {list(self.elsets.keys())}
-    SURFACES: {self.surfaces}
-    AMPLITUDES: {list(self.amplitudes.keys())}
-    MATERIALS: {self.materials}
+    NSETS ( {len(self.nsets)} ): {list(self.nsets.keys())}
+    ELSETS  ( {len(self.elsets)} ): {list(self.elsets.keys())}
+    SURFACES ( {len(self.surfaces)} ): {self.surfaces}
+    AMPLITUDES ( {len(self.amplitudes)} ): {list(self.amplitudes.keys())}
+    MATERIALS ( {len(self.materials)} ): {self.materials}
     FREQUENCIES: {len(self.frequencies)}
-    BCs: {self.bc_data}
+    BCs ( {len(self.bc_data)} ): {self.bc_data}
 {'-' * 80}
 """
-# this is flag that need to turn to INTERIOR or EXTERIOR,
-# after pre-processing and checking on the BEM model volume sign.
-BEM_TYPE = None

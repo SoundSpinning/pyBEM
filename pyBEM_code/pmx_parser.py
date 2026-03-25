@@ -261,12 +261,12 @@ class PMXParser:
                 return
         raise ValueError("No valid Acoustic Material properties found for assigned elements.")
 
-    def get_resolved_bcs(self):
+    def get_bcs(self):
         """
         Converts Surface or Set-based BCs into per-element values for the solver.
         This handles the PrePoMax / Abaqus hierarchy: BC -> Surface -> ELSET -> Elements.
         """
-        resolved = {}
+        bc_dict = {}; log_bc_info = ''
         
         # 1. Pre-resolve Surfaces to Element IDs
         # Mapping: { 'Inlet_Surface': [101, 102, 103...] }
@@ -276,7 +276,7 @@ class PMXParser:
             if elset_name in self.elsets:
                 surface_to_elements[surf_name] = self.elsets[elset_name]
             else:
-                # Some .inp files list elements directly in the surface
+                # TODO: Some .inp files list elements directly in the surface,
                 # if your parser handles that, add logic here.
                 pass
 
@@ -285,15 +285,15 @@ class PMXParser:
             target_name = bc['set']
             target_ids = []
 
-            # Priority 1: Check if the target is a Surface
+            # Step 1: Check if the target is a Surface
             if target_name in surface_to_elements:
                 target_ids = surface_to_elements[target_name]
             
-            # Priority 2: Check if target is a direct ELSET
+            # Step 2: Check if target is an ELSET
             elif target_name in self.elsets:
                 target_ids = self.elsets[target_name]
             
-            # Priority 3: Check if target is an NSET (find elements sharing these nodes)
+            # Step 3: Check if target is an NSET (find elements sharing these nodes)
             elif target_name in self.nsets:
                 target_nodes = set(self.nsets[target_name])
                 # Find any element where ALL nodes are in this NSET
@@ -301,25 +301,26 @@ class PMXParser:
                     if all(nid in target_nodes for nid in conn):
                         target_ids.append(eid)
 
-            # 3. Assign resolved values to the map
+            # 3. Assign bc_dict values to the map
             if not target_ids:
                 # Log a warning if a BC is defined but hits no elements
-                print(f"WARNING: BC target '{target_name}' could not be resolved to any elements.")
+                log_bc_info += f" WARNING: BC target '{target_name}' could not be resolved to any elements."
+                print(log_bc_info)
                 continue
 
             for eid in target_ids:
-                if eid not in resolved: 
-                    resolved[eid] = {}
+                if eid not in bc_dict: 
+                    bc_dict[eid] = {}
                 
                 # Assign type (PRES, VELO, IMPE) and value
-                resolved[eid][bc['type']] = bc['val']
+                bc_dict[eid][bc['type']] = bc['val']
                 
                 # Keep amplitude reference if it exists
                 if 'amp' in bc and bc['amp']:
-                    resolved[eid]['amp_name'] = bc['amp']
+                    bc_dict[eid]['amp_name'] = bc['amp']
 
-        print(f" BC-PROCESSING: BC Resolution complete. {len(resolved)} elements have active BCs.")
-        return resolved
+        print(f" BC-PROCESSING: BC Resolution complete. {len(bc_dict)} elements have active BCs.")
+        return bc_dict, log_bc_info
 
     def _get_param(self, line, key):
         """Extracts command parameters' values like 'NAME=Pipe'."""

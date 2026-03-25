@@ -10,7 +10,7 @@ from pmx_parser import PMXParser
 from solver_core import assemble_system, solve_bem_system, derive_surface_vectors, calculate_field_points
 from exporter import PVExporter
 from utils import calculate_element_properties, calculate_signed_volume, average_to_nodes
-from constants import TOP_LOG_LINES, BEM_TYPE
+from constants import TOP_LOG_LINES, BEM_TYPE, DEBUG
 
 def start_pybem_app():
     # 1. Ask the user for the file name
@@ -73,21 +73,23 @@ def start_pybem_app():
             for node_id in conn:
                 group_ids[node_id] = 2
         
-        # 3. CHECK on BEM volume: is it interior or exterior, or check for holes?
+        # 3. CHECK on BEM volume: is it interior or exterior, 
+        #    or check for holes / free edges in mesh.
         total_vol = calculate_signed_volume(bem_centers, bem_areas, bem_normals)
         if total_vol > 1e-9:
             BEM_TYPE = "INTERIOR"
             log_info = (f"""
  GEOMETRY: Closed (+) Volume detected ({total_vol:.4f} L**3). 
-           Normals point OUTWARD ==> {BEM_TYPE} analysis expected.\n""")
+           ( i ) Normals point OUTWARDS ==> {BEM_TYPE} analysis expected.\n""")
         elif total_vol < -1e-9:
             BEM_TYPE = "EXTERIOR"
             log_info = (f"""
- GEOMETRY: Closed (-) Volume detected ({abs(total_vol):.4f} L**3). 
-           Normals point INWARD ==> {BEM_TYPE} analysis expected.\n""")
+ GEOMETRY: Closed (-) Volume detected ({total_vol:.4f} L**3). 
+           ( i ) Normals point INWARDS ==> {BEM_TYPE} analysis expected.\n""")
         else:
-            print(f"\nError checking the model: [FATAL INPUT ERROR]")
-            log_info = (" GEOMETRY: Open surface or zero volume detected. CHECK your mesh.\n")
+            print(f"\nError in PRE-PROCESSING: [FATAL INPUT ERROR]")
+            log_info = (""" GEOMETRY: Open surface or zero volume detected. CHECK your mesh and normals.
+ ( i ) BEM element normals must be consistent and pointing AWAY from the acoustic domain.""")
             print(f"{log_info}")
             raise SystemExit
         
@@ -95,7 +97,21 @@ def start_pybem_app():
 
         # 4. Setup BCs
         # we get BCs at the ready for the solver
-        bc_map = parser.get_resolved_bcs()
+        bc_map, log_bc_info = parser.get_bcs()
+        log_info += log_bc_info
+        if DEBUG:
+            print(f"\n DEBUG: see '{parser.project_name}.log' for BC CHECKs (ELEMENTAL)")
+        # Use 'with' to ensure the file closes even if the app crashes
+        with open(log_f, "w") as log:
+            log.write(__solver__)
+            log.write(str(parser.header_comments))
+            log.write(str(parser.top_log))
+            log.write(log_info)
+            log.write(f" BC-PROCESSING: BC Resolution complete. {len(bc_map)} elements have active BCs.\n")
+            log.flush() # Forces write to disk so you can tail the log in real-time
+
+        # Add DEBUG lines, e.g. on BCs applied.
+        log_DEBUG = ''
         
         # 5. Setup Exporter
         # We pass mics_elements to the exporter so it can merge them into the VTU
@@ -109,18 +125,13 @@ def start_pybem_app():
         print(f"\n--- ACOUSICS job started at: {time.ctime()} ---")
         print(f"--- Solving {num_freqs} Frequencies ---\n")
 
-        # Use 'with' to ensure the file closes even if the app crashes
-        with open(log_f, "w") as log:
-            log.write(__solver__)
-            log.write(str(parser.header_comments))
-            log.write(str(parser.top_log))
-            log.write(log_info)
-            log.write(f" BC-PROCESSING: BC Resolution complete. {len(bc_map)} elements have active BCs.\n")
+        with open(log_f, "a") as log:
             log.write(f"\n ACOUSICS job started at: {time.ctime()}\n")
             log.write(f" --- Solving {num_freqs} Frequencies ---\n")
             log.write("-" * 80 + "\n")
             log.write(f"{'Freq (Hz)':<9} | {'Assembly (s)':<12} | {'Solve (s)':<9} | {'Matrix':<8} | {'Results file':<20} | {'Status'}\n")
             log.write("-" * 80 + "\n")
+            log.flush() # Forces write to disk so you can tail the log in real-time
 
             # --- The progress bar loop ---
             pbar = tqdm(parser.frequencies, desc="Done", ncols=80, unit="Freq", colour='black')
@@ -149,6 +160,17 @@ def start_pybem_app():
                     # 3.2. Reconstruct full p and v vectors for the surface
                     # Updated to use bem_ids to ensure p_surf/v_surf order matches the geometry
                     p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, bem_ids)
+
+                    # log_DEBUG:
+                    if DEBUG:
+                        log_DEBUG = f"\n{'-' * 80}\n DEBUG: BC CHECKs (ELEMENTAL)"
+                        # Get indices of elements that are part of the inlet surface
+                        inlet_indices = [i for i, ids in enumerate(bem_ids) if ids in parser.elsets ['Internal-1_inlet_S2']]
+
+                        for idx in inlet_indices[:4]: # Just check a few
+                            val = p_surf[idx]
+                            db = 20 * np.log10(np.abs(val) / 2e-11)
+                            log_DEBUG += f"\n  Element ID{bem_ids[idx]}: {val}MPa | {db:.2f}dB"
                     
                     # 3.3. Project to Mics (The Radiation Pass)
                     # Only if mics exist in the model
@@ -200,11 +222,12 @@ def start_pybem_app():
                     log.write(f"{f:<7.1f}Hz | {t_assembly:<11.4f}s | {t_solve:<8.4f}s | {cond:<8} | {rslt_f:<20} | FAILED: {str(e)}\n")
                     pbar.write(f"Error at {f}Hz: See '{log_f}' for details.")
                     traceback.print_exc()
-
+            
+            log.write(log_DEBUG)
             # 5. Final results output
             exporter.write_pvd()
-            log.write("-" * 80 + "\n")
-            log.write(f" --- All Frequency Results saved ---")
+            log.write(f"\n{'-' * 80}")
+            log.write(f"\n --- All Frequency Results saved ---")
             
             # --- Final Summary Timing ---
             total_elapsed = time.time() - global_t0

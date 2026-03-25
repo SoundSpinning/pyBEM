@@ -21,6 +21,52 @@ def prepare_geometry(nodes, elements):
         
     return np.array(centers), np.array(areas)
 
+# @njit(fastmath=True)   # 2 x slower vs parallel=True; both together is same 2 x slower.
+@njit(parallel=True)
+def assemble_system(centers, areas, normals, k, BEM_TYPE):
+    """
+    The Engine: Computes G and H matrices using element normals.
+    centers: (N, 3) array
+    areas: (N,) array
+    normals: (N, 3) array
+    k: wave number (complex or float)
+    Checks if BEM_TYPE = INTERIOR or EXTERIOR, and adapts maths accordingly.
+    """
+    n = len(centers)
+    G = np.zeros((n, n), dtype=np.complex128)
+    H = np.zeros((n, n), dtype=np.complex128)
+    
+    # 4*pi is a constant in the Green's function denominator
+    inv_4pi = 1.0 / (4.0 * np.pi)
+    # set the diagonal terms in H depending if exterior or interior BEM
+    if BEM_TYPE == "INTERIOR":
+        H_sign = -1.0
+    elif BEM_TYPE == "EXTERIOR":
+        H_sign = 1.0
+
+    for i in prange(n):
+        for j in range(n):
+            if i == j:
+                # Analytical self-term approximations for diagonal terms
+                G[i, j] = inv_4pi * np.sqrt(areas[i] / np.pi)
+                H[i, j] = H_sign*0.5  # Jump term for smooth surfaces
+            else:
+                # Vector from source j to receiver i
+                r_vec = centers[i] - centers[j]
+                r = np.linalg.norm(r_vec)
+                
+                # Free-space 3D Helmholtz Green's function
+                g_val = np.exp(1j * k * r) * inv_4pi / r
+                G[i, j] = g_val * areas[j]
+                
+                # Double Layer (H): Derivative of G with respect to normal n_j
+                # grad_g = g_val * (1j * k - 1/r) * (r_vec / r)
+                dot_prod = np.dot(r_vec / r, normals[j])
+                H[i, j] = g_val * (1j * k - 1.0 / r) * dot_prod * areas[j]
+    return G, H
+
+# @njit(parallel=True)   # it crashes Numba
+# @njit(fastmath=True)   # it crashes Numba
 def solve_bem_system(G, H, bc_map, elements_list, log=None):
     """
     Rearranges the BEM system (H*p = G*v) based on Boundary Conditions.
@@ -76,56 +122,6 @@ def solve_bem_system(G, H, bc_map, elements_list, log=None):
     # Solve for the unknown surface values (usually Pressure)
     surface_solution = np.linalg.solve(A, B)
     return (surface_solution, cond)
-
-# @njit(fastmath=True)
-# def get_greens(r, k):
-#     """3D Helmholtz Green's Function."""
-#     if r < 1e-9: return 0.0 + 0.0j
-#     return np.exp(1j * k * r) / (4.0 * np.pi * r)
-
-@njit(fastmath=True)
-# @njit(parallel=True)
-def assemble_system(centers, areas, normals, k, BEM_TYPE):
-    """
-    The Engine: Computes G and H matrices using element normals.
-    centers: (N, 3) array
-    areas: (N,) array
-    normals: (N, 3) array
-    k: wave number (complex or float)
-    Checks if BEM_TYPE = INTERIOR or EXTERIOR, and adapts maths accordingly.
-    """
-    n = len(centers)
-    G = np.zeros((n, n), dtype=np.complex128)
-    H = np.zeros((n, n), dtype=np.complex128)
-    
-    # 4*pi is a constant in the Green's function denominator
-    inv_4pi = 1.0 / (4.0 * np.pi)
-    # set the diagonal terms in H depending if exterior or interior BEM
-    if BEM_TYPE == "INTERIOR":
-        H_sign = -1.0
-    elif BEM_TYPE == "EXTERIOR":
-        H_sign = 1.0
-
-    for i in prange(n):
-        for j in range(n):
-            if i == j:
-                # Analytical self-term approximations for diagonal terms
-                G[i, j] = inv_4pi * np.sqrt(areas[i] / np.pi)
-                H[i, j] = H_sign*0.5  # Jump term for smooth surfaces
-            else:
-                # Vector from source j to receiver i
-                r_vec = centers[i] - centers[j]
-                r = np.linalg.norm(r_vec)
-                
-                # Free-space 3D Helmholtz Green's function
-                g_val = np.exp(1j * k * r) * inv_4pi / r
-                G[i, j] = g_val * areas[j]
-                
-                # Double Layer (H): Derivative of G with respect to normal n_j
-                # grad_g = g_val * (1j * k - 1/r) * (r_vec / r)
-                dot_prod = np.dot(r_vec / r, normals[j])
-                H[i, j] = g_val * (1j * k - 1.0 / r) * dot_prod * areas[j]
-    return G, H
 
 def derive_surface_vectors(p_sol, bc_map, bem_ids):
     """
@@ -192,3 +188,9 @@ def calculate_field_points(mic_centers, surf_centers, surf_areas, surf_normals, 
             
         p_mics[i] = sum_p
     return p_mics
+
+# @njit(fastmath=True)
+# def get_greens(r, k):
+#     """3D Helmholtz Green's Function."""
+#     if r < 1e-9: return 0.0 + 0.0j
+#     return np.exp(1j * k * r) / (4.0 * np.pi * r)
