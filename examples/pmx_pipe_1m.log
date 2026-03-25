@@ -1,0 +1,51 @@
+
+          ============================================================          
+                  BEM Acoustics Solver | pyBEM - V0.0.1-alpha
+                           (Standard Collocation)
+          ============================================================          
+***
+*Heading
+Hash: FU7FqNXE, Date: 03/17/2026, Unit system: MM_TON_S_C
+bem_pipe_1m.pmx
+pyBEM - BEM solver tests:
+circular pipe with surfaces for BCs (vels & impedance)
+Generic test model to calc open ends and
+quarter wave pipes (open one end).
+***
+--------------------------------------------------------------------------------
+*** MODEL SUMMARY ***
+    =============
+    INPUT file: "pmx_pipe_1m.inp"
+    MODEL name: pmx_pipe_1m
+    NODES: 803
+    ELEMENTS: 478
+    NSETS: ['Internal-1_inlet', 'Internal-1_outlet']
+    ELSETS: ['pipe', 'Internal-1_inlet_S2', 'Internal-1_outlet_S2']
+    AMPLITUDES: ['Amp_pres', 'Amp_impe', 'Amp_vels']
+    MATERIALS: {'Air': {'density': 1.21e-12, 'bulk': 0.1424, 'c': 343053.85934751283}}
+    FREQUENCIES: 6
+    BCs: [{'type': 'PRES', 'set': 'inlet', 'val': 2e-11, 'amp': None}]
+--------------------------------------------------------------------------------
+ ACOUSICS job started at: Mon Mar 23 10:53:54 2026
+ --- Solving 6 Frequencies ---
+--------------------------------------------------------------------------------
+Freq (Hz) | Assembly (s) | Solve (s) | Matrix   | Results file         | Status
+--------------------------------------------------------------------------------
+20.0   Hz | 4.1951     s | 2.4571  s | N/     | Result_20.0Hz.vtu    | OK
+256.0  Hz | 4.1727     s | 2.5491  s | N/     | Result_256.0Hz.vtu   | OK
+492.0  Hz | 4.2274     s | 2.4500  s | N/     | Result_492.0Hz.vtu   | OK
+728.0  Hz | 4.1194     s | 2.5086  s | N/     | Result_728.0Hz.vtu   | OK
+964.0  Hz | 4.0694     s | 2.4124  s | N/     | Result_964.0Hz.vtu   | OK
+1200.0 Hz | 4.1261     s | 2.5602  s | N/     | Result_1200.0Hz.vtu  | OK
+--------------------------------------------------------------------------------
+ --- All Frequency Results saved ---
+--------------------------------------------------------------------------------
+*** SIMULATION SUMMARY ***
+    ==================
+    Total Frequencies:  6
+    Total Elapsed Time: 40.13 seconds (0.67 minutes)
+    Avg Time per Freq:  6.689 seconds
+    Simulation Finished at:        Mon Mar 23 10:54:34 2026
+    Check 'pmx_pipe_1m.log' for details.
+    Open 'pmx_pipe_1m_Results.pvd' in ParaView.
+--------------------------------------------------------------------------------
