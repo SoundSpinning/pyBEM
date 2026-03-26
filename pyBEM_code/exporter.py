@@ -3,6 +3,7 @@ import numpy as np
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 import shutil # Standard Python library for high-level file operations
+from constants import P_REF
 
 class PVExporter:
     def __init__(self, project_name, nodes, elements, mics_elements=None):
@@ -12,8 +13,7 @@ class PVExporter:
         self.elements = elements
         self.mics_elements = mics_elements if mics_elements else {}
 
-        # Using the standard reference for air (20 microPa in mm units is 2e-11)
-        self.P_REF = 2e-11
+        self.P_REF = P_REF   # see P_REF in constants.py
         self.pv_dir = "PV"
         self.results_list = [] # Keeps track of (freq, filename) for the .pvd
 
@@ -26,12 +26,12 @@ class PVExporter:
             shutil.rmtree(self.pv_dir) # Deletes the folder and everything in it
         os.makedirs(self.pv_dir)
         
-    def calculate_spl(self, pressure_complex):
-        """Calculates Sound Pressure Level in dB."""
-        p_mag = np.abs(pressure_complex)
-        # Avoid log(0)
-        p_mag = np.maximum(p_mag, 1e-15)
-        return 20 * np.log10(p_mag / self.P_REF)
+    # def calculate_spl(self, pressure_complex):
+    #     """Calculates Sound Pressure Level in dB."""
+    #     p_mag = np.abs(pressure_complex)
+    #     # Avoid log(0)
+    #     p_mag = np.maximum(p_mag, 2e-14)
+    #     return 20 * np.log10(p_mag / self.P_REF)
 
     def write_vtu(self, freq, nodal_pressures, group_ids=None, velocity_nodal=None):
         """
@@ -102,7 +102,7 @@ class PVExporter:
             f.write('        <DataArray type="Float32" Name="SPL_dB" format="ascii">\n')
             for nid in node_ids:
                 p_mag = abs(nodal_pressures[nid])
-                spl = 20 * np.log10(max(p_mag, 1e-15) / self.P_REF)
+                spl = 20 * np.log10(max(p_mag, 2e-14) / self.P_REF)
                 f.write(f"{spl:.2f} ")
             f.write('\n        </DataArray>\n')
 

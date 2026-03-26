@@ -5,6 +5,8 @@ DEBUG = True
 # after pre-processing and checking on the BEM model volume sign.
 BEM_TYPE = None
 
+P_REF = 2e-11   # MPa, mm models for air @20C
+
 # List of all supported Abaqus/PrePoMax keywords for pyBEM
 SUPPORTED_KEYWORDS = [
     '*HEADING', 

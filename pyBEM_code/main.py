@@ -10,7 +10,7 @@ from pmx_parser import PMXParser
 from solver_core import assemble_system, solve_bem_system, derive_surface_vectors, calculate_field_points
 from exporter import PVExporter
 from utils import calculate_element_properties, calculate_signed_volume, average_to_nodes
-from constants import TOP_LOG_LINES, BEM_TYPE, DEBUG
+from constants import TOP_LOG_LINES, BEM_TYPE, DEBUG, P_REF
 
 def start_pybem_app():
     # 1. Ask the user for the file name
@@ -112,6 +112,9 @@ def start_pybem_app():
 
         # Add DEBUG lines, e.g. on BCs applied.
         log_DEBUG = ''
+        # time average counts
+        all_t_avr = 0
+        all_t_exp = 0
         
         # 5. Setup Exporter
         # We pass mics_elements to the exporter so it can merge them into the VTU
@@ -122,15 +125,17 @@ def start_pybem_app():
         global_t0 = time.time()
 
         num_freqs = len(parser.frequencies)
-        print(f"\n--- ACOUSICS job started at: {time.ctime()} ---")
-        print(f"--- Solving {num_freqs} Frequencies ---\n")
+        print(f"\n--- ACOUSTICS job started at:  {time.ctime()} ---")
+        print(f"--- Solving {num_freqs} Frequencies (Steady State Direct) ---\n")
 
         with open(log_f, "a") as log:
-            log.write(f"\n ACOUSICS job started at: {time.ctime()}\n")
-            log.write(f" --- Solving {num_freqs} Frequencies ---\n")
-            log.write("-" * 80 + "\n")
-            log.write(f"{'Freq (Hz)':<9} | {'Assembly (s)':<12} | {'Solve (s)':<9} | {'Matrix':<8} | {'Results file':<20} | {'Status'}\n")
-            log.write("-" * 80 + "\n")
+            log.write(f"\n{'-' * 80}")
+            log.write(f"\n ACOUSICS job started at: {time.ctime()}")
+            log.write(f"\n --- Solving {num_freqs} Frequencies ---")
+            log.write(f"\n{'=' * 108}")
+            log.write(f"""
+{'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Pres&Vels':^9} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
+            log.write(f"\n{'=' * 108}\n")
             log.flush() # Forces write to disk so you can tail the log in real-time
 
             # --- The progress bar loop ---
@@ -156,21 +161,33 @@ def start_pybem_app():
                     # 3.1. Solve the BEM Surface
                     # Passing bem_ids ensures BCs match the matrix rows/columns
                     p_unknowns, cond = solve_bem_system(G_surf, H_surf, bc_map, bem_ids, log=log)
-                    
+
+                    t_slv_1 = time.time()
+                
                     # 3.2. Reconstruct full p and v vectors for the surface
                     # Updated to use bem_ids to ensure p_surf/v_surf order matches the geometry
                     p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, bem_ids)
 
                     # log_DEBUG:
                     if DEBUG:
-                        log_DEBUG = f"\n{'-' * 80}\n DEBUG: BC CHECKs (ELEMENTAL)"
-                        # Get indices of elements that are part of the inlet surface
-                        inlet_indices = [i for i, ids in enumerate(bem_ids) if ids in parser.elsets ['Internal-1_inlet_S2']]
+                        if f == parser.frequencies[0]:
+                            log_DEBUG = f"""
+{'-' * 80}
+*** DEBUG ***
+    =====
+    BC CHECKs (ELEMENTAL) - Only for 1st Freq:"""
+                            # Get indices of elements that are part of the inlet surface
+                            inlet_indices = [i for i, ids in enumerate(bem_ids) if ids in parser.elsets     ['Internal-1_inlet_S2']]
+                            # inlet_indices = [i for i, ids in enumerate(bem_ids) if ids in parser.elsets   ['Internal-1_outlet_S2']]
 
-                        for idx in inlet_indices[:4]: # Just check a few
-                            val = p_surf[idx]
-                            db = 20 * np.log10(np.abs(val) / 2e-11)
-                            log_DEBUG += f"\n  Element ID{bem_ids[idx]}: {val}MPa | {db:.2f}dB"
+                            for idx in inlet_indices[:3]: # Just check a few
+                                p_val = p_surf[idx]
+                                v_val = v_surf[idx]
+                                db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
+                                log_DEBUG += f"\n    Element ID{bem_ids[idx]}: {p_val}MPa | {db:.2f}dB"
+                                log_DEBUG += f"\n                   {v_val}mm/s"
+                    
+                    t_slv_2 = time.time()
                     
                     # 3.3. Project to Mics (The Radiation Pass)
                     # Only if mics exist in the model
@@ -184,7 +201,13 @@ def start_pybem_app():
                             v_surf, 
                             k
                         )
-                    t_solve = time.time() - t_slv_0
+                    t_slv_3 = time.time()
+                    
+                    t_solve_bem = t_slv_1 - t_slv_0
+                    t_solve_pv = t_slv_2 - t_slv_1
+                    t_solve_mics = t_slv_3 - t_slv_2
+                    t_solve = t_slv_3 - t_slv_0
+
                 except np.linalg.LinAlgError:
                     log.write(f"      Status: FAILED (Singular Matrix)\n")
                     traceback.print_exc()
@@ -192,10 +215,19 @@ def start_pybem_app():
 
                 # 4. Post-Process & Export: Convert element-center results to nodes for smooth ParaView viewing
                 try:
+                    t_avg_0 = time.time()
                     # 4.1. Get nodal averages for BEM & Mics elements
                     nodal_p_surf = average_to_nodes(parser.nodes, parser.elements, p_surf)
                     nodal_p_mics = average_to_nodes(parser.nodes, parser.mics_elements, p_mics)
+                    t_avg_1 = time.time()
+                    all_t_avr += t_avg_1-t_avg_0
                     
+                    if DEBUG:
+                        if f == parser.frequencies[-1]:
+                            to_nods_avg_time = all_t_avr / num_freqs if num_freqs > 0 else 0
+                            log_DEBUG += f"\n\n    Function 'average_to_nodes' per Freq took: {to_nods_avg_time:.3f}s"
+                    
+                    t_exp_0 = time.time()
                     # 4.2. Combine them into one master results dictionary/array
                     # Since they are NumPy arrays, adding them merges the results
                     nodal_pressures = nodal_p_surf + nodal_p_mics
@@ -210,10 +242,17 @@ def start_pybem_app():
                     
                     # Write the .vtu file for this frequency
                     exporter.write_vtu(f, nodal_pressures, group_ids=group_ids)
-
-                    # Write formatted row to LOG
+                    t_exp_1 = time.time()
+                    all_t_exp += t_exp_1-t_exp_0
+                    
+                    if DEBUG:
+                        if f == parser.frequencies[-1]:
+                            exp_avg_time = all_t_exp / num_freqs if num_freqs > 0 else 0
+                            log_DEBUG += f"\n    Write / Export of Results per Freq, into PV format took: {exp_avg_time:.3f}s"
+                    
+                    # Write formatted table header to LOG
                     rslt_f = f'Result_{f:.1f}Hz.vtu'
-                    log.write(f"{f:<7.1f}Hz | {t_assembly:<11.4f}s | {t_solve:<8.4f}s | {cond:<8} | {rslt_f:<20} | OK\n")
+                    log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8.1f} | {rslt_f:<20} | {'OK':^6}\n")
                     log.flush() # Forces write to disk so you can tail the log in real-time
 
                 except Exception as e:
@@ -237,11 +276,11 @@ def start_pybem_app():
 {"-" * 80}
 *** SIMULATION SUMMARY ***
     ==================
-    Total Frequencies:  {num_freqs}
-    Total Elapsed Time: {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)
-    Avg Time per Freq:  {avg_time:.3f} seconds
-    Simulation Finished at:        {time.ctime()}
-    Check '{log_f}' for details.
+    Total Frequencies:       {num_freqs}
+    Total Elapsed Time:      {total_elapsed:.2f} seconds ({total_elapsed/60:.2f} minutes)
+    Avg Time per Freq:       {avg_time:.3f} seconds
+    Simulation Finished at:  {time.ctime()}
+    Check '{log_f}' for more details.
     Open '{parser.project_name}_Results.pvd' in ParaView.
 {"-" * 80}
 """

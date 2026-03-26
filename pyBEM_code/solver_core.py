@@ -107,17 +107,17 @@ def solve_bem_system(G, H, bc_map, elements_list, log=None):
         else:
             A[:, j] = H[:, j]
 
-    # # --- Solver Feedback ---
-    # # Check Matrix Condition Number (good UX)
-    # # If this number is too high, the mesh might be bad
-    # if log:
-    #     # Condition number tells us if the mesh is 'broken' or math is unstable
-    #     # Note: This can be slow for huge matrices, use sparingly!
-    #     cond = np.linalg.cond(A)
-    #     # log.write(f"      Matrix Condition Number: {cond:.2e}\n")
-    #     if cond > 1e12:
-    #         log.write("      WARNING: Matrix is ill-conditioned. Check for overlapping elements!\n")
-    cond='N/A'
+    # --- Solver Feedback ---
+    # Check Matrix Condition Number (good UX)
+    # If this number is too high, the mesh might be bad
+    if log:
+        # Matrix Condition Number tells us if the mesh is 'broken' or math is unstable
+        # Note: This can be slow for huge matrices, use sparingly!
+        cond = np.linalg.cond(A)
+        if cond > 1e12:
+            log.write("      WARNING: Matrix is ill-conditioned. Check for overlapping elements!\n")
+    # cond='N/A'
+    
     # Solve the linear system Ax = B
     # Solve for the unknown surface values (usually Pressure)
     surface_solution = np.linalg.solve(A, B)
@@ -160,6 +160,7 @@ def derive_surface_vectors(p_sol, bc_map, bem_ids):
             
     return p_final, v_final
 
+@njit(parallel=True)
 def calculate_field_points(mic_centers, surf_centers, surf_areas, surf_normals, p_surf, v_surf, k):
     """
     Pass 2: Projects solved surface data onto Microphone points.

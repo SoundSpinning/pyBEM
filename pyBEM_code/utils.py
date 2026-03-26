@@ -36,8 +36,8 @@ def calculate_signed_volume(centers, areas, normals):
 def average_to_nodes(nodes, elements, element_values):
     """
     Averages element-centered results to nodes.
-    nodes: dict {id: [x, y, z]}
-    elements: dict {id: [n1, n2, ...]}
+    nodes: dict {nid: [x, y, z]}
+    elements: dict {eid: [n1, n2, ...]}
     element_values: array of complex values (one per element)
     """
     # 1. Determine the size needed for the array
@@ -45,22 +45,22 @@ def average_to_nodes(nodes, elements, element_values):
     max_node_id = max(nodes.keys())
     
     # Initialize buffers
-    # node_sums: stores the accumulated pressure
+    # node_sums: stores the accumulated elemental pressure
     # count: stores how many elements share that node (for averaging)
     node_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
     count = np.zeros(max_node_id + 1, dtype=np.float32)
+    result = np.zeros(max_node_id + 1, dtype=np.complex128)
 
     # 2. Map element results to their constituent nodes
-    # We iterate through the elements provided (could be Pipe OR Mics)
+    # We iterate through the elements provided (could be BEM OR Mics)
     for i, (eid, conn) in enumerate(elements.items()):
         val = element_values[i]
         for nid in conn:
             node_sums[nid] += val
-            count[nid] += 1.0
+            count[nid] += 1
 
     # 3. Perform the average
-    # We only divide where count > 0 to avoid DivisionByZero warnings
-    result = np.zeros(max_node_id + 1, dtype=np.complex128)
+    # We only divide where count > 0 to avoid DivisionByZero
     mask = count > 0
     result[mask] = node_sums[mask] / count[mask]
 
