@@ -2,24 +2,24 @@
 
 import numpy as np
 from numba import njit, prange
-from utils import calculate_element_properties
+# from utils import calculate_element_properties
 from constants import BEM_TYPE
 
-def prepare_geometry(nodes, elements):
-    """
-    Loops through all elements and gets their physics properties 
-    using the utility functions.
-    """
-    centers = []
-    areas = []
+# def prepare_geometry(nodes, elements):
+#     """
+#     Loops through all elements and gets their geometry properties 
+#     using the utility functions.
+#     """
+#     centers = []
+#     areas = []
     
-    for eid, conn in elements.items():
-        # We call the function we imported from utils.py
-        c, a = calculate_element_properties(nodes, conn)
-        centers.append(c)
-        areas.append(a)
+#     for eid, conn in elements.items():
+#         # We call the function we imported from utils.py
+#         c, a = calculate_element_properties(nodes, conn)
+#         centers.append(c)
+#         areas.append(a)
         
-    return np.array(centers), np.array(areas)
+#     return np.array(centers), np.array(areas)
 
 # @njit(fastmath=True)   # 2 x slower vs parallel=True; both together is same 2 x slower.
 @njit(parallel=True)
@@ -120,8 +120,8 @@ def solve_bem_system(G, H, bc_map, elements_list, log=None):
     
     # Solve the linear system Ax = B
     # Solve for the unknown surface values (usually Pressure)
-    surface_solution = np.linalg.solve(A, B)
-    return (surface_solution, cond)
+    bem_solution = np.linalg.solve(A, B)
+    return (bem_solution, cond)
 
 def derive_surface_vectors(p_sol, bc_map, bem_ids):
     """
@@ -161,19 +161,19 @@ def derive_surface_vectors(p_sol, bc_map, bem_ids):
     return p_final, v_final
 
 @njit(parallel=True)
-def calculate_field_points(mic_centers, surf_centers, surf_areas, surf_normals, p_surf, v_surf, k):
+def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k):
     """
-    Pass 2: Projects solved surface data onto Microphone points.
+    Pass 2: Projects solved surface (BEM) results onto Microphone points.
     """
     num_mics = len(mic_centers)
-    num_surf = len(surf_centers)
+    num_surf = len(bem_centers)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
     inv_4pi = 1.0 / (4.0 * np.pi)
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
         for j in range(num_surf):
-            r_vec = mic_centers[i] - surf_centers[j]
+            r_vec = mic_centers[i] - bem_centers[j]
             r = np.linalg.norm(r_vec)
             
             # Green's Function (G)
@@ -181,11 +181,11 @@ def calculate_field_points(mic_centers, surf_centers, surf_areas, surf_normals, 
             
             # Derivative of Green's Function (H)
             # Dot product of (r_vec/r) and the surface normal
-            cos_theta = np.dot(r_vec / r, surf_normals[j])
+            cos_theta = np.dot(r_vec / r, bem_normals[j])
             h_val = g_val * (1j * k - 1.0 / r) * cos_theta
             
             # p_mic = G*v - H*p (integrated over area)
-            sum_p += (g_val * v_surf[j] - h_val * p_surf[j]) * surf_areas[j]
+            sum_p += (g_val * v_surf[j] - h_val * p_surf[j]) * bem_areas[j]
             
         p_mics[i] = sum_p
     return p_mics

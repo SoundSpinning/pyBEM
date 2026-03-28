@@ -35,33 +35,35 @@ class PVExporter:
 
     def write_vtu(self, freq, nodal_pressures, group_ids=None, velocity_nodal=None):
         """
-        Writes a single .vtu file for a specific frequency.
-        nodal_pressures: dict or array of complex values
+        Writes a single .vtu file per frequency.
+        nodal_pressures: array of complex values
         group_ids: dict or array of integers (1 for BEM, 2 for Mics)
         """
         filename = f"Result_{freq:.1f}Hz.vtu"
         filepath = os.path.join(self.pv_dir, filename)
         
-        # 1. Create ID Map (Abaqus ID -> 0-based VTK Index)
-        node_ids = sorted(self.nodes.keys())
-        id_map = {old_id: i for i, old_id in enumerate(node_ids)}
+        # 1. Create nodal ID Map (Input mesh node ID -> 0-based VTK Index)
+        # sorted_node_ids = sorted(self.nodes.keys())
+        sorted_node_ids = self.nodes.keys()
+        id_map = {old_id: i for i, old_id in enumerate(sorted_node_ids)}
 
-        # 2. Combine all elements for the mesh definition
-        # We merge BEM and MICS into one list for the 'Cells' section
+        # 2. Combine all elements for the mesh definition.
+        # We merge BEM and MICS into one list for the PV 'Cells' section
         all_elements = {**self.elements, **self.mics_elements}
-        sorted_el_ids = sorted(all_elements.keys())
+        # sorted_el_ids = sorted(all_elements.keys())
+        sorted_el_ids = all_elements.keys()
         
         with open(filepath, 'w') as f:
             f.write('<?xml version="1.0"?>\n')
             f.write('<VTKFile type="UnstructuredGrid" version="0.1" byte_order="LittleEndian">\n')
             f.write('  <UnstructuredGrid>\n')
             # NumberOfPoints and NumberOfCells MUST match the data below exactly
-            f.write(f'    <Piece NumberOfPoints="{len(node_ids)}" NumberOfCells="{len(all_elements)}">\n')
+            f.write(f'    <Piece NumberOfPoints="{len(sorted_node_ids)}" NumberOfCells="{len(all_elements)}">\n')
             
             # --- A) POINTS ---
             f.write('      <Points>\n')
             f.write('        <DataArray type="Float32" Name="Points" NumberOfComponents="3" format="ascii">\n')
-            for nid in node_ids:
+            for nid in sorted_node_ids:
                 f.write(f"{self.nodes[nid][0]} {self.nodes[nid][1]} {self.nodes[nid][2]} ")
             f.write('\n        </DataArray>\n')
             f.write('      </Points>\n')
@@ -93,28 +95,28 @@ class PVExporter:
 
             # 1. Pressure Vector
             f.write('        <DataArray type="Float32" Name="Pressure" NumberOfComponents="3" format="ascii">\n')
-            for nid in node_ids:
+            for nid in sorted_node_ids:
                 val = nodal_pressures[nid]
                 f.write(f"{val.real} {val.imag} 0.0 ")
             f.write('\n        </DataArray>\n')
 
             # 2. SPL (dB)
             f.write('        <DataArray type="Float32" Name="SPL_dB" format="ascii">\n')
-            for nid in node_ids:
-                p_mag = abs(nodal_pressures[nid])
-                spl = 20 * np.log10(max(p_mag, 2e-14) / self.P_REF)
+            for nid in sorted_node_ids:
+                p_mag = max(abs(nodal_pressures[nid]), 2e-14)   # avoid log10(0)
+                spl = 20 * np.log10(p_mag / self.P_REF)
                 f.write(f"{spl:.2f} ")
             f.write('\n        </DataArray>\n')
 
             # 3. Groups_ID
             f.write('        <DataArray type="Int32" Name="Groups_ID" format="ascii">\n')
-            for nid in node_ids:
+            for nid in sorted_node_ids:
                 gid = group_ids.get(nid, 1) if group_ids else 1
                 f.write(f"{gid} ")
             f.write('\n        </DataArray>\n')
 
             f.write('      </PointData>\n')
-            f.write('    </Piece>\n') # <--- WAS MISSING
+            f.write('    </Piece>\n')
             f.write('  </UnstructuredGrid>\n')
             f.write('</VTKFile>\n')
 

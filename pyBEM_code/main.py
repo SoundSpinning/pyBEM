@@ -9,16 +9,16 @@ from version import __solver__
 from pmx_parser import PMXParser
 from solver_core import assemble_system, solve_bem_system, derive_surface_vectors, calculate_field_points
 from exporter import PVExporter
-from utils import calculate_element_properties, calculate_signed_volume, average_to_nodes
+from utils import calculate_element_properties, prepare_geometry, calculate_signed_volume, averaged_at_nodes
 from constants import TOP_LOG_LINES, BEM_TYPE, DEBUG, P_REF
 
 def start_pybem_app():
-    # 1. Ask the user for the file name
+    # 0. Ask the user for the file name
     print(f"{__solver__}")
     
-    filename = input("\nEnter PrePoMax *.inp filename: ").strip()
+    filename = input("\n Enter PrePoMax *.inp filename: ").strip()
 
-    # 0. Check if the file actually exists before starting
+    # Check if the file actually exists before starting
     if not os.path.exists(filename):
         print(f"ERROR: File '{filename}' not found in the current folder.")
         return
@@ -31,45 +31,59 @@ def start_pybem_app():
         # LOG setup
         log_f = f"{parser.project_name}.log"
 
-        # Create the list of IDs in the exact order they appear in the matrices
-        # This ensures index 0 is always Element 101, index 1 is 102, etc.
-        bem_ids = sorted(parser.elements.keys())
+        # 1st sort nodes & element dictionaries read from the input parser
+        sorted_nodes = dict(sorted(parser.nodes.items()))
+        sorted_bem_els = dict(sorted(parser.elements.items()))
+        # If mics mesh exists in the model
+        if parser.mics_elements:
+            sorted_mics_els = dict(sorted(parser.mics_elements.items()))
+        
+        # get lists for node & element IDs after sorting for later use.
+        # Create the list of element IDs in the exact order they appear in the matrices.
+        # This ensures later on that index 0 is always Element 1, index 1 is 2, etc.
+        sorted_node_ids = list(sorted_nodes.keys())
+        sorted_bem_ids = list(sorted_bem_els.keys())
+        # If mics mesh exists in the model
+        if sorted_mics_els:
+            sorted_mics_ids = list(sorted_mics_els.keys())
     
         # 2. Geometry Prep (Centers, Areas, Normals)
-        bem_centers, bem_areas, bem_normals = [], [], []
-        for eid in bem_ids:  # Changed to use sorted IDs for index alignment
-            conn = parser.elements[eid]
-            c, a, n = calculate_element_properties(parser.nodes, conn)
-            bem_centers.append(c)
-            bem_areas.append(a)
-            bem_normals.append(n)
+        bem_centers, bem_areas, bem_normals = prepare_geometry(sorted_nodes, sorted_bem_els)
+        # bem_centers, bem_areas, bem_normals = [], [], []
+        # for eid in sorted_bem_ids:  # Changed to use sorted IDs for index alignment
+            # conn = sorted_bem_els[eid]
+            # c, a, n = calculate_element_properties(sorted_nodes, conn)
+        #     bem_centers.append(c)
+        #     bem_areas.append(a)
+        #     bem_normals.append(n)
         
-        # Convert to numpy arrays once to speed up the frequency loop
-        bem_centers = np.array(bem_centers)
-        bem_areas = np.array(bem_areas)
-        bem_normals = np.array(bem_normals)
+        # # Convert to numpy arrays once to speed up the frequency loop
+        # bem_centers = np.array(bem_centers)
+        # bem_areas = np.array(bem_areas)
+        # bem_normals = np.array(bem_normals)
 
         # Only if mics exist in the model
-        if parser.mics_elements:
-            mic_ids = sorted(parser.mics_elements.keys()) # Sorted for consistency
-            mic_centers, mic_areas, mic_normals = [], [], []
-            for mid in mic_ids:
-                mic_conn = parser.mics_elements[mid]
-                mc, ma, mn = calculate_element_properties(parser.nodes, mic_conn)
-                mic_centers.append(mc)
-                mic_areas.append(ma)
-                mic_normals.append(mn)
-            mic_centers = np.array(mic_centers)
-            mic_areas = np.array(mic_areas)
-            mic_normals = np.array(mic_normals)
+        if sorted_mics_els:
+            mic_centers, mic_areas, mic_normals = prepare_geometry(sorted_nodes, sorted_mics_els)
+            # mic_ids = sorted(sorted_mics_els.keys()) # Sorted for consistency
+            # mic_centers, mic_areas, mic_normals = [], [], []
+            # for mid in mic_ids:
+            #     mic_conn = sorted_mics_els[mid]
+            #     mc, ma, mn = calculate_element_properties(sorted_nodes, mic_conn)
+            #     mic_centers.append(mc)
+            #     mic_areas.append(ma)
+            #     mic_normals.append(mn)
+            # mic_centers = np.array(mic_centers)
+            # mic_areas = np.array(mic_areas)
+            # mic_normals = np.array(mic_normals)
         
         group_ids = {}
         # Default everyone to 1 (BEM)
-        for node_id in parser.nodes:
+        for node_id in sorted_nodes:
             group_ids[node_id] = 1 
 
         # Identify Mic nodes and tag them as 2
-        for conn in parser.mics_elements.values():
+        for conn in sorted_mics_els.values():
             for node_id in conn:
                 group_ids[node_id] = 2
         
@@ -117,8 +131,8 @@ def start_pybem_app():
         all_t_exp = 0
         
         # 5. Setup Exporter
-        # We pass mics_elements to the exporter so it can merge them into the VTU
-        exporter = PVExporter(parser.project_name, parser.nodes, parser.elements, parser.mics_elements)
+        # We pass bem & mics elements to the exporter so it can merge them into the VTU files
+        exporter = PVExporter(parser.project_name, sorted_nodes, sorted_bem_els, sorted_mics_els)
         
         # 4. Solver Frequency Loop with Log File
         # --- Start Global Timer ---
@@ -150,8 +164,8 @@ def start_pybem_app():
                 k = (2.0 * np.pi * f) / parser.speed_of_sound
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
-                # Using the pre-calculated NumPy arrays from the BEM_IDS loop
-                G_surf, H_surf = assemble_system(bem_centers, bem_areas, bem_normals, k, BEM_TYPE)
+                # Using the pre-calculated NumPy arrays from the sorted_bem_ids loop
+                G_bem, H_bem = assemble_system(bem_centers, bem_areas, bem_normals, k, BEM_TYPE)
                 t_assembly = time.time() - t_asm_0
 
                 # --- TIMING: SOLVE ---
@@ -159,14 +173,16 @@ def start_pybem_app():
                 # 3. Solve Linear System: Solve the boundary value problem
                 try:
                     # 3.1. Solve the BEM Surface
-                    # Passing bem_ids ensures BCs match the matrix rows/columns
-                    p_unknowns, cond = solve_bem_system(G_surf, H_surf, bc_map, bem_ids, log=log)
+                    # Passing sorted_bem_ids ensures BCs match the matrix rows/columns
+                    # cond: Matrix Condition Number; tells us if the mesh is 'broken' or math is unstable.
+                    # use cond sparingly, can take ~20% of solve time.
+                    p_unknowns, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, log=log)
 
                     t_slv_1 = time.time()
                 
-                    # 3.2. Reconstruct full p and v vectors for the surface
-                    # Updated to use bem_ids to ensure p_surf/v_surf order matches the geometry
-                    p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, bem_ids)
+                    # 3.2. Reconstruct full P and V vectors for the BEM elements.
+                    # Use sorted_bem_ids to ensure p_surf/v_surf order matches the geometry
+                    p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, sorted_bem_ids)
 
                     # log_DEBUG:
                     if DEBUG:
@@ -177,21 +193,20 @@ def start_pybem_app():
     =====
     BC CHECKs (ELEMENTAL) - Only for 1st Freq:"""
                             # Get indices of elements that are part of the inlet surface
-                            inlet_indices = [i for i, ids in enumerate(bem_ids) if ids in parser.elsets     ['Internal-1_inlet_S2']]
-                            # inlet_indices = [i for i, ids in enumerate(bem_ids) if ids in parser.elsets   ['Internal-1_outlet_S2']]
+                            inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['Internal-1_inlet_S2']]
+                            # inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['Internal-1_outlet_S2']]
 
-                            for idx in inlet_indices[:3]: # Just check a few
+                            for idx in inlet_indices[-4:]: # Just check a few
                                 p_val = p_surf[idx]
                                 v_val = v_surf[idx]
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
-                                log_DEBUG += f"\n    Element ID{bem_ids[idx]}: {p_val}MPa | {db:.2f}dB"
-                                log_DEBUG += f"\n                   {v_val}mm/s"
+                                log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB | {v_val}mm/s"
                     
                     t_slv_2 = time.time()
                     
                     # 3.3. Project to Mics (The Radiation Pass)
                     # Only if mics exist in the model
-                    if parser.mics_elements:
+                    if sorted_mics_els:
                         p_mics = calculate_field_points(
                             mic_centers, 
                             bem_centers, 
@@ -217,25 +232,32 @@ def start_pybem_app():
                 try:
                     t_avg_0 = time.time()
                     # 4.1. Get nodal averages for BEM & Mics elements
-                    nodal_p_surf = average_to_nodes(parser.nodes, parser.elements, p_surf)
-                    nodal_p_mics = average_to_nodes(parser.nodes, parser.mics_elements, p_mics)
+                    nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf)
+                    nodal_p_mics = averaged_at_nodes(sorted_nodes, sorted_mics_els, p_mics)
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
                     if DEBUG:
-                        if f == parser.frequencies[-1]:
+                        if f == parser.frequencies[0]:
                             to_nods_avg_time = all_t_avr / num_freqs if num_freqs > 0 else 0
-                            log_DEBUG += f"\n\n    Function 'average_to_nodes' per Freq took: {to_nods_avg_time:.3f}s"
+                            log_DEBUG += f"\n\n    Function 'averaged_at_nodes' took: ( {to_nods_avg_time:.3f}s ) per Freq."
+                            
+                            inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['Internal-1_inlet']]
+                            log_DEBUG += f"\n\n    BC CHECKs (NODAL) - Only for 1st Freq:"
+                            for idx, nid in inlet_indices[-4:]: # Just check a few nodes
+                                p_val = nodal_p_surf[idx]
+                                db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
+                                log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
                     
                     t_exp_0 = time.time()
-                    # 4.2. Combine them into one master results dictionary/array
+                    # 4.2. Combine them into one master results array
                     # Since they are NumPy arrays, adding them merges the results
                     nodal_pressures = nodal_p_surf + nodal_p_mics
                     
                     # 4.3. Create the Group ID array for the Exporter
                     group_ids = {}
-                    for node_id in parser.nodes:
-                        if any(node_id in conn for conn in parser.mics_elements.values()):
+                    for node_id in sorted_nodes:
+                        if any(node_id in conn for conn in sorted_mics_els.values()):
                             group_ids[node_id] = 2  # Microphones
                         else:
                             group_ids[node_id] = 1  # BEM Surface nodes
@@ -248,15 +270,15 @@ def start_pybem_app():
                     if DEBUG:
                         if f == parser.frequencies[-1]:
                             exp_avg_time = all_t_exp / num_freqs if num_freqs > 0 else 0
-                            log_DEBUG += f"\n    Write / Export of Results per Freq, into PV format took: {exp_avg_time:.3f}s"
+                            log_DEBUG += f"\n\n    Write / Export of Results into PV format took: ( {exp_avg_time:.3f}s ) per Freq."
                     
                     # Write formatted table header to LOG
                     rslt_f = f'Result_{f:.1f}Hz.vtu'
                     log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8.1f} | {rslt_f:<20} | {'OK':^6}\n")
-                    log.flush() # Forces write to disk so you can tail the log in real-time
+                    log.flush() # Forces write to disk so we can tail the log in real-time
 
                 except Exception as e:
-                    # If an error happens, use pbar.write so it doesn't break the bar
+                    # If an error happens, use pbar.write so it doesn't break the progress bar
                     t_solve = time.time() - t_slv_0
                     log.write(f"{f:<7.1f}Hz | {t_assembly:<11.4f}s | {t_solve:<8.4f}s | {cond:<8} | {rslt_f:<20} | FAILED: {str(e)}\n")
                     pbar.write(f"Error at {f}Hz: See '{log_f}' for details.")

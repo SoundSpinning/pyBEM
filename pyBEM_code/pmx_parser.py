@@ -41,7 +41,7 @@ class PMXParser:
             # Keep raw lines but strip whitespace
             all_lines = [line.strip() for line in f]
 
-        # STEP 1: Identify where every supported keyword starts
+        # STEP 1: Identify where every supported keyword starts and ends
         key_indices = []
         for idx, line in enumerate(all_lines):
             if line.startswith('*') and not line.startswith('**'):
