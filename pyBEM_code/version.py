@@ -4,6 +4,6 @@ div_1 = f" "*10+"="*60+" "*10
 __solver__ = f"""
 {div_1}
                   BEM Acoustics Solver | pyBEM - V{__version__}
-                           (Standard Collocation)
+                    (Standard Collocation - Direct Method)
 {div_1}
 """

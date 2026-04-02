@@ -23,9 +23,9 @@ def calculate_element_properties(nodes, connectivity):
         area_total += 0.5 * np.linalg.norm(np.cross(v2, v3))
         
     # Normalized unit normal
-    normal = cross_prod / np.linalg.norm(cross_prod)
+    unit_normal = cross_prod / np.linalg.norm(cross_prod)
     
-    return center, area_total, normal
+    return center, area_total, unit_normal
 
 def prepare_geometry(nodes, elements):
     """
@@ -34,21 +34,28 @@ def prepare_geometry(nodes, elements):
     """
     centers = []
     areas = []
-    normals = []
+    unit_normals = []
     
     for eid, conn in elements.items():
         c, a, n = calculate_element_properties(nodes, conn)
         centers.append(c)
         areas.append(a)
-        normals.append(n)
-        
-    return np.array(centers), np.array(areas), np.array(normals)
+        unit_normals.append(n)
+    return np.array(centers), np.array(areas), np.array(unit_normals)
 
 def calculate_signed_volume(centers, areas, normals):
-    # The sum of (Center dot Normal) * Area
-    # We use 1.0/3.0 because it's a 3D volume integral
+    """
+    Calculates from the BEM elements: volume, total area & CoG.
+    """
+    # The sum of (Center dot Normal) * Area for volume & CoG calcs
+    # 1.0/3.0 because it's a 3D volume integral
     volume = np.sum([np.dot(c, n) * a for c, a, n in zip(centers, areas, normals)]) / 3.0
-    return volume
+    area = np.sum([areas])
+    CoGx = np.sum([(centers[i,0]) * areas[i] for i in range(len(centers))]) / area 
+    CoGy = np.sum([(centers[i,1]) * areas[i] for i in range(len(centers))]) / area 
+    CoGz = np.sum([(centers[i,2]) * areas[i] for i in range(len(centers))]) / area 
+    CoG = [CoGx, CoGy, CoGz]
+    return volume, area, CoG
 
 def averaged_at_nodes(nodes, elements, element_values):
     """

@@ -132,7 +132,7 @@ class PVExporter:
         for freq, filename in self.results_list:
             # Path must be relative to the .pvd file
             rel_path = os.path.join(self.pv_dir, filename)
-            ET.SubElement(collection, "DataSet", timestep=str(freq), group="", part="0", file=rel_path)
+            ET.SubElement(collection, "DataSet", timestep=f'{freq:.2f}', group="", part="0", file=rel_path)
             
         xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
         with open(pvd_path, "w") as f:

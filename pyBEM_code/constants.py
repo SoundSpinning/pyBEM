@@ -40,13 +40,13 @@ def TOP_LOG_LINES(self): return f"""
     INPUT file: "{self.file_path}"
     MODEL name: "{self.project_name}"
     NODES: {len(self.nodes)}
-    ELEMENTS: {len(self.elements)}
+    BEM ELEMENTS: {len(self.elements)} | MIC ELEMENTS: {len(self.mics_elements)}
     NSETS ( {len(self.nsets)} ): {list(self.nsets.keys())}
     ELSETS  ( {len(self.elsets)} ): {list(self.elsets.keys())}
     SURFACES ( {len(self.surfaces)} ): {self.surfaces}
     AMPLITUDES ( {len(self.amplitudes)} ): {list(self.amplitudes.keys())}
     MATERIALS ( {len(self.materials)} ): {self.materials}
-    FREQUENCIES: {len(self.frequencies)}
+    FREQUENCIES: {len(self.frequencies)}  [{min(self.frequencies):.1f}Hz --> {max(self.frequencies):.1f}Hz]
     BCs ( {len(self.bc_data)} ): {self.bc_data}
 {'-' * 80}
 """

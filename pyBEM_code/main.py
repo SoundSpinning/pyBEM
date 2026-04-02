@@ -1,5 +1,6 @@
 import os, sys
 import numpy as np
+from numba import get_num_threads, set_num_threads
 import traceback
 import time
 from tqdm import tqdm
@@ -9,8 +10,8 @@ from version import __solver__
 from pmx_parser import PMXParser
 from solver_core import assemble_system, solve_bem_system, derive_surface_vectors, calculate_field_points
 from exporter import PVExporter
-from utils import calculate_element_properties, prepare_geometry, calculate_signed_volume, averaged_at_nodes
-from constants import TOP_LOG_LINES, BEM_TYPE, DEBUG, P_REF
+from utils import prepare_geometry, calculate_signed_volume, averaged_at_nodes
+from constants import BEM_TYPE, DEBUG, P_REF
 
 def start_pybem_app():
     # 0. Ask the user for the file name
@@ -23,6 +24,17 @@ def start_pybem_app():
         print(f"ERROR: File '{filename}' not found in the current folder.")
         return
 
+    # Assign number of CPUs for the parallel solve with numba (@njit in 'solver_core.py')
+    n_CPUs = get_num_threads()
+    used_CPUs = n_CPUs
+    if n_CPUs > 4:
+        used_CPUs = n_CPUs - 2   # leave 2 CPUs free on machine for user to do other work
+        set_num_threads(used_CPUs)
+    str_CPUs = (f"""
+ Number of CPUs found on this machine: ( {n_CPUs} )
+ MAX number of CPUs used for parallel solve is: ( {used_CPUs} )
+ """)
+    
     try:
         # 1. Setup Parser and Load Model
         parser = PMXParser(filename)
@@ -30,6 +42,8 @@ def start_pybem_app():
         parser.print_model_summary()
         # LOG setup
         log_f = f"{parser.project_name}.log"
+        log_top = f"""{__solver__}{str(parser.header_comments)}{str(parser.top_log)}"""
+        log_info = ''
 
         # 1st sort nodes & element dictionaries read from the input parser
         sorted_nodes = dict(sorted(parser.nodes.items()))
@@ -49,33 +63,9 @@ def start_pybem_app():
     
         # 2. Geometry Prep (Centers, Areas, Normals)
         bem_centers, bem_areas, bem_normals = prepare_geometry(sorted_nodes, sorted_bem_els)
-        # bem_centers, bem_areas, bem_normals = [], [], []
-        # for eid in sorted_bem_ids:  # Changed to use sorted IDs for index alignment
-            # conn = sorted_bem_els[eid]
-            # c, a, n = calculate_element_properties(sorted_nodes, conn)
-        #     bem_centers.append(c)
-        #     bem_areas.append(a)
-        #     bem_normals.append(n)
-        
-        # # Convert to numpy arrays once to speed up the frequency loop
-        # bem_centers = np.array(bem_centers)
-        # bem_areas = np.array(bem_areas)
-        # bem_normals = np.array(bem_normals)
-
         # Only if mics exist in the model
         if sorted_mics_els:
             mic_centers, mic_areas, mic_normals = prepare_geometry(sorted_nodes, sorted_mics_els)
-            # mic_ids = sorted(sorted_mics_els.keys()) # Sorted for consistency
-            # mic_centers, mic_areas, mic_normals = [], [], []
-            # for mid in mic_ids:
-            #     mic_conn = sorted_mics_els[mid]
-            #     mc, ma, mn = calculate_element_properties(sorted_nodes, mic_conn)
-            #     mic_centers.append(mc)
-            #     mic_areas.append(ma)
-            #     mic_normals.append(mn)
-            # mic_centers = np.array(mic_centers)
-            # mic_areas = np.array(mic_areas)
-            # mic_normals = np.array(mic_normals)
         
         group_ids = {}
         # Default everyone to 1 (BEM)
@@ -89,39 +79,44 @@ def start_pybem_app():
         
         # 3. CHECK on BEM volume: is it interior or exterior, 
         #    or check for holes / free edges in mesh.
-        total_vol = calculate_signed_volume(bem_centers, bem_areas, bem_normals)
-        if total_vol > 1e-9:
+        bem_total_vol, bem_total_area, bem_CoG = calculate_signed_volume(bem_centers, bem_areas, bem_normals)
+        log_info += f"""
+ INPUT MESH: Total BEM AREA is ( {bem_total_area:.4} L**2 ).
+             CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L.
+"""
+        if bem_total_vol > 1e-9:
             BEM_TYPE = "INTERIOR"
-            log_info = (f"""
- GEOMETRY: Closed (+) Volume detected ({total_vol:.4f} L**3). 
-           ( i ) Normals point OUTWARDS ==> {BEM_TYPE} analysis expected.\n""")
-        elif total_vol < -1e-9:
+            log_info += (f"""
+             Closed (+) Volume detected ( {bem_total_vol:.4} L**3 ). 
+             ( i ) Normals point OUTWARDS ==> {BEM_TYPE} analysis expected.\n""")
+        elif bem_total_vol < -1e-9:
             BEM_TYPE = "EXTERIOR"
-            log_info = (f"""
- GEOMETRY: Closed (-) Volume detected ({total_vol:.4f} L**3). 
-           ( i ) Normals point INWARDS ==> {BEM_TYPE} analysis expected.\n""")
+            log_info += (f"""
+             Closed (-) Volume detected ( {bem_total_vol:.4} L**3 ). 
+             ( i ) Normals point INWARDS ==> {BEM_TYPE} analysis expected.\n""")
         else:
-            print(f"\nError in PRE-PROCESSING: [FATAL INPUT ERROR]")
-            log_info = (""" GEOMETRY: Open surface or zero volume detected. CHECK your mesh and normals.
- ( i ) BEM element normals must be consistent and pointing AWAY from the acoustic domain.""")
+            log_info += (f"""
+ ERROR       Open surface or zero volume detected. CHECK your mesh and normals.
+             ( !e! ) BEM element normals must be consistent and pointing AWAY from the acoustic domain.
+""")
             print(f"{log_info}")
-            raise SystemExit
-        
-        print(f"{log_info}")
+            with open(log_f, "w") as log:
+                log.write(log_top)
+                log.write(log_info)
+            raise ValueError(f"\n ERROR in PRE-PROCESSING: see '{log_f}' for more details.\n")
+            return
 
         # 4. Setup BCs
         # we get BCs at the ready for the solver
         bc_map, log_bc_info = parser.get_bcs()
-        log_info += log_bc_info
+        log_info += '\n'+log_bc_info
+        print(f"{log_info}")
         if DEBUG:
-            print(f"\n DEBUG: see '{parser.project_name}.log' for BC CHECKs (ELEMENTAL)")
+            print(f"\n DEBUG: see '{parser.project_name}.log' for input BC CHECKs (ELEMENTAL & NODAL)")
         # Use 'with' to ensure the file closes even if the app crashes
         with open(log_f, "w") as log:
-            log.write(__solver__)
-            log.write(str(parser.header_comments))
-            log.write(str(parser.top_log))
+            log.write(log_top)
             log.write(log_info)
-            log.write(f" BC-PROCESSING: BC Resolution complete. {len(bc_map)} elements have active BCs.\n")
             log.flush() # Forces write to disk so you can tail the log in real-time
 
         # Add DEBUG lines, e.g. on BCs applied.
@@ -139,13 +134,16 @@ def start_pybem_app():
         global_t0 = time.time()
 
         num_freqs = len(parser.frequencies)
-        print(f"\n--- ACOUSTICS job started at:  {time.ctime()} ---")
-        print(f"--- Solving {num_freqs} Frequencies (Steady State Direct) ---\n")
+        print(f"\n{'-' * 80}")
+        print(f" ACOUSTICS job started at:  {time.ctime()}")
+        print(f" --- Solving {num_freqs} Frequencies [{min(parser.frequencies)}Hz --> {max(parser.frequencies)}Hz] (Steady State Direct) ---{str_CPUs}")
+        # print(str_CPUs)
 
         with open(log_f, "a") as log:
             log.write(f"\n{'-' * 80}")
-            log.write(f"\n ACOUSICS job started at: {time.ctime()}")
-            log.write(f"\n --- Solving {num_freqs} Frequencies ---")
+            log.write(f"\n ACOUSTICS job started at: {time.ctime()}")
+            log.write(f"\n --- Solving {num_freqs} Frequencies [{min(parser.frequencies):.1f}Hz --> {max(parser.frequencies):.1f}Hz] (Steady State Direct) ---\n")
+            log.write(str_CPUs)
             log.write(f"\n{'=' * 108}")
             log.write(f"""
 {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Pres&Vels':^9} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
@@ -153,10 +151,10 @@ def start_pybem_app():
             log.flush() # Forces write to disk so you can tail the log in real-time
 
             # --- The progress bar loop ---
-            pbar = tqdm(parser.frequencies, desc="Done", ncols=80, unit="Freq", colour='black')
+            pbar = tqdm(parser.frequencies, desc=" Done", ncols=80, unit="Freq", colour='black')
             for f in pbar:
                 # Update the bar's suffix so we show the freq value
-                pbar.set_postfix({"Freq": f"{f}Hz"})
+                pbar.set_postfix({"Freq": f"{f:.1f}Hz"})
 
                 # --- TIMING: ASSEMBLY ---
                 t_asm_0 = time.time()
@@ -185,8 +183,8 @@ def start_pybem_app():
                     p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, sorted_bem_ids)
 
                     # log_DEBUG:
-                    if DEBUG:
-                        if f == parser.frequencies[0]:
+                    if f == parser.frequencies[0]:
+                        if DEBUG:
                             log_DEBUG = f"""
 {'-' * 80}
 *** DEBUG ***
@@ -237,8 +235,8 @@ def start_pybem_app():
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
-                    if DEBUG:
-                        if f == parser.frequencies[0]:
+                    if f == parser.frequencies[0]:
+                        if DEBUG:
                             to_nods_avg_time = all_t_avr / num_freqs if num_freqs > 0 else 0
                             log_DEBUG += f"\n\n    Function 'averaged_at_nodes' took: ( {to_nods_avg_time:.3f}s ) per Freq."
                             
@@ -267,14 +265,15 @@ def start_pybem_app():
                     t_exp_1 = time.time()
                     all_t_exp += t_exp_1-t_exp_0
                     
-                    if DEBUG:
-                        if f == parser.frequencies[-1]:
+                    if f == parser.frequencies[-1]:
+                        if DEBUG:
                             exp_avg_time = all_t_exp / num_freqs if num_freqs > 0 else 0
                             log_DEBUG += f"\n\n    Write / Export of Results into PV format took: ( {exp_avg_time:.3f}s ) per Freq."
                     
                     # Write formatted table header to LOG
                     rslt_f = f'Result_{f:.1f}Hz.vtu'
-                    log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8.1f} | {rslt_f:<20} | {'OK':^6}\n")
+                    log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
+                    # log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8.1f} | {rslt_f:<20} | {'OK':^6}\n")
                     log.flush() # Forces write to disk so we can tail the log in real-time
 
                 except Exception as e:
@@ -310,8 +309,8 @@ def start_pybem_app():
             log.write(SUMMARY())
 
     except ValueError as e:
-        print(f"\nError loading model: [FATAL INPUT ERROR] {e}")
-        traceback.print_exc()
+        print(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
+        # traceback.print_exc()
         # return # Exit the function gracefully
     except Exception as e:
         print(f"\n[ERROR] {e}")

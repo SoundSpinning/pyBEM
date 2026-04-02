@@ -73,7 +73,7 @@ class PMXParser:
         return True
 
     def _route_block(self, header, data):
-        """The Router: Dispatches blocks to specialized parsing logic."""
+        """The Router: Dispatches blocks to specialised parsing logic."""
         h_up = header.upper()
         # setup a string for the parsed lines in bem_model_name.inp
 
@@ -305,7 +305,6 @@ class PMXParser:
             if not target_ids:
                 # Log a warning if a BC is defined but hits no elements
                 log_bc_info += f" WARNING: BC target '{target_name}' could not be resolved to any elements."
-                print(log_bc_info)
                 continue
 
             for eid in target_ids:
@@ -319,7 +318,7 @@ class PMXParser:
                 if 'amp' in bc and bc['amp']:
                     bc_dict[eid]['amp_name'] = bc['amp']
 
-        print(f" BC-PROCESSING: BC Resolution complete. {len(bc_dict)} elements have active BCs.")
+        log_bc_info += f" BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
         return bc_dict, log_bc_info
 
     def _get_param(self, line, key):
@@ -341,4 +340,5 @@ class PMXParser:
             f.write(self.model_str)
 
     def print_model_summary(self):
+        print(self.header_comments)
         print(self.top_log)
