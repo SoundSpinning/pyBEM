@@ -36,7 +36,7 @@ quarter wave pipes (open one end).
 
  BC-PROCESSING: BC resolution complete ==> ( 24 ) elements have active BCs.
 --------------------------------------------------------------------------------
- ACOUSTICS job started at: Thu Apr  2 16:50:56 2026
+ ACOUSTICS job started at: Thu Apr  2 18:23:28 2026
  --- Solving 119 Frequencies [20.0Hz --> 1200.0Hz] (Steady State Direct) ---
 
  Number of CPUs found on this machine: ( 12 )
@@ -45,125 +45,125 @@ quarter wave pipes (open one end).
 ============================================================================================================
 Freq (Hz) | Assembly | Solve All:   BEM    + Pres&Vels +   Mics   | Matrix   | Results file         | Status
 ============================================================================================================
-20.0   Hz |  6.245 s |   1.831s :  0.019   +   0.001   +  1.811   | N/A      | Result_20.0Hz.vtu    |   OK  
-30.0   Hz |  0.020 s |   0.040s :  0.017   +   0.000   +  0.023   | N/A      | Result_30.0Hz.vtu    |   OK  
-40.0   Hz |  0.029 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_40.0Hz.vtu    |   OK  
-50.0   Hz |  0.022 s |   0.036s :  0.018   +   0.000   +  0.018   | N/A      | Result_50.0Hz.vtu    |   OK  
-60.0   Hz |  0.038 s |   0.031s :  0.018   +   0.001   +  0.012   | N/A      | Result_60.0Hz.vtu    |   OK  
-70.0   Hz |  0.022 s |   0.036s :  0.023   +   0.000   +  0.012   | N/A      | Result_70.0Hz.vtu    |   OK  
-80.0   Hz |  0.034 s |   0.040s :  0.021   +   0.001   +  0.018   | N/A      | Result_80.0Hz.vtu    |   OK  
-90.0   Hz |  0.036 s |   0.037s :  0.018   +   0.000   +  0.019   | N/A      | Result_90.0Hz.vtu    |   OK  
-100.0  Hz |  0.041 s |   0.029s :  0.016   +   0.000   +  0.012   | N/A      | Result_100.0Hz.vtu   |   OK  
-110.0  Hz |  0.031 s |   0.045s :  0.022   +   0.000   +  0.022   | N/A      | Result_110.0Hz.vtu   |   OK  
-120.0  Hz |  0.040 s |   0.042s :  0.018   +   0.000   +  0.024   | N/A      | Result_120.0Hz.vtu   |   OK  
-130.0  Hz |  0.025 s |   0.034s :  0.020   +   0.000   +  0.014   | N/A      | Result_130.0Hz.vtu   |   OK  
-140.0  Hz |  0.021 s |   0.041s :  0.018   +   0.000   +  0.023   | N/A      | Result_140.0Hz.vtu   |   OK  
-150.0  Hz |  0.022 s |   0.036s :  0.018   +   0.000   +  0.018   | N/A      | Result_150.0Hz.vtu   |   OK  
-160.0  Hz |  0.031 s |   0.044s :  0.022   +   0.001   +  0.022   | N/A      | Result_160.0Hz.vtu   |   OK  
-170.0  Hz |  0.022 s |   0.037s :  0.024   +   0.001   +  0.012   | N/A      | Result_170.0Hz.vtu   |   OK  
-180.0  Hz |  0.021 s |   0.035s :  0.023   +   0.000   +  0.012   | N/A      | Result_180.0Hz.vtu   |   OK  
-190.0  Hz |  0.021 s |   0.038s :  0.025   +   0.001   +  0.013   | N/A      | Result_190.0Hz.vtu   |   OK  
-200.0  Hz |  0.036 s |   0.039s :  0.018   +   0.000   +  0.022   | N/A      | Result_200.0Hz.vtu   |   OK  
-210.0  Hz |  0.022 s |   0.040s :  0.021   +   0.000   +  0.018   | N/A      | Result_210.0Hz.vtu   |   OK  
-220.0  Hz |  0.031 s |   0.037s :  0.024   +   0.001   +  0.012   | N/A      | Result_220.0Hz.vtu   |   OK  
-230.0  Hz |  0.021 s |   0.034s :  0.021   +   0.001   +  0.012   | N/A      | Result_230.0Hz.vtu   |   OK  
-240.0  Hz |  0.037 s |   0.041s :  0.018   +   0.000   +  0.023   | N/A      | Result_240.0Hz.vtu   |   OK  
-250.0  Hz |  0.033 s |   0.034s :  0.017   +   0.000   +  0.017   | N/A      | Result_250.0Hz.vtu   |   OK  
-260.0  Hz |  0.022 s |   0.031s :  0.016   +   0.000   +  0.015   | N/A      | Result_260.0Hz.vtu   |   OK  
-270.0  Hz |  0.022 s |   0.047s :  0.023   +   0.001   +  0.023   | N/A      | Result_270.0Hz.vtu   |   OK  
-280.0  Hz |  0.022 s |   0.032s :  0.019   +   0.000   +  0.013   | N/A      | Result_280.0Hz.vtu   |   OK  
-290.0  Hz |  0.023 s |   0.039s :  0.020   +   0.001   +  0.018   | N/A      | Result_290.0Hz.vtu   |   OK  
-300.0  Hz |  0.031 s |   0.037s :  0.019   +   0.000   +  0.019   | N/A      | Result_300.0Hz.vtu   |   OK  
-310.0  Hz |  0.031 s |   0.039s :  0.018   +   0.001   +  0.021   | N/A      | Result_310.0Hz.vtu   |   OK  
-320.0  Hz |  0.022 s |   0.043s :  0.024   +   0.001   +  0.018   | N/A      | Result_320.0Hz.vtu   |   OK  
-330.0  Hz |  0.022 s |   0.037s :  0.023   +   0.001   +  0.013   | N/A      | Result_330.0Hz.vtu   |   OK  
-340.0  Hz |  0.022 s |   0.036s :  0.019   +   0.000   +  0.016   | N/A      | Result_340.0Hz.vtu   |   OK  
-350.0  Hz |  0.022 s |   0.032s :  0.019   +   0.000   +  0.013   | N/A      | Result_350.0Hz.vtu   |   OK  
-360.0  Hz |  0.021 s |   0.036s :  0.022   +   0.000   +  0.013   | N/A      | Result_360.0Hz.vtu   |   OK  
-370.0  Hz |  0.021 s |   0.036s :  0.017   +   0.000   +  0.018   | N/A      | Result_370.0Hz.vtu   |   OK  
-380.0  Hz |  0.023 s |   0.036s :  0.018   +   0.000   +  0.018   | N/A      | Result_380.0Hz.vtu   |   OK  
-390.0  Hz |  0.037 s |   0.033s :  0.020   +   0.001   +  0.012   | N/A      | Result_390.0Hz.vtu   |   OK  
-400.0  Hz |  0.034 s |   0.037s :  0.018   +   0.000   +  0.018   | N/A      | Result_400.0Hz.vtu   |   OK  
-410.0  Hz |  0.029 s |   0.037s :  0.019   +   0.000   +  0.018   | N/A      | Result_410.0Hz.vtu   |   OK  
-420.0  Hz |  0.037 s |   0.038s :  0.025   +   0.001   +  0.012   | N/A      | Result_420.0Hz.vtu   |   OK  
-430.0  Hz |  0.034 s |   0.038s :  0.019   +   0.001   +  0.018   | N/A      | Result_430.0Hz.vtu   |   OK  
-440.0  Hz |  0.022 s |   0.038s :  0.019   +   0.001   +  0.018   | N/A      | Result_440.0Hz.vtu   |   OK  
-450.0  Hz |  0.041 s |   0.041s :  0.017   +   0.000   +  0.023   | N/A      | Result_450.0Hz.vtu   |   OK  
-460.0  Hz |  0.022 s |   0.041s :  0.018   +   0.000   +  0.023   | N/A      | Result_460.0Hz.vtu   |   OK  
-470.0  Hz |  0.037 s |   0.043s :  0.023   +   0.000   +  0.019   | N/A      | Result_470.0Hz.vtu   |   OK  
-480.0  Hz |  0.022 s |   0.033s :  0.019   +   0.001   +  0.013   | N/A      | Result_480.0Hz.vtu   |   OK  
-490.0  Hz |  0.022 s |   0.033s :  0.020   +   0.001   +  0.013   | N/A      | Result_490.0Hz.vtu   |   OK  
-500.0  Hz |  0.021 s |   0.035s :  0.022   +   0.001   +  0.012   | N/A      | Result_500.0Hz.vtu   |   OK  
-510.0  Hz |  0.022 s |   0.034s :  0.022   +   0.000   +  0.012   | N/A      | Result_510.0Hz.vtu   |   OK  
-520.0  Hz |  0.024 s |   0.039s :  0.019   +   0.000   +  0.020   | N/A      | Result_520.0Hz.vtu   |   OK  
-530.0  Hz |  0.026 s |   0.039s :  0.020   +   0.001   +  0.018   | N/A      | Result_530.0Hz.vtu   |   OK  
-540.0  Hz |  0.037 s |   0.042s :  0.023   +   0.001   +  0.018   | N/A      | Result_540.0Hz.vtu   |   OK  
-550.0  Hz |  0.022 s |   0.040s :  0.020   +   0.000   +  0.020   | N/A      | Result_550.0Hz.vtu   |   OK  
-560.0  Hz |  0.022 s |   0.033s :  0.018   +   0.001   +  0.013   | N/A      | Result_560.0Hz.vtu   |   OK  
-570.0  Hz |  0.037 s |   0.039s :  0.018   +   0.000   +  0.021   | N/A      | Result_570.0Hz.vtu   |   OK  
-580.0  Hz |  0.022 s |   0.044s :  0.020   +   0.001   +  0.023   | N/A      | Result_580.0Hz.vtu   |   OK  
-590.0  Hz |  0.036 s |   0.040s :  0.017   +   0.000   +  0.022   | N/A      | Result_590.0Hz.vtu   |   OK  
-600.0  Hz |  0.022 s |   0.041s :  0.021   +   0.000   +  0.020   | N/A      | Result_600.0Hz.vtu   |   OK  
-610.0  Hz |  0.026 s |   0.035s :  0.023   +   0.000   +  0.012   | N/A      | Result_610.0Hz.vtu   |   OK  
-620.0  Hz |  0.023 s |   0.038s :  0.019   +   0.000   +  0.019   | N/A      | Result_620.0Hz.vtu   |   OK  
-630.0  Hz |  0.030 s |   0.036s :  0.023   +   0.001   +  0.013   | N/A      | Result_630.0Hz.vtu   |   OK  
-640.0  Hz |  0.037 s |   0.031s :  0.017   +   0.000   +  0.013   | N/A      | Result_640.0Hz.vtu   |   OK  
-650.0  Hz |  0.022 s |   0.033s :  0.020   +   0.001   +  0.012   | N/A      | Result_650.0Hz.vtu   |   OK  
-660.0  Hz |  0.022 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_660.0Hz.vtu   |   OK  
-670.0  Hz |  0.022 s |   0.038s :  0.024   +   0.001   +  0.013   | N/A      | Result_670.0Hz.vtu   |   OK  
-680.0  Hz |  0.022 s |   0.032s :  0.019   +   0.001   +  0.013   | N/A      | Result_680.0Hz.vtu   |   OK  
-690.0  Hz |  0.022 s |   0.037s :  0.024   +   0.001   +  0.013   | N/A      | Result_690.0Hz.vtu   |   OK  
-700.0  Hz |  0.023 s |   0.041s :  0.017   +   0.000   +  0.023   | N/A      | Result_700.0Hz.vtu   |   OK  
-710.0  Hz |  0.041 s |   0.032s :  0.019   +   0.001   +  0.013   | N/A      | Result_710.0Hz.vtu   |   OK  
-720.0  Hz |  0.023 s |   0.043s :  0.019   +   0.001   +  0.023   | N/A      | Result_720.0Hz.vtu   |   OK  
-730.0  Hz |  0.031 s |   0.042s :  0.023   +   0.000   +  0.018   | N/A      | Result_730.0Hz.vtu   |   OK  
-740.0  Hz |  0.023 s |   0.037s :  0.023   +   0.001   +  0.013   | N/A      | Result_740.0Hz.vtu   |   OK  
-750.0  Hz |  0.032 s |   0.037s :  0.019   +   0.000   +  0.018   | N/A      | Result_750.0Hz.vtu   |   OK  
-760.0  Hz |  0.022 s |   0.036s :  0.023   +   0.000   +  0.012   | N/A      | Result_760.0Hz.vtu   |   OK  
-770.0  Hz |  0.022 s |   0.045s :  0.025   +   0.001   +  0.019   | N/A      | Result_770.0Hz.vtu   |   OK  
-780.0  Hz |  0.034 s |   0.043s :  0.023   +   0.000   +  0.020   | N/A      | Result_780.0Hz.vtu   |   OK  
-790.0  Hz |  0.030 s |   0.047s :  0.023   +   0.000   +  0.024   | N/A      | Result_790.0Hz.vtu   |   OK  
-800.0  Hz |  0.023 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_800.0Hz.vtu   |   OK  
-810.0  Hz |  0.031 s |   0.033s :  0.017   +   0.000   +  0.015   | N/A      | Result_810.0Hz.vtu   |   OK  
-820.0  Hz |  0.037 s |   0.030s :  0.018   +   0.000   +  0.012   | N/A      | Result_820.0Hz.vtu   |   OK  
-830.0  Hz |  0.023 s |   0.039s :  0.024   +   0.001   +  0.014   | N/A      | Result_830.0Hz.vtu   |   OK  
-840.0  Hz |  0.037 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_840.0Hz.vtu   |   OK  
-850.0  Hz |  0.041 s |   0.030s :  0.018   +   0.000   +  0.013   | N/A      | Result_850.0Hz.vtu   |   OK  
-860.0  Hz |  0.023 s |   0.036s :  0.022   +   0.000   +  0.013   | N/A      | Result_860.0Hz.vtu   |   OK  
-870.0  Hz |  0.040 s |   0.043s :  0.019   +   0.001   +  0.023   | N/A      | Result_870.0Hz.vtu   |   OK  
-880.0  Hz |  0.022 s |   0.041s :  0.022   +   0.001   +  0.018   | N/A      | Result_880.0Hz.vtu   |   OK  
-890.0  Hz |  0.041 s |   0.041s :  0.017   +   0.000   +  0.023   | N/A      | Result_890.0Hz.vtu   |   OK  
-900.0  Hz |  0.037 s |   0.042s :  0.023   +   0.001   +  0.018   | N/A      | Result_900.0Hz.vtu   |   OK  
-910.0  Hz |  0.041 s |   0.029s :  0.017   +   0.000   +  0.012   | N/A      | Result_910.0Hz.vtu   |   OK  
-920.0  Hz |  0.035 s |   0.030s :  0.018   +   0.000   +  0.013   | N/A      | Result_920.0Hz.vtu   |   OK  
-930.0  Hz |  0.022 s |   0.041s :  0.017   +   0.000   +  0.023   | N/A      | Result_930.0Hz.vtu   |   OK  
-940.0  Hz |  0.035 s |   0.033s :  0.017   +   0.000   +  0.016   | N/A      | Result_940.0Hz.vtu   |   OK  
-950.0  Hz |  0.022 s |   0.048s :  0.024   +   0.001   +  0.023   | N/A      | Result_950.0Hz.vtu   |   OK  
-960.0  Hz |  0.037 s |   0.031s :  0.017   +   0.000   +  0.013   | N/A      | Result_960.0Hz.vtu   |   OK  
-970.0  Hz |  0.022 s |   0.031s :  0.016   +   0.000   +  0.015   | N/A      | Result_970.0Hz.vtu   |   OK  
-980.0  Hz |  0.031 s |   0.033s :  0.018   +   0.000   +  0.014   | N/A      | Result_980.0Hz.vtu   |   OK  
-990.0  Hz |  0.022 s |   0.042s :  0.023   +   0.000   +  0.018   | N/A      | Result_990.0Hz.vtu   |   OK  
-1000.0 Hz |  0.023 s |   0.034s :  0.018   +   0.000   +  0.015   | N/A      | Result_1000.0Hz.vtu  |   OK  
-1010.0 Hz |  0.021 s |   0.036s :  0.018   +   0.000   +  0.018   | N/A      | Result_1010.0Hz.vtu  |   OK  
-1020.0 Hz |  0.023 s |   0.035s :  0.021   +   0.001   +  0.013   | N/A      | Result_1020.0Hz.vtu  |   OK  
-1030.0 Hz |  0.022 s |   0.041s :  0.018   +   0.000   +  0.024   | N/A      | Result_1030.0Hz.vtu  |   OK  
-1040.0 Hz |  0.031 s |   0.039s :  0.017   +   0.000   +  0.021   | N/A      | Result_1040.0Hz.vtu  |   OK  
-1050.0 Hz |  0.034 s |   0.033s :  0.019   +   0.001   +  0.013   | N/A      | Result_1050.0Hz.vtu  |   OK  
-1060.0 Hz |  0.022 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_1060.0Hz.vtu  |   OK  
-1070.0 Hz |  0.023 s |   0.032s :  0.018   +   0.001   +  0.013   | N/A      | Result_1070.0Hz.vtu  |   OK  
-1080.0 Hz |  0.022 s |   0.031s :  0.018   +   0.001   +  0.013   | N/A      | Result_1080.0Hz.vtu  |   OK  
-1090.0 Hz |  0.040 s |   0.041s :  0.022   +   0.000   +  0.019   | N/A      | Result_1090.0Hz.vtu  |   OK  
-1100.0 Hz |  0.023 s |   0.037s :  0.018   +   0.000   +  0.018   | N/A      | Result_1100.0Hz.vtu  |   OK  
-1110.0 Hz |  0.041 s |   0.035s :  0.023   +   0.001   +  0.012   | N/A      | Result_1110.0Hz.vtu  |   OK  
-1120.0 Hz |  0.023 s |   0.030s :  0.018   +   0.000   +  0.012   | N/A      | Result_1120.0Hz.vtu  |   OK  
-1130.0 Hz |  0.022 s |   0.041s :  0.023   +   0.000   +  0.018   | N/A      | Result_1130.0Hz.vtu  |   OK  
-1140.0 Hz |  0.022 s |   0.034s :  0.021   +   0.000   +  0.013   | N/A      | Result_1140.0Hz.vtu  |   OK  
-1150.0 Hz |  0.036 s |   0.037s :  0.018   +   0.000   +  0.019   | N/A      | Result_1150.0Hz.vtu  |   OK  
-1160.0 Hz |  0.032 s |   0.041s :  0.018   +   0.000   +  0.023   | N/A      | Result_1160.0Hz.vtu  |   OK  
-1170.0 Hz |  0.022 s |   0.040s :  0.016   +   0.000   +  0.024   | N/A      | Result_1170.0Hz.vtu  |   OK  
-1180.0 Hz |  0.032 s |   0.033s :  0.020   +   0.000   +  0.013   | N/A      | Result_1180.0Hz.vtu  |   OK  
-1190.0 Hz |  0.024 s |   0.037s :  0.018   +   0.000   +  0.019   | N/A      | Result_1190.0Hz.vtu  |   OK  
-1200.0 Hz |  0.022 s |   0.031s :  0.018   +   0.001   +  0.012   | N/A      | Result_1200.0Hz.vtu  |   OK  
+20.0   Hz |  6.204 s |   1.831s :  0.022   +   0.001   +  1.808   | N/A      | Result_20.0Hz.vtu    |   OK  
+30.0   Hz |  0.020 s |   0.028s :  0.016   +   0.000   +  0.012   | N/A      | Result_30.0Hz.vtu    |   OK  
+40.0   Hz |  0.022 s |   0.031s :  0.019   +   0.000   +  0.012   | N/A      | Result_40.0Hz.vtu    |   OK  
+50.0   Hz |  0.022 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_50.0Hz.vtu    |   OK  
+60.0   Hz |  0.030 s |   0.032s :  0.019   +   0.001   +  0.012   | N/A      | Result_60.0Hz.vtu    |   OK  
+70.0   Hz |  0.037 s |   0.031s :  0.019   +   0.000   +  0.012   | N/A      | Result_70.0Hz.vtu    |   OK  
+80.0   Hz |  0.022 s |   0.039s :  0.019   +   0.001   +  0.019   | N/A      | Result_80.0Hz.vtu    |   OK  
+90.0   Hz |  0.030 s |   0.043s :  0.025   +   0.000   +  0.018   | N/A      | Result_90.0Hz.vtu    |   OK  
+100.0  Hz |  0.022 s |   0.039s :  0.026   +   0.001   +  0.012   | N/A      | Result_100.0Hz.vtu   |   OK  
+110.0  Hz |  0.031 s |   0.029s :  0.017   +   0.000   +  0.012   | N/A      | Result_110.0Hz.vtu   |   OK  
+120.0  Hz |  0.039 s |   0.030s :  0.017   +   0.000   +  0.012   | N/A      | Result_120.0Hz.vtu   |   OK  
+130.0  Hz |  0.022 s |   0.032s :  0.019   +   0.001   +  0.012   | N/A      | Result_130.0Hz.vtu   |   OK  
+140.0  Hz |  0.037 s |   0.038s :  0.018   +   0.000   +  0.019   | N/A      | Result_140.0Hz.vtu   |   OK  
+150.0  Hz |  0.036 s |   0.030s :  0.018   +   0.000   +  0.012   | N/A      | Result_150.0Hz.vtu   |   OK  
+160.0  Hz |  0.029 s |   0.045s :  0.022   +   0.000   +  0.023   | N/A      | Result_160.0Hz.vtu   |   OK  
+170.0  Hz |  0.022 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_170.0Hz.vtu   |   OK  
+180.0  Hz |  0.022 s |   0.042s :  0.019   +   0.000   +  0.022   | N/A      | Result_180.0Hz.vtu   |   OK  
+190.0  Hz |  0.031 s |   0.036s :  0.017   +   0.000   +  0.018   | N/A      | Result_190.0Hz.vtu   |   OK  
+200.0  Hz |  0.036 s |   0.031s :  0.017   +   0.000   +  0.014   | N/A      | Result_200.0Hz.vtu   |   OK  
+210.0  Hz |  0.021 s |   0.042s :  0.019   +   0.000   +  0.023   | N/A      | Result_210.0Hz.vtu   |   OK  
+220.0  Hz |  0.022 s |   0.030s :  0.018   +   0.000   +  0.012   | N/A      | Result_220.0Hz.vtu   |   OK  
+230.0  Hz |  0.021 s |   0.032s :  0.018   +   0.000   +  0.014   | N/A      | Result_230.0Hz.vtu   |   OK  
+240.0  Hz |  0.022 s |   0.031s :  0.018   +   0.000   +  0.012   | N/A      | Result_240.0Hz.vtu   |   OK  
+250.0  Hz |  0.030 s |   0.036s :  0.018   +   0.000   +  0.018   | N/A      | Result_250.0Hz.vtu   |   OK  
+260.0  Hz |  0.023 s |   0.039s :  0.018   +   0.000   +  0.020   | N/A      | Result_260.0Hz.vtu   |   OK  
+270.0  Hz |  0.031 s |   0.038s :  0.022   +   0.000   +  0.016   | N/A      | Result_270.0Hz.vtu   |   OK  
+280.0  Hz |  0.031 s |   0.039s :  0.018   +   0.000   +  0.021   | N/A      | Result_280.0Hz.vtu   |   OK  
+290.0  Hz |  0.023 s |   0.032s :  0.019   +   0.000   +  0.013   | N/A      | Result_290.0Hz.vtu   |   OK  
+300.0  Hz |  0.022 s |   0.033s :  0.020   +   0.001   +  0.012   | N/A      | Result_300.0Hz.vtu   |   OK  
+310.0  Hz |  0.022 s |   0.030s :  0.018   +   0.000   +  0.013   | N/A      | Result_310.0Hz.vtu   |   OK  
+320.0  Hz |  0.033 s |   0.032s :  0.018   +   0.000   +  0.013   | N/A      | Result_320.0Hz.vtu   |   OK  
+330.0  Hz |  0.031 s |   0.030s :  0.017   +   0.000   +  0.012   | N/A      | Result_330.0Hz.vtu   |   OK  
+340.0  Hz |  0.022 s |   0.045s :  0.022   +   0.000   +  0.023   | N/A      | Result_340.0Hz.vtu   |   OK  
+350.0  Hz |  0.023 s |   0.038s :  0.018   +   0.000   +  0.019   | N/A      | Result_350.0Hz.vtu   |   OK  
+360.0  Hz |  0.032 s |   0.042s :  0.019   +   0.000   +  0.023   | N/A      | Result_360.0Hz.vtu   |   OK  
+370.0  Hz |  0.022 s |   0.041s :  0.017   +   0.000   +  0.023   | N/A      | Result_370.0Hz.vtu   |   OK  
+380.0  Hz |  0.021 s |   0.041s :  0.017   +   0.000   +  0.023   | N/A      | Result_380.0Hz.vtu   |   OK  
+390.0  Hz |  0.033 s |   0.033s :  0.018   +   0.000   +  0.015   | N/A      | Result_390.0Hz.vtu   |   OK  
+400.0  Hz |  0.030 s |   0.046s :  0.025   +   0.000   +  0.021   | N/A      | Result_400.0Hz.vtu   |   OK  
+410.0  Hz |  0.022 s |   0.041s :  0.019   +   0.000   +  0.022   | N/A      | Result_410.0Hz.vtu   |   OK  
+420.0  Hz |  0.034 s |   0.042s :  0.018   +   0.000   +  0.024   | N/A      | Result_420.0Hz.vtu   |   OK  
+430.0  Hz |  0.040 s |   0.037s :  0.019   +   0.000   +  0.018   | N/A      | Result_430.0Hz.vtu   |   OK  
+440.0  Hz |  0.022 s |   0.032s :  0.018   +   0.000   +  0.013   | N/A      | Result_440.0Hz.vtu   |   OK  
+450.0  Hz |  0.033 s |   0.036s :  0.024   +   0.000   +  0.012   | N/A      | Result_450.0Hz.vtu   |   OK  
+460.0  Hz |  0.028 s |   0.046s :  0.023   +   0.000   +  0.023   | N/A      | Result_460.0Hz.vtu   |   OK  
+470.0  Hz |  0.033 s |   0.042s :  0.018   +   0.000   +  0.023   | N/A      | Result_470.0Hz.vtu   |   OK  
+480.0  Hz |  0.022 s |   0.038s :  0.019   +   0.000   +  0.019   | N/A      | Result_480.0Hz.vtu   |   OK  
+490.0  Hz |  0.037 s |   0.047s :  0.023   +   0.001   +  0.024   | N/A      | Result_490.0Hz.vtu   |   OK  
+500.0  Hz |  0.022 s |   0.033s :  0.020   +   0.001   +  0.013   | N/A      | Result_500.0Hz.vtu   |   OK  
+510.0  Hz |  0.022 s |   0.038s :  0.019   +   0.000   +  0.018   | N/A      | Result_510.0Hz.vtu   |   OK  
+520.0  Hz |  0.022 s |   0.047s :  0.023   +   0.001   +  0.023   | N/A      | Result_520.0Hz.vtu   |   OK  
+530.0  Hz |  0.023 s |   0.038s :  0.025   +   0.001   +  0.013   | N/A      | Result_530.0Hz.vtu   |   OK  
+540.0  Hz |  0.022 s |   0.037s :  0.024   +   0.001   +  0.012   | N/A      | Result_540.0Hz.vtu   |   OK  
+550.0  Hz |  0.034 s |   0.031s :  0.019   +   0.001   +  0.012   | N/A      | Result_550.0Hz.vtu   |   OK  
+560.0  Hz |  0.022 s |   0.037s :  0.018   +   0.000   +  0.018   | N/A      | Result_560.0Hz.vtu   |   OK  
+570.0  Hz |  0.023 s |   0.036s :  0.017   +   0.000   +  0.018   | N/A      | Result_570.0Hz.vtu   |   OK  
+580.0  Hz |  0.023 s |   0.048s :  0.024   +   0.001   +  0.023   | N/A      | Result_580.0Hz.vtu   |   OK  
+590.0  Hz |  0.033 s |   0.032s :  0.020   +   0.001   +  0.012   | N/A      | Result_590.0Hz.vtu   |   OK  
+600.0  Hz |  0.031 s |   0.036s :  0.018   +   0.000   +  0.017   | N/A      | Result_600.0Hz.vtu   |   OK  
+610.0  Hz |  0.026 s |   0.031s :  0.018   +   0.000   +  0.012   | N/A      | Result_610.0Hz.vtu   |   OK  
+620.0  Hz |  0.022 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_620.0Hz.vtu   |   OK  
+630.0  Hz |  0.021 s |   0.044s :  0.023   +   0.001   +  0.021   | N/A      | Result_630.0Hz.vtu   |   OK  
+640.0  Hz |  0.022 s |   0.042s :  0.024   +   0.001   +  0.017   | N/A      | Result_640.0Hz.vtu   |   OK  
+650.0  Hz |  0.033 s |   0.038s :  0.019   +   0.001   +  0.018   | N/A      | Result_650.0Hz.vtu   |   OK  
+660.0  Hz |  0.024 s |   0.039s :  0.021   +   0.000   +  0.018   | N/A      | Result_660.0Hz.vtu   |   OK  
+670.0  Hz |  0.026 s |   0.041s :  0.023   +   0.000   +  0.018   | N/A      | Result_670.0Hz.vtu   |   OK  
+680.0  Hz |  0.035 s |   0.044s :  0.020   +   0.001   +  0.023   | N/A      | Result_680.0Hz.vtu   |   OK  
+690.0  Hz |  0.030 s |   0.034s :  0.021   +   0.000   +  0.012   | N/A      | Result_690.0Hz.vtu   |   OK  
+700.0  Hz |  0.037 s |   0.030s :  0.017   +   0.000   +  0.012   | N/A      | Result_700.0Hz.vtu   |   OK  
+710.0  Hz |  0.022 s |   0.035s :  0.021   +   0.000   +  0.013   | N/A      | Result_710.0Hz.vtu   |   OK  
+720.0  Hz |  0.040 s |   0.041s :  0.018   +   0.000   +  0.023   | N/A      | Result_720.0Hz.vtu   |   OK  
+730.0  Hz |  0.038 s |   0.038s :  0.024   +   0.001   +  0.012   | N/A      | Result_730.0Hz.vtu   |   OK  
+740.0  Hz |  0.021 s |   0.042s :  0.019   +   0.000   +  0.023   | N/A      | Result_740.0Hz.vtu   |   OK  
+750.0  Hz |  0.021 s |   0.035s :  0.022   +   0.001   +  0.012   | N/A      | Result_750.0Hz.vtu   |   OK  
+760.0  Hz |  0.036 s |   0.039s :  0.026   +   0.001   +  0.013   | N/A      | Result_760.0Hz.vtu   |   OK  
+770.0  Hz |  0.035 s |   0.038s :  0.019   +   0.000   +  0.019   | N/A      | Result_770.0Hz.vtu   |   OK  
+780.0  Hz |  0.031 s |   0.037s :  0.023   +   0.000   +  0.013   | N/A      | Result_780.0Hz.vtu   |   OK  
+790.0  Hz |  0.037 s |   0.040s :  0.018   +   0.000   +  0.021   | N/A      | Result_790.0Hz.vtu   |   OK  
+800.0  Hz |  0.033 s |   0.036s :  0.023   +   0.000   +  0.013   | N/A      | Result_800.0Hz.vtu   |   OK  
+810.0  Hz |  0.023 s |   0.032s :  0.018   +   0.001   +  0.013   | N/A      | Result_810.0Hz.vtu   |   OK  
+820.0  Hz |  0.036 s |   0.037s :  0.023   +   0.001   +  0.013   | N/A      | Result_820.0Hz.vtu   |   OK  
+830.0  Hz |  0.037 s |   0.038s :  0.019   +   0.001   +  0.018   | N/A      | Result_830.0Hz.vtu   |   OK  
+840.0  Hz |  0.032 s |   0.031s :  0.018   +   0.000   +  0.013   | N/A      | Result_840.0Hz.vtu   |   OK  
+850.0  Hz |  0.032 s |   0.030s :  0.017   +   0.000   +  0.013   | N/A      | Result_850.0Hz.vtu   |   OK  
+860.0  Hz |  0.034 s |   0.032s :  0.019   +   0.001   +  0.013   | N/A      | Result_860.0Hz.vtu   |   OK  
+870.0  Hz |  0.022 s |   0.038s :  0.024   +   0.001   +  0.013   | N/A      | Result_870.0Hz.vtu   |   OK  
+880.0  Hz |  0.022 s |   0.037s :  0.024   +   0.001   +  0.012   | N/A      | Result_880.0Hz.vtu   |   OK  
+890.0  Hz |  0.024 s |   0.040s :  0.022   +   0.000   +  0.018   | N/A      | Result_890.0Hz.vtu   |   OK  
+900.0  Hz |  0.022 s |   0.036s :  0.023   +   0.001   +  0.013   | N/A      | Result_900.0Hz.vtu   |   OK  
+910.0  Hz |  0.033 s |   0.037s :  0.019   +   0.000   +  0.018   | N/A      | Result_910.0Hz.vtu   |   OK  
+920.0  Hz |  0.022 s |   0.037s :  0.022   +   0.001   +  0.015   | N/A      | Result_920.0Hz.vtu   |   OK  
+930.0  Hz |  0.022 s |   0.037s :  0.019   +   0.000   +  0.018   | N/A      | Result_930.0Hz.vtu   |   OK  
+940.0  Hz |  0.023 s |   0.039s :  0.022   +   0.001   +  0.017   | N/A      | Result_940.0Hz.vtu   |   OK  
+950.0  Hz |  0.022 s |   0.032s :  0.019   +   0.000   +  0.013   | N/A      | Result_950.0Hz.vtu   |   OK  
+960.0  Hz |  0.031 s |   0.031s :  0.019   +   0.000   +  0.012   | N/A      | Result_960.0Hz.vtu   |   OK  
+970.0  Hz |  0.023 s |   0.040s :  0.022   +   0.000   +  0.018   | N/A      | Result_970.0Hz.vtu   |   OK  
+980.0  Hz |  0.032 s |   0.030s :  0.018   +   0.000   +  0.012   | N/A      | Result_980.0Hz.vtu   |   OK  
+990.0  Hz |  0.022 s |   0.040s :  0.019   +   0.000   +  0.021   | N/A      | Result_990.0Hz.vtu   |   OK  
+1000.0 Hz |  0.022 s |   0.034s :  0.020   +   0.001   +  0.014   | N/A      | Result_1000.0Hz.vtu  |   OK  
+1010.0 Hz |  0.022 s |   0.041s :  0.018   +   0.000   +  0.023   | N/A      | Result_1010.0Hz.vtu  |   OK  
+1020.0 Hz |  0.023 s |   0.046s :  0.025   +   0.001   +  0.020   | N/A      | Result_1020.0Hz.vtu  |   OK  
+1030.0 Hz |  0.022 s |   0.030s :  0.017   +   0.000   +  0.013   | N/A      | Result_1030.0Hz.vtu  |   OK  
+1040.0 Hz |  0.030 s |   0.036s :  0.023   +   0.001   +  0.013   | N/A      | Result_1040.0Hz.vtu  |   OK  
+1050.0 Hz |  0.036 s |   0.040s :  0.019   +   0.000   +  0.021   | N/A      | Result_1050.0Hz.vtu  |   OK  
+1060.0 Hz |  0.022 s |   0.031s :  0.017   +   0.000   +  0.014   | N/A      | Result_1060.0Hz.vtu  |   OK  
+1070.0 Hz |  0.033 s |   0.034s :  0.020   +   0.000   +  0.013   | N/A      | Result_1070.0Hz.vtu  |   OK  
+1080.0 Hz |  0.031 s |   0.030s :  0.017   +   0.000   +  0.013   | N/A      | Result_1080.0Hz.vtu  |   OK  
+1090.0 Hz |  0.035 s |   0.032s :  0.019   +   0.001   +  0.012   | N/A      | Result_1090.0Hz.vtu  |   OK  
+1100.0 Hz |  0.022 s |   0.038s :  0.025   +   0.001   +  0.013   | N/A      | Result_1100.0Hz.vtu  |   OK  
+1110.0 Hz |  0.026 s |   0.045s :  0.021   +   0.001   +  0.023   | N/A      | Result_1110.0Hz.vtu  |   OK  
+1120.0 Hz |  0.041 s |   0.050s :  0.028   +   0.001   +  0.021   | N/A      | Result_1120.0Hz.vtu  |   OK  
+1130.0 Hz |  0.031 s |   0.030s :  0.017   +   0.001   +  0.012   | N/A      | Result_1130.0Hz.vtu  |   OK  
+1140.0 Hz |  0.037 s |   0.036s :  0.021   +   0.000   +  0.014   | N/A      | Result_1140.0Hz.vtu  |   OK  
+1150.0 Hz |  0.022 s |   0.036s :  0.021   +   0.001   +  0.014   | N/A      | Result_1150.0Hz.vtu  |   OK  
+1160.0 Hz |  0.032 s |   0.034s :  0.017   +   0.000   +  0.016   | N/A      | Result_1160.0Hz.vtu  |   OK  
+1170.0 Hz |  0.023 s |   0.043s :  0.019   +   0.000   +  0.024   | N/A      | Result_1170.0Hz.vtu  |   OK  
+1180.0 Hz |  0.037 s |   0.047s :  0.022   +   0.000   +  0.025   | N/A      | Result_1180.0Hz.vtu  |   OK  
+1190.0 Hz |  0.028 s |   0.037s :  0.019   +   0.000   +  0.018   | N/A      | Result_1190.0Hz.vtu  |   OK  
+1200.0 Hz |  0.034 s |   0.042s :  0.020   +   0.000   +  0.021   | N/A      | Result_1200.0Hz.vtu  |   OK  
 
 --------------------------------------------------------------------------------
 *** DEBUG ***
@@ -173,6 +173,7 @@ Freq (Hz) | Assembly | Solve All:   BEM    + Pres&Vels +   Mics   | Matrix   | R
     Element inp_ID476->PV_ID475: (2e-11+0j)MPa | 0.00dB | (3.8462084850202955e-14-1.3208874586169498e-15j)mm/s
     Element inp_ID477->PV_ID476: (2e-11+0j)MPa | 0.00dB | (1.3544227642501758e-13-5.114447687670978e-15j)mm/s
     Element inp_ID478->PV_ID477: (2e-11+0j)MPa | 0.00dB | (3.517432639039312e-14-1.2931501532074105e-15j)mm/s
+ k, omega & rho_omega at 20.0Hz: 0.00036630897079136096, 125.66370614359172 & 1.52053084433746e-10
 
     Function 'averaged_at_nodes' took: ( 0.000s ) per Freq.
 
@@ -182,16 +183,16 @@ Freq (Hz) | Assembly | Solve All:   BEM    + Pres&Vels +   Mics   | Matrix   | R
     Node inp_ID475->PV_ID474: (2e-11+0j)MPa | 0.00dB
     Node inp_ID476->PV_ID475: (2e-11+0j)MPa | 0.00dB
 
-    Write / Export of Results into PV format took: ( 0.063s ) per Freq.
+    Write / Export of Results into PV format took: ( 0.060s ) per Freq.
 --------------------------------------------------------------------------------
  --- All Frequency Results saved ---
 --------------------------------------------------------------------------------
 *** SIMULATION SUMMARY ***
     ==================
     Total Frequencies:       119
-    Total Elapsed Time:      23.76 seconds (0.40 minutes)
-    Avg Time per Freq:       0.200 seconds
-    Simulation Finished at:  Thu Apr  2 16:51:20 2026
+    Total Elapsed Time:      23.31 seconds (0.39 minutes)
+    Avg Time per Freq:       0.196 seconds
+    Simulation Finished at:  Thu Apr  2 18:23:51 2026
     Check 'pmx_pipe_1m.log' for more details.
     Open 'pmx_pipe_1m_Results.pvd' in ParaView.
 --------------------------------------------------------------------------------

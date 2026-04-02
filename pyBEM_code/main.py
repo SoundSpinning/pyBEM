@@ -158,8 +158,12 @@ def start_pybem_app():
 
                 # --- TIMING: ASSEMBLY ---
                 t_asm_0 = time.time()
-                # 1. Physics: Calculate wave number k using speed of sound from parser
-                k = (2.0 * np.pi * f) / parser.speed_of_sound
+                # 1. Physics: Calculate wave number (k) using speed of sound from parser
+                omega = 2.0 * np.pi * f
+                k = omega / parser.speed_of_sound
+                #    Calculate rho*omega to be used when VELO BC present in solver
+                rho = parser.density
+                rho_omega = rho * omega
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
                 # Using the pre-calculated NumPy arrays from the sorted_bem_ids loop
@@ -174,7 +178,7 @@ def start_pybem_app():
                     # Passing sorted_bem_ids ensures BCs match the matrix rows/columns
                     # cond: Matrix Condition Number; tells us if the mesh is 'broken' or math is unstable.
                     # use cond sparingly, can take ~20% of solve time.
-                    p_unknowns, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, log=log)
+                    p_unknowns, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
 
                     t_slv_1 = time.time()
                 
@@ -199,6 +203,8 @@ def start_pybem_app():
                                 v_val = v_surf[idx]
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
                                 log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB | {v_val}mm/s"
+                            
+                            log_DEBUG += f"\n\n    k, omega & rho_omega at {f}Hz: {k}, {omega} & {rho_omega}"
                     
                     t_slv_2 = time.time()
                     

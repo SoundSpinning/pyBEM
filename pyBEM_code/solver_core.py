@@ -50,7 +50,7 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
 
 # @njit(parallel=True)   # it crashes Numba
 # @njit(fastmath=True)   # it crashes Numba
-def solve_bem_system(G, H, bc_map, elements_list, log=None):
+def solve_bem_system(G, H, bc_map, elements_list, rho_omega, log=None):
     """
     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
     Solves Ax=B.
@@ -70,7 +70,7 @@ def solve_bem_system(G, H, bc_map, elements_list, log=None):
         if 'VELO' in bc:
             # Velocity is known (v), Pressure (p) is unknown
             A[:, j] = H[:, j]
-            B += G[:, j] * bc['VELO']
+            B += G[:, j] * bc['VELO'] * (-1j * rho_omega)
         
         # Case 2: Pressure is known (Open end / Source)
         elif 'PRES' in bc:
