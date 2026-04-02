@@ -1697,7 +1697,8 @@ Internal-1_outlet_S2, S2
 **
 *Step
 *Steady state dynamics
-20, 1200, 6, 1
+20, 1200, 119, 1
+** min, max, n_freqs, bias: 1=linear; 2=log
 **
 ** Damping +++++++++++++++++++++++++++++++++++++++++++++++++
 **
@@ -1717,6 +1718,8 @@ Internal-1_outlet_S2, S2
 ** *Boundary, Amplitude=Amp_pres, Load case=1
 *Boundary, Load case=1
 inlet, 8, 8, 2E-11
+** outlet, 8, 8, 2E-11
+** inlet, 8, 8, 1
 **
 ** Acoustic Impedance - on a Surface
 ** *Impedance, Amplitude=Amp_impe, Load case=1
@@ -1731,8 +1734,9 @@ inlet, 8, 8, 2E-11
 ** Acoustic Vels - on a Surface - DoF = 8
 ** *Cload, Amplitude=Amp_vels, Load case=1
 ** *Cload, Load case=1
+** inlet, 8, 1.3e-14
+** outlet, 8, 1.3e-14
 ** inlet, 8, 1.0
-** inlet, 8, 4.5e-5
 **
 **
 ** Defined fields ++++++++++++++++++++++++++++++++++++++++++

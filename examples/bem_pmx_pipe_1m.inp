@@ -1,22 +1,23 @@
 
           ============================================================          
                   BEM Acoustics Solver | pyBEM - V0.0.1-alpha
-                           (Standard Collocation)
+                    (Standard Collocation - Direct Method)
           ============================================================          
 
 --------------------------------------------------------------------------------
 *** MODEL SUMMARY ***
     =============
     INPUT file: "pmx_pipe_1m.inp"
-    MODEL name: pmx_pipe_1m
+    MODEL name: "pmx_pipe_1m"
     NODES: 803
-    ELEMENTS: 478
-    NSETS: ['Internal-1_inlet', 'Internal-1_outlet']
-    ELSETS: ['pipe', 'Internal-1_inlet_S2', 'Internal-1_outlet_S2']
-    AMPLITUDES: ['Amp_pres', 'Amp_impe', 'Amp_vels']
-    MATERIALS: {'Air': {'density': 1.21e-12, 'bulk': 0.1424, 'c': 343053.85934751283}}
-    FREQUENCIES: 6
-    BCs: [{'type': 'PRES', 'set': 'inlet', 'val': 2e-11, 'amp': None}]
+    BEM ELEMENTS: 478 | MIC ELEMENTS: 287
+    NSETS ( 2 ): ['Internal-1_inlet', 'Internal-1_outlet']
+    ELSETS  ( 3 ): ['pipe', 'Internal-1_inlet_S2', 'Internal-1_outlet_S2']
+    SURFACES ( 2 ): {'inlet': {'elset': 'Internal-1_inlet_S2'}, 'outlet': {'elset': 'Internal-1_outlet_S2'}}
+    AMPLITUDES ( 3 ): ['Amp_pres', 'Amp_impe', 'Amp_vels']
+    MATERIALS ( 1 ): {'Air': {'density': 1.21e-12, 'bulk': 0.1424, 'c': 343053.85934751283}}
+    FREQUENCIES: 119  [20.0Hz --> 1200.0Hz]
+    BCs ( 1 ): [{'type': 'PRES', 'set': 'inlet', 'val': 2e-11, 'amp': None}]
 --------------------------------------------------------------------------------
 ***
 *Heading
@@ -1652,6 +1653,12 @@ quarter wave pipes (open one end).
 *Elset, Elset=Internal-1_outlet_S2
 442, 443, 444, 445, 446, 447, 448, 449, 450, 451, 452, 453, 454, 455, 456, 457
 ***
+*Surface, Name=inlet, Type=Element
+Internal-1_inlet_S2, S2
+***
+*Surface, Name=outlet, Type=Element
+Internal-1_outlet_S2, S2
+***
 *Shell section, Elset=pipe, Material=Air, Offset=0
 1
 **
@@ -1676,7 +1683,8 @@ quarter wave pipes (open one end).
 *Step
 ***
 *Steady state dynamics
-20, 1200, 6, 1
+20, 1200, 119, 1
+** min, max, n_freqs, bias: 1=linear; 2=log
 **
 ** Damping +++++++++++++++++++++++++++++++++++++++++++++++++
 **
