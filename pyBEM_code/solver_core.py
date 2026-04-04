@@ -8,7 +8,10 @@ from constants import BEM_TYPE
 @njit(parallel=True)
 def assemble_system(centers, areas, normals, k, BEM_TYPE):
     """
-    The Engine: Computes G and H matrices using element normals.
+    Computes G and H matrices using element normals:
+    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
+    - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
+      Hij = (Gij / r) * (jk*r - 1) * r_dot_n
     centers: (N, 3) array
     areas: (N,) array
     normals: (N, 3) array
@@ -21,7 +24,10 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
     H = np.zeros((n_els, n_els), dtype=np.complex128)
     
     # 4*pi is a constant in the Green's function denominator
-    inv_4pi = 1.0 / (4.0 * np.pi)
+    inv_4pi = 1 / (4*np.pi)
+    # Factor required to get the resonant freqs & levels right 
+    # for interior analysis; e.g. 1m pipe with changing BCs.
+    TMP_FACTOR = 1.061**0.5
     # set the sign in Hij depending if exterior or interior BEM
     if BEM_TYPE == "INTERIOR": H_sign = -1.0
     elif BEM_TYPE == "EXTERIOR": H_sign = 1.0
@@ -29,48 +35,45 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
     for i in prange(n_els):
         for j in range(n_els):
             if i == j: # Analytical self-term approximations for diagonal terms
-                # G[i, j] = inv_4pi * np.sqrt(areas[j] / np.pi)
-                G[i, j] = inv_4pi * areas[j]
+                G[i, j] = inv_4pi * np.sqrt(areas[j])   # length units == G units off diagonal
                 H[i, j] = 0.5  # Jump term for smooth surfaces
             else:
                 # Vector from source j to receiver i
                 r_vec = centers[i] - centers[j]
                 r = np.linalg.norm(r_vec)
+                exp_jkr = np.exp(1j * k * r)
                 
-                # Free-space 3D Helmholtz Green's function
-                g_val = np.exp(1j * k * r) * inv_4pi / r
+                # (G-matrix): Free-space 3D Helmholtz Green's function
+                g_val = TMP_FACTOR * exp_jkr * inv_4pi / r
                 G[i, j] = g_val * areas[j]
                 
-                # Double Layer (H): Derivative of G with respect to normal n_j
-                # grad_g = g_val * (1j * k - 1/r) * (r_vec / r)
-                dot_prod = np.dot(r_vec, normals[j]) / r
-                H[i, j] = H_sign * g_val/r * ((1j * k * r) - 1.0) * dot_prod * areas[j]
-                # H[i, j] = 1.06 * H_sign * g_val * (1j * k - 1.0 / r) * dot_prod * areas[j]
+                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+                r_dot_n = np.dot(r_vec, normals[j]) / r
+                H[i, j] = H_sign * TMP_FACTOR * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
     return G, H
 
 # @njit(parallel=True)   # it crashes Numba
-# @njit(fastmath=True)   # it crashes Numba
-def solve_bem_system(G, H, bc_map, elements_list, rho_omega, log=None):
+def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     """
     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
     Solves Ax=B.
     Returns the complex pressure for every element.
     elements_list: sorted list of element IDs to ensure index alignment
     """
-    num_elements = len(elements_list)
+    num_elements = len(sorted_bem_ids)
     A = np.zeros((num_elements, num_elements), dtype=np.complex128)
     B = np.zeros(num_elements, dtype=np.complex128)
 
     # We MUST use the same index 'j' that corresponds to the matrix columns (0, 1, 2...)
     # eid is the ACTUAL ID from the .inp (1, 101, 500...)
-    for j, eid in enumerate(elements_list):
+    for j, eid in enumerate(sorted_bem_ids):
         bc = bc_map.get(eid, {})
 
         # Case 1: Velocity is known (Vibrating Wall)
         if 'VELO' in bc:
             # Velocity is known (v), Pressure (p) is unknown
             A[:, j] = H[:, j]
-            B += G[:, j] * bc['VELO'] * (-1j * rho_omega)
+            B += G[:, j] * bc['VELO'] * (1j * rho_omega)
         
         # Case 2: Pressure is known (Open end / Source)
         elif 'PRES' in bc:
@@ -104,20 +107,23 @@ def solve_bem_system(G, H, bc_map, elements_list, rho_omega, log=None):
     # Solve the linear system Ax = B
     # Solve for the unknown surface values (usually Pressure)
     bem_solution = np.linalg.solve(A, B)
-    return (bem_solution, cond)
+    
+    # Build both PRESS array & VEL array results, before Mics calcs & averaged_at_nodes for PV
+    p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
+    return (p_final, v_final, cond)
 
-def derive_surface_vectors(p_sol, bc_map, bem_ids):
+def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
     """
     Reconstructs the full pressure and velocity vectors for the surface.
     p_sol: The unknown values returned by the solver.
     bc_map: The dictionary of boundary conditions.
     bem_ids: The sorted list of element IDs used in the matrix.
     """
-    num_elements = len(bem_ids)
+    num_elements = len(sorted_bem_ids)
     p_final = np.zeros(num_elements, dtype=np.complex128)
     v_final = np.zeros(num_elements, dtype=np.complex128)
 
-    for j, eid in enumerate(bem_ids):
+    for j, eid in enumerate(sorted_bem_ids):
         bc = bc_map.get(eid, {})
         
         if 'VELO' in bc:
@@ -163,17 +169,12 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
             g_val = np.exp(1j * k * r) * inv_4pi / r
             
             # Derivative of Green's Function (H)
-            # Dot product of (r_vec/r) and the surface normal
-            cos_theta = np.dot(r_vec, bem_normals[j]) / r
-            h_val = g_val * (1j * k - 1.0 / r) * cos_theta
+            # Dot product of (r_vec) and the surface normal / r
+            r_dot_n = np.dot(r_vec, bem_normals[j]) / r
+            h_val = g_val * (1j * k - 1.0 / r) * r_dot_n
             
             # p_mic = G*v - H*p (integrated over area)
             sum_p += (g_val * v_surf[j] - h_val * p_surf[j]) * bem_areas[j]
             
         p_mics[i] = sum_p
     return p_mics
-
-# def get_greens(r, k):
-#     """3D Helmholtz Green's Function."""
-#     if r < 1e-9: return 0.0 + 0.0j
-#     return np.exp(1j * k * r) / (4.0 * np.pi * r)

@@ -104,7 +104,6 @@ def start_pybem_app():
                 log.write(log_top)
                 log.write(log_info)
             raise ValueError(f"\n ERROR in PRE-PROCESSING: see '{log_f}' for more details.\n")
-            return
 
         # 4. Setup BCs
         # we get BCs at the ready for the solver
@@ -133,21 +132,26 @@ def start_pybem_app():
         # --- Start Global Timer ---
         global_t0 = time.time()
 
+        min_freq = min(parser.frequencies)
+        max_freq = max(parser.frequencies)
         num_freqs = len(parser.frequencies)
+        del_freq = parser.frequencies[1] - parser.frequencies[0]
         print(f"\n{'-' * 80}")
         print(f" ACOUSTICS job started at:  {time.ctime()}")
-        print(f" --- Solving {num_freqs} Frequencies [{min(parser.frequencies)}Hz --> {max(parser.frequencies)}Hz] (Steady State Direct) ---{str_CPUs}")
+        print(f" --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---{str_CPUs}")
         # print(str_CPUs)
 
         with open(log_f, "a") as log:
             log.write(f"\n{'-' * 80}")
             log.write(f"\n ACOUSTICS job started at: {time.ctime()}")
-            log.write(f"\n --- Solving {num_freqs} Frequencies [{min(parser.frequencies):.1f}Hz --> {max(parser.frequencies):.1f}Hz] (Steady State Direct) ---\n")
+            log.write(f"\n --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---\n")
             log.write(str_CPUs)
-            log.write(f"\n{'=' * 108}")
+            log.write(f"\n{'=' * 98}")
+#             log.write(f"""
+# {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Pres&Vels':^9} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
             log.write(f"""
-{'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Pres&Vels':^9} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
-            log.write(f"\n{'=' * 108}\n")
+ {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
+            log.write(f"\n{'=' * 98}\n")
             log.flush() # Forces write to disk so you can tail the log in real-time
 
             # --- The progress bar loop ---
@@ -178,13 +182,14 @@ def start_pybem_app():
                     # Passing sorted_bem_ids ensures BCs match the matrix rows/columns
                     # cond: Matrix Condition Number; tells us if the mesh is 'broken' or math is unstable.
                     # use cond sparingly, can take ~20% of solve time.
-                    p_unknowns, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
+                    # p_unknowns, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
+                    p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
 
                     t_slv_1 = time.time()
                 
                     # 3.2. Reconstruct full P and V vectors for the BEM elements.
                     # Use sorted_bem_ids to ensure p_surf/v_surf order matches the geometry
-                    p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, sorted_bem_ids)
+                    # p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, sorted_bem_ids)
 
                     # log_DEBUG:
                     if f == parser.frequencies[0]:
@@ -278,8 +283,8 @@ def start_pybem_app():
                     
                     # Write formatted table header to LOG
                     rslt_f = f'Result_{f:.1f}Hz.vtu'
-                    log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
-                    # log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8.1f} | {rslt_f:<20} | {'OK':^6}\n")
+                    # log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
+                    log.write(f" {f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
                     log.flush() # Forces write to disk so we can tail the log in real-time
 
                 except Exception as e:
