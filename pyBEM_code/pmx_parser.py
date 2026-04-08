@@ -6,11 +6,12 @@ from version import __solver__
 class PMXParser:
     def __init__(self, file_path):
         self.file_path = file_path
-        self.project_name = os.path.splitext(os.path.basename(file_path))[0]
+        self.model_name = os.path.splitext(os.path.basename(file_path))[0]
         
         # --- Model Data ---
         self.header_comments = ''
-        self.nodes = {}           
+        self.nodes = {}
+        self.n_mics_nodes = 0
         self.elements = {}        
         self.mics_elements = {}        
         self.nsets = {}          
@@ -68,8 +69,6 @@ class PMXParser:
 
         # STEP 3: Final Physics validation before handing to main.py
         self._validate_physics()
-        self.top_log = TOP_LOG_LINES(self)
-        self.write_debug_inp()
         return True
 
     def _route_block(self, header, data):
@@ -122,6 +121,7 @@ class PMXParser:
             self.model_str += f'***\n{header}\n'
             is_elset = h_up.startswith('*ELSET')
             name = self._get_param(header, 'ELSET' if is_elset else 'NSET')
+            name = name.split('Internal-1_')[-1]
             target = self.elsets if is_elset else self.nsets
             
             if name not in target: target[name] = []
@@ -135,6 +135,7 @@ class PMXParser:
         elif h_up.startswith('*SURFACE'):
             self.model_str += f'***\n{header}\n'
             name = self._get_param(header, 'NAME')
+            name = name.split('Internal-1_')[-1]
             
             for line in data:
                 if line.startswith('**') or not line: 
@@ -142,7 +143,7 @@ class PMXParser:
                 self.model_str += line+'\n'
                 p = self._split(line)
                 if len(p) >= 2:
-                    self.surfaces[name] = {'elset': p[0]}
+                    self.surfaces[name] = {'elset': p[0].split('Internal-1_')[-1]}
 
         # --- 4) Materials ---
         elif h_up.startswith('*MATERIAL'):
@@ -257,7 +258,7 @@ class PMXParser:
             if m and m['density'] and m['bulk']:
                 self.density = m['density']
                 self.speed_of_sound = np.sqrt(m['bulk'] / m['density'])
-                m['c'] = float(self.speed_of_sound)
+                m['c'] = float(f"{self.speed_of_sound:.2f}")
                 return
         raise ValueError("No valid Acoustic Material properties found for assigned elements.")
 
@@ -333,12 +334,14 @@ class PMXParser:
 
     def write_debug_inp(self):
         """The 'Receipt' file for debugging."""
-        with open(f"bem_{self.project_name}.inp", 'w') as f:
+        with open(f"bem_{self.model_name}.inp", 'w') as f:
             f.write(__solver__)
             f.write(self.top_log)
             f.write(self.header_comments)
             f.write(self.model_str)
 
     def print_model_summary(self):
+        self.top_log = TOP_LOG_LINES(self)
+        self.write_debug_inp()
         print(self.header_comments)
         print(self.top_log)

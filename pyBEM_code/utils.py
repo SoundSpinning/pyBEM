@@ -57,12 +57,14 @@ def calculate_signed_volume(centers, areas, normals):
     CoG = [CoGx, CoGy, CoGz]
     return volume, area, CoG
 
-def averaged_at_nodes(nodes, elements, element_values):
+def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes, P_mics):
     """
     Averages element-centered results to nodes.
     nodes: dict {nid: [x, y, z]}
     elements: dict {eid: [n1, n2, ...]}
-    element_values: array of complex values (one per element)
+    P_bem: array of complex values (one per element)
+    mic_nodes: dict {nid: [x, y, z]}
+    P_mics: array of complex values (one per node)
     nodal_pressures: array of complex values (one per node)
     """
     # 1. Determine the size needed for the array
@@ -73,22 +75,33 @@ def averaged_at_nodes(nodes, elements, element_values):
     # node_sums: stores the accumulated elemental pressure
     # count: stores how many elements share a node (for averaging)
     node_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
-    count = np.zeros(max_node_id + 1, dtype=np.float32)
+    area_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
+    # count = np.zeros(max_node_id + 1, dtype=np.float32)
     nodal_pressures = np.zeros(max_node_id + 1, dtype=np.complex128)
 
     # 2. Map element results to their constituent nodes
-    # We iterate through the elements provided (could be BEM OR Mics)
+    # We iterate through the elements provided for BEM
     for i, (eid, conn) in enumerate(elements.items()):
-        val = element_values[i]
+        area = bem_areas[i]
+        val = P_bem[i] * area
         for nid in conn:
             node_sums[nid] += val
-            count[nid] += 1
+            area_sums[nid] += area
+            # count[nid] += 1
+    # We iterate through the nodes provided for Mics
+    for i, (nid, coords) in enumerate(mic_nodes.items()):
+        val = P_mics[i]
+        node_sums[nid] += val
+        area_sums[nid] = 1
+        # count[nid] = 1
 
     # 3. Perform the average
-    # We only divide where count > 0 to avoid DivisionByZero
+    # We only divide where area > 0 to avoid DivisionByZero
     # This also gets the nodal results in the right index order for PV output
-    mask = count > 0
-    nodal_pressures[mask] = node_sums[mask] / count[mask]
+    # mask = count > 0
+    mask = area_sums > 0
+    # nodal_pressures[mask] = node_sums[mask] / count[mask]
+    nodal_pressures[mask] = node_sums[mask] / area_sums[mask]
 
     return nodal_pressures
 

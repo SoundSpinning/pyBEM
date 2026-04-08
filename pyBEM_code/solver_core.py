@@ -2,7 +2,7 @@
 
 import numpy as np
 from numba import njit, prange
-from constants import BEM_TYPE
+# from constants import BEM_TYPE
 
 # @njit(fastmath=True)   # 2 x slower vs parallel=True; both together is same 2 x slower.
 @njit(parallel=True)
@@ -27,6 +27,7 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
     inv_4pi = 1 / (4*np.pi)
     # Factor required to get the resonant freqs & levels right 
     # for interior analysis; e.g. 1m pipe with changing BCs.
+    # TODO: find out more about kernels, and why this factor is required.
     TMP_FACTOR = 1.061**0.5
     # set the sign in Hij depending if exterior or interior BEM
     if BEM_TYPE == "INTERIOR": H_sign = -1.0
@@ -52,7 +53,7 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
                 H[i, j] = H_sign * TMP_FACTOR * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
     return G, H
 
-# @njit(parallel=True)   # it crashes Numba
+# @njit(parallel=True)   # it crashes Numba if dictionaries present
 def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     """
     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
@@ -79,6 +80,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
         elif 'PRES' in bc:
             # Pressure is known (p), Velocity (v) is unknown
             A[:, j] = -G[:, j]
+            # * (1j * rho_omega)
             B -= H[:, j] * bc['PRES']
         
         # Case 3: Impedance (Absorbent material)
@@ -88,6 +90,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             # Safety check for division by zero
             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
             A[:, j] = H[:, j] - (G[:, j] / z_val)
+            # A[:, j] = H[:, j] + (G[:, j] / z_val)
         
         # Case 4: Rigid Wall, v=0 (Default)
         else:
@@ -102,13 +105,13 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     #     cond = np.linalg.cond(A)
     #     if cond > 1e12:
     #         log.write("      WARNING: Matrix is ill-conditioned. Check for overlapping elements!\n")
-    cond = 'N/A'
+    cond = 'N/A'   # turned off as expensive.
     
     # Solve the linear system Ax = B
     # Solve for the unknown surface values (usually Pressure)
     bem_solution = np.linalg.solve(A, B)
     
-    # Build both PRESS array & VEL array results, before Mics calcs & averaged_at_nodes for PV
+    # Build both PRESS array & VELO array results, before Mics calcs & averaged_at_nodes for PV
     p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
     return (p_final, v_final, cond)
 
@@ -148,9 +151,10 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             v_final[j] = 0.0 + 0.0j
             
     return p_final, v_final
+    # * (1j * rho_omega)   # Do NOT use it here at output, see in solver.
 
 @njit(parallel=True)
-def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k):
+def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega):
     """
     Pass 2: Projects solved surface (BEM) results onto Microphone points.
     """
@@ -158,6 +162,8 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
     num_surf = len(bem_centers)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
     inv_4pi = 1.0 / (4.0 * np.pi)
+    v_surf = v_surf * (1j * rho_omega)
+    # TMP_FACTOR = 1.061**0.5
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
@@ -173,8 +179,8 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
             r_dot_n = np.dot(r_vec, bem_normals[j]) / r
             h_val = g_val * (1j * k - 1.0 / r) * r_dot_n
             
-            # p_mic = G*v - H*p (integrated over area)
-            sum_p += (g_val * v_surf[j] - h_val * p_surf[j]) * bem_areas[j]
+            # p_mic = G*v + H*p (integrated over area)
+            sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
             
         p_mics[i] = sum_p
     return p_mics

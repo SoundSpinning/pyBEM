@@ -1,4 +1,4 @@
-import os, sys
+import os
 import numpy as np
 from numba import get_num_threads, set_num_threads
 import traceback
@@ -8,10 +8,10 @@ from tqdm import tqdm
 # Import our custom modules
 from version import __solver__
 from pmx_parser import PMXParser
-from solver_core import assemble_system, solve_bem_system, derive_surface_vectors, calculate_field_points
+from solver_core import assemble_system, solve_bem_system, calculate_field_points
 from exporter import PVExporter
 from utils import prepare_geometry, calculate_signed_volume, averaged_at_nodes
-from constants import BEM_TYPE, DEBUG, P_REF
+from constants import DEBUG, P_REF
 
 def start_pybem_app():
     # 0. Ask the user for the file name
@@ -24,60 +24,75 @@ def start_pybem_app():
         print(f"ERROR: File '{filename}' not found in the current folder.")
         return
 
-    # Assign number of CPUs for the parallel solve with numba (@njit in 'solver_core.py')
+    # Assign number of CPU cores for the parallel solve with numba (@njit in 'solver_core.py')
     n_CPUs = get_num_threads()
     used_CPUs = n_CPUs
     if n_CPUs > 4:
-        used_CPUs = n_CPUs - 2   # leave 2 CPUs free on machine for user to do other work
+        used_CPUs = n_CPUs - 2   # leave 2 CPU cores free on machine for user to do other work
         set_num_threads(used_CPUs)
     str_CPUs = (f"""
- Number of CPUs found on this machine: ( {n_CPUs} )
- MAX number of CPUs used for parallel solve is: ( {used_CPUs} )
+ Number of CPU cores found on this machine: ( {n_CPUs} )
+ MAX number of cores used for parallel solve is: ( {used_CPUs} )
  """)
     
     try:
-        # 1. Setup Parser and Load Model
+        # 1. Setup Parser, Load Model and prepare sorted mesh IDs
         parser = PMXParser(filename)
         parser.load_model()
-        parser.print_model_summary()
-        # LOG setup
-        log_f = f"{parser.project_name}.log"
-        log_top = f"""{__solver__}{str(parser.header_comments)}{str(parser.top_log)}"""
-        log_info = ''
+        rho = parser.density
 
-        # 1st sort nodes & element dictionaries read from the input parser
+        # Sort nodes & element dictionaries as read from the input parser
+        # This ensures later on that index 0 is always Element 1, index 1 is 2, etc.
         sorted_nodes = dict(sorted(parser.nodes.items()))
+        sorted_node_ids = list(sorted_nodes.keys())
         sorted_bem_els = dict(sorted(parser.elements.items()))
+        sorted_bem_ids = list(sorted_bem_els.keys())
+
+        sorted_mics_els = {}
         # If mics mesh exists in the model
         if parser.mics_elements:
             sorted_mics_els = dict(sorted(parser.mics_elements.items()))
+            mics_nodes = {}
+            for conn in sorted_mics_els.values():
+                for nid in conn:
+                    n_coords = sorted_nodes[nid]
+                    mics_nodes[nid] = n_coords
+            sorted_mics_nodes = dict(sorted(mics_nodes.items()))
+            sorted_mics_centers = np.array(list(sorted_mics_nodes.values()))
+            parser.n_mics_nodes = len(sorted_mics_nodes)
+
+        # 2. LOG setup | print & LOG model info
+        parser.print_model_summary()
+        log_f = f"{parser.model_name}.log"
+        log_top = f"""{__solver__}{str(parser.header_comments)}{str(parser.top_log)}"""
+        log_info = ''
+
+        # 3. Setup Exporter
+        # 3.1 Create nodal ID Map (Input mesh node ID -> 0-based VTK Index)
+        nodal_id_map = {inp_id: i for i, inp_id in enumerate(sorted_node_ids)}
+        # 3.2 Combine all elements for the mesh definition.
+        #     We merge BEM and MICS into one dictionary for the export PV 'Cells' section
+        sorted_all_els = {**sorted_bem_els, **sorted_mics_els}
+        sorted_all_el_ids = sorted_all_els.keys()
         
-        # get lists for node & element IDs after sorting for later use.
-        # Create the list of element IDs in the exact order they appear in the matrices.
-        # This ensures later on that index 0 is always Element 1, index 1 is 2, etc.
-        sorted_node_ids = list(sorted_nodes.keys())
-        sorted_bem_ids = list(sorted_bem_els.keys())
-        # If mics mesh exists in the model
-        if sorted_mics_els:
-            sorted_mics_ids = list(sorted_mics_els.keys())
-    
-        # 2. Geometry Prep (Centers, Areas, Normals)
-        bem_centers, bem_areas, bem_normals = prepare_geometry(sorted_nodes, sorted_bem_els)
-        # Only if mics exist in the model
-        if sorted_mics_els:
-            mic_centers, mic_areas, mic_normals = prepare_geometry(sorted_nodes, sorted_mics_els)
-        
+        # 3.3 Group IDs for PV: BEM = 1 & MICS = 2
         group_ids = {}
         # Default everyone to 1 (BEM)
         for node_id in sorted_nodes:
             group_ids[node_id] = 1 
-
         # Identify Mic nodes and tag them as 2
-        for conn in sorted_mics_els.values():
-            for node_id in conn:
-                group_ids[node_id] = 2
+        if sorted_mics_els:
+            for conn in sorted_mics_els.values():
+                for node_id in conn:
+                    group_ids[node_id] = 2
         
-        # 3. CHECK on BEM volume: is it interior or exterior, 
+        # 3.4 We pass sorted nodes, bem & mics elements to the exporter to write them into the VTU files
+        exporter = PVExporter(parser.model_name, sorted_nodes, sorted_node_ids, nodal_id_map, sorted_all_els, sorted_all_el_ids, group_ids)
+
+        # 4. Geometry Prep (Centers, Areas, Normals)
+        bem_centers, bem_areas, bem_normals = prepare_geometry(sorted_nodes, sorted_bem_els)
+
+        # 5. CHECK on BEM volume: is it interior or exterior, 
         #    or check for holes / free edges in mesh.
         bem_total_vol, bem_total_area, bem_CoG = calculate_signed_volume(bem_centers, bem_areas, bem_normals)
         log_info += f"""
@@ -105,30 +120,27 @@ def start_pybem_app():
                 log.write(log_info)
             raise ValueError(f"\n ERROR in PRE-PROCESSING: see '{log_f}' for more details.\n")
 
-        # 4. Setup BCs
+        # 6. Setup BCs
         # we get BCs at the ready for the solver
         bc_map, log_bc_info = parser.get_bcs()
         log_info += '\n'+log_bc_info
         print(f"{log_info}")
         if DEBUG:
-            print(f"\n DEBUG: see '{parser.project_name}.log' for input BC CHECKs (ELEMENTAL & NODAL)")
+            print(f"\n DEBUG: see '{parser.model_name}.log' for input BC CHECKs (ELEMENTAL & NODAL)")
         # Use 'with' to ensure the file closes even if the app crashes
         with open(log_f, "w") as log:
             log.write(log_top)
             log.write(log_info)
             log.flush() # Forces write to disk so you can tail the log in real-time
 
-        # Add DEBUG lines, e.g. on BCs applied.
+        # Add DEBUG lines, e.g. on BCs applied, etc
         log_DEBUG = ''
         # time average counts
         all_t_avr = 0
         all_t_exp = 0
         
-        # 5. Setup Exporter
-        # We pass bem & mics elements to the exporter so it can merge them into the VTU files
-        exporter = PVExporter(parser.project_name, sorted_nodes, sorted_bem_els, sorted_mics_els)
-        
-        # 4. Solver Frequency Loop with Log File
+        # 7. Solver Frequency Loop with Log File
+        #    =====================
         # --- Start Global Timer ---
         global_t0 = time.time()
 
@@ -139,7 +151,6 @@ def start_pybem_app():
         print(f"\n{'-' * 80}")
         print(f" ACOUSTICS job started at:  {time.ctime()}")
         print(f" --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---{str_CPUs}")
-        # print(str_CPUs)
 
         with open(log_f, "a") as log:
             log.write(f"\n{'-' * 80}")
@@ -147,15 +158,13 @@ def start_pybem_app():
             log.write(f"\n --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---\n")
             log.write(str_CPUs)
             log.write(f"\n{'=' * 98}")
-#             log.write(f"""
-# {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Pres&Vels':^9} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
             log.write(f"""
  {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
             log.write(f"\n{'=' * 98}\n")
-            log.flush() # Forces write to disk so you can tail the log in real-time
+            log.flush() # Forces writing to disk, so we can tail the .log file in real-time
 
-            # --- The progress bar loop ---
-            pbar = tqdm(parser.frequencies, desc=" Done", ncols=80, unit="Freq", colour='black')
+            # --- Freq loop: The progress bar ---
+            pbar = tqdm(parser.frequencies, desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e", mininterval=0.10)
             for f in pbar:
                 # Update the bar's suffix so we show the freq value
                 pbar.set_postfix({"Freq": f"{f:.1f}Hz"})
@@ -166,7 +175,6 @@ def start_pybem_app():
                 omega = 2.0 * np.pi * f
                 k = omega / parser.speed_of_sound
                 #    Calculate rho*omega to be used when VELO BC present in solver
-                rho = parser.density
                 rho_omega = rho * omega
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
@@ -178,19 +186,14 @@ def start_pybem_app():
                 t_slv_0 = time.time()
                 # 3. Solve Linear System: Solve the boundary value problem
                 try:
-                    # 3.1. Solve the BEM Surface
-                    # Passing sorted_bem_ids ensures BCs match the matrix rows/columns
-                    # cond: Matrix Condition Number; tells us if the mesh is 'broken' or math is unstable.
-                    # use cond sparingly, can take ~20% of solve time.
-                    # p_unknowns, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
+                    # 3.1. Solve the BEM Surface.
+                    #      Passing sorted_bem_ids ensures BCs match the matrix rows/columns
+                    #      cond: Matrix Condition Number; tells us if the mesh is 'broken' or math is unstable.
+                    #      use cond sparingly, can take ~20% of solve time.
+                    # 3.2. 'derive_surface_vectors()': Reconstructs full P and V vectors for the BEM elements.
                     p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
-
                     t_slv_1 = time.time()
                 
-                    # 3.2. Reconstruct full P and V vectors for the BEM elements.
-                    # Use sorted_bem_ids to ensure p_surf/v_surf order matches the geometry
-                    # p_surf, v_surf = derive_surface_vectors(p_unknowns, bc_map, sorted_bem_ids)
-
                     # log_DEBUG:
                     if f == parser.frequencies[0]:
                         if DEBUG:
@@ -200,8 +203,8 @@ def start_pybem_app():
     =====
     BC CHECKs (ELEMENTAL) - Only for 1st Freq:"""
                             # Get indices of elements that are part of the inlet surface
-                            inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['Internal-1_inlet_S2']]
-                            # inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['Internal-1_outlet_S2']]
+                            inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['inlet_S2']]
+                            # inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['outlet_S2']]
 
                             for idx in inlet_indices[-4:]: # Just check a few
                                 p_val = p_surf[idx]
@@ -209,7 +212,7 @@ def start_pybem_app():
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
                                 log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB | {v_val}mm/s"
                             
-                            log_DEBUG += f"\n\n    k, omega & rho_omega at {f}Hz: {k}, {omega} & {rho_omega}"
+                            log_DEBUG += f"\n\n    k, omega & rho_omega at {f}Hz: {k:.5}, {omega:.5} & {rho_omega:.5}"
                     
                     t_slv_2 = time.time()
                     
@@ -217,18 +220,19 @@ def start_pybem_app():
                     # Only if mics exist in the model
                     if sorted_mics_els:
                         p_mics = calculate_field_points(
-                            mic_centers, 
+                            sorted_mics_centers,
                             bem_centers, 
                             bem_areas, 
                             bem_normals, 
                             p_surf, 
                             v_surf, 
-                            k
+                            k,
+                            rho_omega
                         )
                     t_slv_3 = time.time()
                     
                     t_solve_bem = t_slv_1 - t_slv_0
-                    t_solve_pv = t_slv_2 - t_slv_1
+                    # t_solve_pv = t_slv_2 - t_slv_1
                     t_solve_mics = t_slv_3 - t_slv_2
                     t_solve = t_slv_3 - t_slv_0
 
@@ -240,36 +244,29 @@ def start_pybem_app():
                 # 4. Post-Process & Export: Convert element-center results to nodes for smooth ParaView viewing
                 try:
                     t_avg_0 = time.time()
-                    # 4.1. Get nodal averages for BEM & Mics elements
-                    nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf)
-                    nodal_p_mics = averaged_at_nodes(sorted_nodes, sorted_mics_els, p_mics)
+                    # 4.1. Get nodal averages for BEM elements & Mics nodes
+                    nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas,sorted_mics_nodes, p_mics)
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
                     if f == parser.frequencies[0]:
                         if DEBUG:
                             to_nods_avg_time = all_t_avr / num_freqs if num_freqs > 0 else 0
-                            log_DEBUG += f"\n\n    Function 'averaged_at_nodes' took: ( {to_nods_avg_time:.3f}s ) per Freq."
                             
-                            inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['Internal-1_inlet']]
+                            inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['inlet']]
                             log_DEBUG += f"\n\n    BC CHECKs (NODAL) - Only for 1st Freq:"
                             for idx, nid in inlet_indices[-4:]: # Just check a few nodes
                                 p_val = nodal_p_surf[idx]
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
                                 log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
+
+                            log_DEBUG += f"\n\n    Function 'averaged_at_nodes' took: ( {to_nods_avg_time:.3f}s ) per Freq."
                     
                     t_exp_0 = time.time()
                     # 4.2. Combine them into one master results array
-                    # Since they are NumPy arrays, adding them merges the results
-                    nodal_pressures = nodal_p_surf + nodal_p_mics
-                    
-                    # 4.3. Create the Group ID array for the Exporter
-                    group_ids = {}
-                    for node_id in sorted_nodes:
-                        if any(node_id in conn for conn in sorted_mics_els.values()):
-                            group_ids[node_id] = 2  # Microphones
-                        else:
-                            group_ids[node_id] = 1  # BEM Surface nodes
+                    nodal_pressures = nodal_p_surf
+                    # OLD method, ignore. Since they are NumPy arrays, adding them merges the results
+                    # nodal_pressures = nodal_p_surf + nodal_p_mics
                     
                     # Write the .vtu file for this frequency
                     exporter.write_vtu(f, nodal_pressures, group_ids=group_ids)
@@ -283,7 +280,6 @@ def start_pybem_app():
                     
                     # Write formatted table header to LOG
                     rslt_f = f'Result_{f:.1f}Hz.vtu'
-                    # log.write(f"{f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_pv:^9.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
                     log.write(f" {f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
                     log.flush() # Forces write to disk so we can tail the log in real-time
 
@@ -293,7 +289,9 @@ def start_pybem_app():
                     log.write(f"{f:<7.1f}Hz | {t_assembly:<11.4f}s | {t_solve:<8.4f}s | {cond:<8} | {rslt_f:<20} | FAILED: {str(e)}\n")
                     pbar.write(f"Error at {f}Hz: See '{log_f}' for details.")
                     traceback.print_exc()
-            
+            # print(v_surf)
+            # print(p_mics)
+            # print(nodal_pressures)
             log.write(log_DEBUG)
             # 5. Final results output
             exporter.write_pvd()
@@ -313,7 +311,7 @@ def start_pybem_app():
     Avg Time per Freq:       {avg_time:.3f} seconds
     Simulation Finished at:  {time.ctime()}
     Check '{log_f}' for more details.
-    Open '{parser.project_name}_Results.pvd' in ParaView.
+    Open '{parser.model_name}_Results.pvd' in ParaView.
 {"-" * 80}
 """
             print(SUMMARY())
@@ -321,8 +319,6 @@ def start_pybem_app():
 
     except ValueError as e:
         print(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
-        # traceback.print_exc()
-        # return # Exit the function gracefully
     except Exception as e:
         print(f"\n[ERROR] {e}")
         traceback.print_exc()
