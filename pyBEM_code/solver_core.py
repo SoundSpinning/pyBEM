@@ -6,7 +6,7 @@ from numba import njit, prange
 
 # @njit(fastmath=True)   # 2 x slower vs parallel=True; both together is same 2 x slower.
 @njit(parallel=True)
-def assemble_system(centers, areas, normals, k, BEM_TYPE):
+def assemble_system(centers, areas, normals, k, H_sign):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -16,7 +16,7 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
     areas: (N,) array
     normals: (N, 3) array
     k: wave number (complex or float)
-    Checks if BEM_TYPE = INTERIOR or EXTERIOR, and adapts maths accordingly (Hij sign).
+    Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
     """
     n_els = len(centers)   # number of BEM elements
     # Build 2D complex matrices
@@ -29,9 +29,14 @@ def assemble_system(centers, areas, normals, k, BEM_TYPE):
     # for interior analysis; e.g. 1m pipe with changing BCs.
     # TODO: find out more about kernels, and why this factor is required.
     TMP_FACTOR = 1.061**0.5
-    # set the sign in Hij depending if exterior or interior BEM
-    if BEM_TYPE == "INTERIOR": H_sign = -1.0
-    elif BEM_TYPE == "EXTERIOR": H_sign = 1.0
+    # TMP_FACTOR = 1.0
+    # TMP_FACTOR = (10./(3.0*np.pi))**0.5
+    # total_area = np.sum(areas)
+    # TMP_FACTOR = np.exp(6.3e-5 * (n_els - 1))
+    # TMP_FACTOR = np.exp(9.22e-8 * total_area)
+    # # set the sign in Hij depending if exterior or interior BEM
+    # if BEM_TYPE == "INTERIOR": H_sign = -1.0
+    # elif BEM_TYPE == "EXTERIOR": H_sign = 1.0
 
     for i in prange(n_els):
         for j in range(n_els):
@@ -59,7 +64,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
     Solves Ax=B.
     Returns the complex pressure for every element.
-    elements_list: sorted list of element IDs to ensure index alignment
+    sorted_bem_ids: sorted list of element IDs to ensure index alignment
     """
     num_elements = len(sorted_bem_ids)
     A = np.zeros((num_elements, num_elements), dtype=np.complex128)
@@ -111,7 +116,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     # Solve for the unknown surface values (usually Pressure)
     bem_solution = np.linalg.solve(A, B)
     
-    # Build both PRESS array & VELO array results, before Mics calcs & averaged_at_nodes for PV
+    # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
     p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
     return (p_final, v_final, cond)
 
@@ -133,6 +138,7 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             # We knew Velocity, p_sol gave us Pressure
             p_final[j] = p_sol[j]
             v_final[j] = bc['VELO']
+            # * (1j * rho_omega)   # Do NOT use it here, see in solve_bem_system.
             
         elif 'PRES' in bc:
             # We knew Pressure, p_sol gave us Velocity
@@ -151,19 +157,22 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             v_final[j] = 0.0 + 0.0j
             
     return p_final, v_final
-    # * (1j * rho_omega)   # Do NOT use it here at output, see in solver.
+    # * (1j * rho_omega)   # Do NOT use it here at output, see in solve_bem_system.
 
 @njit(parallel=True)
 def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega):
     """
     Pass 2: Projects solved surface (BEM) results onto Microphone points.
+    mic_centers: mics nodal coords.
+    bem_centers: BEM elements CoG coords.
     """
     num_mics = len(mic_centers)
     num_surf = len(bem_centers)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
     inv_4pi = 1.0 / (4.0 * np.pi)
+    # TODO: when input VELO present, we have 1 too many '* (1j * rho_omega)' on thos els.
+    #       to be reviewed in the future.
     v_surf = v_surf * (1j * rho_omega)
-    # TMP_FACTOR = 1.061**0.5
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
@@ -180,6 +189,7 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
             h_val = g_val * (1j * k - 1.0 / r) * r_dot_n
             
             # p_mic = G*v + H*p (integrated over area)
+            # TODO: check the sign fot interior vs exterior when the time comes.
             sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
             
         p_mics[i] = sum_p

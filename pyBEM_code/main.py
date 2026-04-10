@@ -33,7 +33,7 @@ def start_pybem_app():
     str_CPUs = (f"""
  Number of CPU cores found on this machine: ( {n_CPUs} )
  MAX number of cores used for parallel solve is: ( {used_CPUs} )
- """)
+""")
     
     try:
         # 1. Setup Parser, Load Model and prepare sorted mesh IDs
@@ -90,24 +90,29 @@ def start_pybem_app():
         exporter = PVExporter(parser.model_name, sorted_nodes, sorted_node_ids, nodal_id_map, sorted_all_els, sorted_all_el_ids, group_ids)
 
         # 4. Geometry Prep (Centers, Areas, Normals)
-        bem_centers, bem_areas, bem_normals = prepare_geometry(sorted_nodes, sorted_bem_els)
+        bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, sorted_bem_els)
 
         # 5. CHECK on BEM volume: is it interior or exterior, 
         #    or check for holes / free edges in mesh.
         bem_total_vol, bem_total_area, bem_CoG = calculate_signed_volume(bem_centers, bem_areas, bem_normals)
         log_info += f"""
- INPUT MESH: Total BEM AREA is ( {bem_total_area:.4} L**2 ).
-             CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L.
+ INPUT MESH: Total BEM AREA is: ( {bem_total_area:.4} L**2 )
+             CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L
+             ( i ) The MAX BEM element aspect ratio found is: ( {np.max(elem_ratio):.2f} )
+                   Mesh element size is (approx.): ( {np.mean(max_el_length):.2f} L )
+             ( i ) The MAX Freq suggested is (approx.): ( {parser.speed_of_sound / (8*np.mean(max_el_length)):.1f}Hz )
 """
         if bem_total_vol > 1e-9:
             BEM_TYPE = "INTERIOR"
+            H_sign = -1.0
             log_info += (f"""
-             Closed (+) Volume detected ( {bem_total_vol:.4} L**3 ). 
+             Closed (+) Volume detected: ( {bem_total_vol:.4} L**3 )
              ( i ) Normals point OUTWARDS ==> {BEM_TYPE} analysis expected.\n""")
         elif bem_total_vol < -1e-9:
             BEM_TYPE = "EXTERIOR"
+            H_sign = 1.0
             log_info += (f"""
-             Closed (-) Volume detected ( {bem_total_vol:.4} L**3 ). 
+             Closed (-) Volume detected: ( {bem_total_vol:.4} L**3 )
              ( i ) Normals point INWARDS ==> {BEM_TYPE} analysis expected.\n""")
         else:
             log_info += (f"""
@@ -126,7 +131,7 @@ def start_pybem_app():
         log_info += '\n'+log_bc_info
         print(f"{log_info}")
         if DEBUG:
-            print(f"\n DEBUG: see '{parser.model_name}.log' for input BC CHECKs (ELEMENTAL & NODAL)")
+            print(f"\n DEBUG: see '{parser.model_name}.log' for input BC CHECKs (ELEMENTAL & NODAL) after the solve.")
         # Use 'with' to ensure the file closes even if the app crashes
         with open(log_f, "w") as log:
             log.write(log_top)
@@ -148,6 +153,11 @@ def start_pybem_app():
         max_freq = max(parser.frequencies)
         num_freqs = len(parser.frequencies)
         del_freq = parser.frequencies[1] - parser.frequencies[0]
+
+        str_CPUs += (f"""
+ First Assembly and compile of [G] & [H] matrices takes longer. 
+ Hold tight, it gets faster after, see times per Freq table in '{parser.model_name}.log'.
+ """)
         print(f"\n{'-' * 80}")
         print(f" ACOUSTICS job started at:  {time.ctime()}")
         print(f" --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---{str_CPUs}")
@@ -179,7 +189,7 @@ def start_pybem_app():
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
                 # Using the pre-calculated NumPy arrays from the sorted_bem_ids loop
-                G_bem, H_bem = assemble_system(bem_centers, bem_areas, bem_normals, k, BEM_TYPE)
+                G_bem, H_bem = assemble_system(bem_centers, bem_areas, bem_normals, k, H_sign)
                 t_assembly = time.time() - t_asm_0
 
                 # --- TIMING: SOLVE ---
@@ -201,6 +211,8 @@ def start_pybem_app():
 {'-' * 80}
 *** DEBUG ***
     =====
+    k, omega & rho_omega at {f}Hz: {k:.5}, {omega:.5} & {rho_omega:.5}
+    
     BC CHECKs (ELEMENTAL) - Only for 1st Freq:"""
                             # Get indices of elements that are part of the inlet surface
                             inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['inlet_S2']]
@@ -212,7 +224,7 @@ def start_pybem_app():
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
                                 log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB | {v_val}mm/s"
                             
-                            log_DEBUG += f"\n\n    k, omega & rho_omega at {f}Hz: {k:.5}, {omega:.5} & {rho_omega:.5}"
+                            # log_DEBUG += f"\n\n    k, omega & rho_omega at {f}Hz: {k:.5}, {omega:.5} & {rho_omega:.5}"
                     
                     t_slv_2 = time.time()
                     
@@ -250,18 +262,27 @@ def start_pybem_app():
                     all_t_avr += t_avg_1-t_avg_0
                     
                     if f == parser.frequencies[0]:
-                        if DEBUG:
-                            to_nods_avg_time = all_t_avr / num_freqs if num_freqs > 0 else 0
-                            
+                        if DEBUG:                            
                             inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['inlet']]
                             log_DEBUG += f"\n\n    BC CHECKs (NODAL) - Only for 1st Freq:"
                             for idx, nid in inlet_indices[-4:]: # Just check a few nodes
                                 p_val = nodal_p_surf[idx]
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
                                 log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
+                        # Checks on assembly matrices
+                        np.matrix.tofile(H_bem[:,0], 'matrix.txt', sep=' ', format='%s')
+                        log_DEBUG += f"""
 
-                            log_DEBUG += f"\n\n    Function 'averaged_at_nodes' took: ( {to_nods_avg_time:.3f}s ) per Freq."
-                    
+    ASSY MATRIX CHECKS:
+    Sum of Col#1 in [H]: {np.sum(H_bem[:,0])}
+    Sum of last Col# in [H]: {np.sum(H_bem[:,-1])}
+    Sum of Row#1 in [H]: {np.sum(H_bem[0,:])}
+    Sum of last Row# in [H]: {np.sum(H_bem[-1,:])}
+    Sum of Col#1 in [G]: {np.sum(G_bem[:,0])}
+    Sum of last Col# in [G]: {np.sum(G_bem[:,-1])}
+    Sum of Row#1 in [G]: {np.sum(G_bem[0,:])}
+    Sum of last Row# in [G]: {np.sum(G_bem[-1,:])}
+"""
                     t_exp_0 = time.time()
                     # 4.2. Combine them into one master results array
                     nodal_pressures = nodal_p_surf
@@ -275,8 +296,10 @@ def start_pybem_app():
                     
                     if f == parser.frequencies[-1]:
                         if DEBUG:
+                            to_nods_avg_time = all_t_avr / num_freqs if num_freqs > 0 else 0
+                            log_DEBUG += f"\n\n    Function 'averaged_at_nodes' took: ( {to_nods_avg_time:.3f}s ) per Freq."
                             exp_avg_time = all_t_exp / num_freqs if num_freqs > 0 else 0
-                            log_DEBUG += f"\n\n    Write / Export of Results into PV format took: ( {exp_avg_time:.3f}s ) per Freq."
+                            log_DEBUG += f"\n    Write / Export of Results into PV format took: ( {exp_avg_time:.3f}s ) per Freq."
                     
                     # Write formatted table header to LOG
                     rslt_f = f'Result_{f:.1f}Hz.vtu'

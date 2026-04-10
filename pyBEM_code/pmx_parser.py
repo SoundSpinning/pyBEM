@@ -304,9 +304,10 @@ class PMXParser:
 
             # 3. Assign bc_dict values to the map
             if not target_ids:
-                # Log a warning if a BC is defined but hits no elements
-                log_bc_info += f" WARNING: BC target '{target_name}' could not be resolved to any elements."
-                continue
+                # Log an error if a BC is defined but hits no elements
+                log_bc_info += f" ERROR: BC target '{target_name}' could not be resolved to any elements.\n"
+                # return log_bc_info
+                raise ValueError(f"\n ( !e! ) BC target '{target_name}' could not be resolved to any elements.\n Please check your BCs were applied to the right surface or elset name.\n")
 
             for eid in target_ids:
                 if eid not in bc_dict: 

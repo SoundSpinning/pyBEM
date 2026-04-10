@@ -10,22 +10,33 @@ def calculate_element_properties(nodes, connectivity):
     # The center is the average of all corner node's coordinates
     center = np.mean(pts, axis=0)
 
-    # Vector 1 (Node 0 to 1) and Vector 2 (Node 0 to 2)
+    # Get elem edges, lengths, area & normal.
     v1 = pts[1] - pts[0]
-    v2 = pts[2] - pts[0]
+    v2 = pts[2] - pts[1]
+    v3 = pts[0] - pts[2]
+    v1_len = np.linalg.norm(v1)
+    v2_len = np.linalg.norm(v2)
+    v3_len = np.linalg.norm(v3)
+    max_len = max(v1_len, v2_len, v3_len)
+    ratio = max_len / min(v1_len, v2_len, v3_len)
     
     # Cross product gives the normal vector
     cross_prod = np.cross(v1, v2)
     area_total = 0.5 * np.linalg.norm(cross_prod)
     
     if len(connectivity) == 4: # S4 Quad
-        v3 = pts[3] - pts[0]
-        area_total += 0.5 * np.linalg.norm(np.cross(v2, v3))
+        v3 = pts[3] - pts[2]
+        v4 = pts[0] - pts[3]
+        v3_len = np.linalg.norm(v3)
+        v4_len = np.linalg.norm(v4)
+        max_len = max(v1_len, v2_len, v3_len, v4_len)
+        ratio = max_len / min(v1_len, v2_len, v3_len, v4_len)
+        area_total += 0.5 * np.linalg.norm(np.cross(v3, v4))
         
     # Normalized unit normal
     unit_normal = cross_prod / np.linalg.norm(cross_prod)
     
-    return center, area_total, unit_normal
+    return center, area_total, unit_normal, ratio, max_len
 
 def prepare_geometry(nodes, elements):
     """
@@ -35,13 +46,17 @@ def prepare_geometry(nodes, elements):
     centers = []
     areas = []
     unit_normals = []
+    ratios = []
+    lengths = []
     
     for eid, conn in elements.items():
-        c, a, n = calculate_element_properties(nodes, conn)
+        c, a, n, max_ratio, max_len = calculate_element_properties(nodes, conn)
         centers.append(c)
         areas.append(a)
         unit_normals.append(n)
-    return np.array(centers), np.array(areas), np.array(unit_normals)
+        ratios.append(max_ratio)
+        lengths.append(max_len)
+    return np.array(centers), np.array(areas), np.array(unit_normals), np.array(ratios), np.array(lengths)
 
 def calculate_signed_volume(centers, areas, normals):
     """
