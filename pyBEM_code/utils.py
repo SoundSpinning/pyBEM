@@ -1,4 +1,5 @@
 import numpy as np
+from numba import njit
 
 def calculate_element_properties(nodes, connectivity):
     """
@@ -36,13 +37,14 @@ def calculate_element_properties(nodes, connectivity):
     # Normalized unit normal
     unit_normal = cross_prod / np.linalg.norm(cross_prod)
     
-    return center, area_total, unit_normal, ratio, max_len
+    return pts, center, area_total, unit_normal, ratio, max_len
 
 def prepare_geometry(nodes, elements):
     """
     Loops through all elements and gets their geometry properties 
     using the utility functions.
     """
+    nodal_coords = []
     centers = []
     areas = []
     unit_normals = []
@@ -50,13 +52,14 @@ def prepare_geometry(nodes, elements):
     lengths = []
     
     for eid, conn in elements.items():
-        c, a, n, max_ratio, max_len = calculate_element_properties(nodes, conn)
+        e_n_coords, c, a, n, max_ratio, max_len = calculate_element_properties(nodes, conn)
+        nodal_coords.append(e_n_coords)
         centers.append(c)
         areas.append(a)
         unit_normals.append(n)
         ratios.append(max_ratio)
         lengths.append(max_len)
-    return np.array(centers), np.array(areas), np.array(unit_normals), np.array(ratios), np.array(lengths)
+    return nodal_coords, np.array(centers), np.array(areas), np.array(unit_normals), np.array(ratios), np.array(lengths)
 
 def calculate_signed_volume(centers, areas, normals):
     """
@@ -71,6 +74,94 @@ def calculate_signed_volume(centers, areas, normals):
     CoGz = np.sum([(centers[i,2]) * areas[i] for i in range(len(centers))]) / area 
     CoG = [CoGx, CoGy, CoGz]
     return volume, area, CoG
+
+###
+### Gauss Points for QUADS & TRIAS
+###
+# QUAD4 Gauss points and weights for 2x2 quadrature
+# Local coordinates: +/- 1/sqrt(3)
+QUAD_GP = np.array([-0.5773502691896257, 0.5773502691896257])
+QUAD_GW = np.array([1.0, 1.0])
+
+@njit
+def get_quad_points(v1, v2, v3, v4):
+    """
+    Computes 4 spatial points on a quad4 element surface defined by its 4 vertices.
+    2x2 Gauss Quadrature: Instead of calculating the kernel once at the center, we sample it at 4 specific locations (Gauss points) and take a weighted average. 
+    For a standard quad element, these points are located at ±0.577 in local coordinates.
+    """
+    points = np.zeros((4, 3))
+    idx = 0
+    for xi in QUAD_GP:
+        for eta in QUAD_GP:
+            # Bilinear interpolation of the surface
+            # Ni are the shape functions
+            n1 = 0.25 * (1-xi) * (1-eta)
+            n2 = 0.25 * (1+xi) * (1-eta)
+            n3 = 0.25 * (1+xi) * (1+eta)
+            n4 = 0.25 * (1-xi) * (1+eta)
+            points[idx] = n1*v1 + n2*v2 + n3*v3 + n4*v4
+            idx += 1
+    return points
+
+# TRI3 Gauss points in Barycentric coordinates (L1, L2, L3)
+# These points are at (2/3, 1/6, 1/6), (1/6, 2/3, 1/6), (1/6, 1/6, 2/3)
+TRI_GP = np.array([
+    [0.666666666, 0.166666666, 0.166666666],
+    [0.166666666, 0.666666666, 0.166666666],
+    [0.166666666, 0.166666666, 0.666666666]
+])
+TRI_GW = 1.0 / 3.0 # Weights sum to 1.0
+
+@njit
+def get_tri_points(v1, v2, v3):
+    """
+    For a triangle, we typically use a 3-point quadrature rule. 
+    The points are located at the midpoints of the TRIA edges connecting the nodes.
+    """
+    points = np.zeros((3, 3))
+    for i in range(3):
+        # Linear interpolation using barycentric coordinates
+        points[i] = TRI_GP[i,0]*v1 + TRI_GP[i,1]*v2 + TRI_GP[i,2]*v3
+    return points
+
+
+@njit
+def compute_element_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
+    """Integrates G and H kernels over one element using quadrature."""
+    n_nodes = len(element_vertices)
+    
+    # Initialize sums
+    g_sum = 0.0 + 0j
+    h_sum = 0.0 + 0j
+    
+    # 1. Get Integration Points
+    if n_nodes == 3: # TRIA3
+        pts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
+        n_pts = 3
+    else: # QUAD4
+        pts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
+        n_pts = 4
+        
+    # 2. Sum Contributions
+    for p_idx in range(n_pts):
+        r_vec = receiver_pt - pts[p_idx]
+        r = np.linalg.norm(r_vec)
+        
+        # Kernel math
+        exp_jkr = np.exp(1j * k * r)
+        g_val = exp_jkr * inv_4pi / r
+        
+        # Quadrature weight (uniform for these simple rules)
+        weight = element_area / n_pts
+        
+        g_sum += g_val * weight
+        
+        dot_prod = np.dot(r_vec, element_normal) / r
+        h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * weight
+        
+    return g_sum, h_sum
+
 
 def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes, P_mics):
     """

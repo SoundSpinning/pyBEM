@@ -2,11 +2,10 @@
 
 import numpy as np
 from numba import njit, prange
-# from constants import BEM_TYPE
+from utils import compute_element_contribution
 
-# @njit(fastmath=True)   # 2 x slower vs parallel=True; both together is same 2 x slower.
 @njit(parallel=True)
-def assemble_system(centers, areas, normals, k, H_sign):
+def assemble_system(element_nodes, centers, areas, normals, k, H_sign):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -18,45 +17,46 @@ def assemble_system(centers, areas, normals, k, H_sign):
     k: wave number (complex or float)
     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
     """
-    n_els = len(centers)   # number of BEM elements
+    n_els = len(centers)    # number of BEM elements
+    inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
     # Build 2D complex matrices
     G = np.zeros((n_els, n_els), dtype=np.complex128)
     H = np.zeros((n_els, n_els), dtype=np.complex128)
-    
-    # 4*pi is a constant in the Green's function denominator
-    inv_4pi = 1 / (4*np.pi)
-    # Factor required to get the resonant freqs & levels right 
-    # for interior analysis; e.g. 1m pipe with changing BCs.
-    # TODO: find out more about kernels, and why this factor is required.
-    TMP_FACTOR = 1.061**0.5
-    # TMP_FACTOR = 1.0
-    # TMP_FACTOR = (10./(3.0*np.pi))**0.5
-    # total_area = np.sum(areas)
-    # TMP_FACTOR = np.exp(6.3e-5 * (n_els - 1))
-    # TMP_FACTOR = np.exp(9.22e-8 * total_area)
-    # # set the sign in Hij depending if exterior or interior BEM
-    # if BEM_TYPE == "INTERIOR": H_sign = -1.0
-    # elif BEM_TYPE == "EXTERIOR": H_sign = 1.0
 
     for i in prange(n_els):
+        r_pt = centers[i]
         for j in range(n_els):
             if i == j: # Analytical self-term approximations for diagonal terms
-                G[i, j] = inv_4pi * np.sqrt(areas[j])   # length units == G units off diagonal
+                # G[i, j] = inv_4pi * np.sqrt(areas[j])   # length units == G units off diagonal
+                G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
                 H[i, j] = 0.5  # Jump term for smooth surfaces
             else:
-                # Vector from source j to receiver i
-                r_vec = centers[i] - centers[j]
-                r = np.linalg.norm(r_vec)
-                exp_jkr = np.exp(1j * k * r)
-                
-                # (G-matrix): Free-space 3D Helmholtz Green's function
-                g_val = TMP_FACTOR * exp_jkr * inv_4pi / r
-                G[i, j] = g_val * areas[j]
-                
-                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-                r_dot_n = np.dot(r_vec, normals[j]) / r
-                H[i, j] = H_sign * TMP_FACTOR * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+                # All off-diagonal terms benefit from quadrature, 
+                # especially near-field neighbors.
+                g_val, h_val = compute_element_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+
     return G, H
+
+                # # Vector from source j to receiver i
+                # r_vec = centers[i] - centers[j]
+                # r = np.linalg.norm(r_vec)
+                # exp_jkr = np.exp(1j * k * r)
+                
+                # # (G-matrix): Free-space 3D Helmholtz Green's function
+                # g_val = exp_jkr * inv_4pi / r
+                # G[i, j] = g_val * areas[j]
+                
+                # # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+                # r_dot_n = np.dot(r_vec, normals[j]) / r
+                # H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
 
 # @njit(parallel=True)   # it crashes Numba if dictionaries present
 def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
@@ -118,6 +118,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     
     # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
     p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
+    
     return (p_final, v_final, cond)
 
 def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
@@ -194,3 +195,60 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
             
         p_mics[i] = sum_p
     return p_mics
+
+###
+### 1st ASSEMBLY implementation for BEM element centers only, no gaussian points;
+### to get things off the ground on the complete workflow.
+# # @njit(fastmath=True)   # 2 x slower vs parallel=True; both together is same 2 x slower.
+# @njit(parallel=True)
+# def assemble_system(centers, areas, normals, k, H_sign):
+#     """
+#     Computes G and H matrices using element normals:
+#     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
+#     - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
+#       Hij = (Gij / r) * (jk*r - 1) * r_dot_n
+#     centers: (N, 3) array
+#     areas: (N,) array
+#     normals: (N, 3) array
+#     k: wave number (complex or float)
+#     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
+#     """
+#     n_els = len(centers)   # number of BEM elements
+#     # Build 2D complex matrices
+#     G = np.zeros((n_els, n_els), dtype=np.complex128)
+#     H = np.zeros((n_els, n_els), dtype=np.complex128)
+    
+#     # 4*pi is a constant in the Green's function denominator
+#     inv_4pi = 1 / (4*np.pi)
+#     # Factor required to get the resonant freqs & levels right 
+#     # for interior analysis; e.g. coarse 1m pipe with changing BCs.
+#     # TODO: find out more about kernels, and why this factor is required.
+#     TMP_FACTOR = 1.061**0.5
+#     # TMP_FACTOR = 1.0
+#     # TMP_FACTOR = (10./(3.0*np.pi))**0.5
+#     # total_area = np.sum(areas)
+#     # TMP_FACTOR = np.exp(6.3e-5 * (n_els - 1))
+#     # TMP_FACTOR = np.exp(9.22e-8 * total_area)
+#     # # set the sign in Hij depending if exterior or interior BEM
+#     # if BEM_TYPE == "INTERIOR": H_sign = -1.0
+#     # elif BEM_TYPE == "EXTERIOR": H_sign = 1.0
+
+#     for i in prange(n_els):
+#         for j in range(n_els):
+#             if i == j: # Analytical self-term approximations for diagonal terms
+#                 G[i, j] = inv_4pi * np.sqrt(areas[j])   # length units == G units off diagonal
+#                 H[i, j] = 0.5  # Jump term for smooth surfaces
+#             else:
+#                 # Vector from source j to receiver i
+#                 r_vec = centers[i] - centers[j]
+#                 r = np.linalg.norm(r_vec)
+#                 exp_jkr = np.exp(1j * k * r)
+                
+#                 # (G-matrix): Free-space 3D Helmholtz Green's function
+#                 g_val = TMP_FACTOR * exp_jkr * inv_4pi / r
+#                 G[i, j] = g_val * areas[j]
+                
+#                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+#                 r_dot_n = np.dot(r_vec, normals[j]) / r
+#                 H[i, j] = H_sign * TMP_FACTOR * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+#     return G, H

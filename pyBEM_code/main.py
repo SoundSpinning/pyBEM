@@ -90,7 +90,9 @@ def start_pybem_app():
         exporter = PVExporter(parser.model_name, sorted_nodes, sorted_node_ids, nodal_id_map, sorted_all_els, sorted_all_el_ids, group_ids)
 
         # 4. Geometry Prep (Centers, Areas, Normals)
-        bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, sorted_bem_els)
+        bem_nodal_coords, bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, sorted_bem_els)
+        # print(bem_nodal_coords)
+        # print(bem_centers)
 
         # 5. CHECK on BEM volume: is it interior or exterior, 
         #    or check for holes / free edges in mesh.
@@ -189,7 +191,7 @@ def start_pybem_app():
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
                 # Using the pre-calculated NumPy arrays from the sorted_bem_ids loop
-                G_bem, H_bem = assemble_system(bem_centers, bem_areas, bem_normals, k, H_sign)
+                G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign)
                 t_assembly = time.time() - t_asm_0
 
                 # --- TIMING: SOLVE ---
@@ -270,7 +272,7 @@ def start_pybem_app():
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
                                 log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
                         # Checks on assembly matrices
-                        np.matrix.tofile(H_bem[:,0], 'matrix.txt', sep=' ', format='%s')
+                        # np.matrix.tofile(H_bem[:,0], 'matrix.txt', sep=' ', format='%s')
                         log_DEBUG += f"""
 
     ASSY MATRIX CHECKS:
