@@ -2,10 +2,10 @@
 
 import numpy as np
 from numba import njit, prange
-from utils import compute_element_contribution
+from utils import compute_element_contribution, compute_high_order_contribution
 
 @njit(parallel=True)
-def assemble_system(element_nodes, centers, areas, normals, k, H_sign):
+def assemble_system(element_nodes, centers, areas, normals, k, H_sign, hi_order_length):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -16,6 +16,7 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign):
     normals: (N, 3) array
     k: wave number (complex or float)
     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
+    hi_order_length: see in main.py the factor used for a distance when high-order integration should be used.
     """
     n_els = len(centers)    # number of BEM elements
     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
@@ -26,13 +27,26 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign):
     for i in prange(n_els):
         r_pt = centers[i]
         for j in range(n_els):
+            # Vector from source j to receiver i
+            r_vec = r_pt - centers[j]
+            r = np.linalg.norm(r_vec)
             if i == j: # Analytical self-term approximations for diagonal terms
-                # G[i, j] = inv_4pi * np.sqrt(areas[j])   # length units == G units off diagonal
                 G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
                 H[i, j] = 0.5  # Jump term for smooth surfaces
-            else:
-                # All off-diagonal terms benefit from quadrature, 
-                # especially near-field neighbors.
+                # All off-diagonal terms benefit from quadrature, especially near-field neighbors.
+            elif r < hi_order_length:
+                # high-order
+                g_val, h_val = compute_high_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+            elif r > hi_order_length and r < hi_order_length*5/3:
+                # mid-order
                 g_val, h_val = compute_element_contribution(
                     r_pt, 
                     element_nodes[j], # Array of actual nodal coordinates
@@ -42,6 +56,15 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign):
                 )
                 G[i, j] = g_val
                 H[i, j] = h_val
+            else:
+                exp_jkr = np.exp(1j * k * r)
+                # (G-matrix): Free-space 3D Helmholtz Green's function
+                g_val = exp_jkr * inv_4pi / r
+                G[i, j] = g_val * areas[j]
+                
+                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+                r_dot_n = np.dot(r_vec, normals[j]) / r
+                H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
 
     return G, H
 

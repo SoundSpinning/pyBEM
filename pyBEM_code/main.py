@@ -150,11 +150,16 @@ def start_pybem_app():
         #    =====================
         # --- Start Global Timer ---
         global_t0 = time.time()
-
+        # Get job settings at the ready
         min_freq = min(parser.frequencies)
         max_freq = max(parser.frequencies)
         num_freqs = len(parser.frequencies)
         del_freq = parser.frequencies[1] - parser.frequencies[0]
+        # This value controls when high-order integration kicks in.
+        # i.e. only for contributions when near the BEM element of interest.
+        # TODO: test in the future this factor for near distance.
+        # hi_order_length = np.mean(max_el_length) * 2.5
+        hi_order_length = np.mean(max_el_length) * 3.0
 
         str_CPUs += (f"""
  First Assembly and compile of [G] & [H] matrices takes longer. 
@@ -191,7 +196,7 @@ def start_pybem_app():
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
                 # Using the pre-calculated NumPy arrays from the sorted_bem_ids loop
-                G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign)
+                G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, hi_order_length)
                 t_assembly = time.time() - t_asm_0
 
                 # --- TIMING: SOLVE ---

@@ -125,6 +125,65 @@ def get_tri_points(v1, v2, v3):
         points[i] = TRI_GP[i,0]*v1 + TRI_GP[i,1]*v2 + TRI_GP[i,2]*v3
     return points
 
+# 3x3 Gauss points and weights
+# Points: -sqrt(0.6), 0, +sqrt(0.6)
+GP3 = np.array([-0.7745966692, 0.0, 0.7745966692])
+# Weights: 5/9, 8/9, 5/9
+GW3 = np.array([0.5555555556, 0.8888888889, 0.5555555556])
+
+@njit
+def get_quad_points_3x3(v1, v2, v3, v4):
+    """
+    Returns 9 points and 9 weights for a 3x3 integration rule.
+    """
+    points = np.zeros((9, 3))
+    weights = np.zeros(9)
+    idx = 0
+    for i in range(3):
+        for j in range(3):
+            xi = GP3[i]
+            eta = GP3[j]
+            
+            # Shape functions for bilinear quad
+            n1 = 0.25 * (1-xi) * (1-eta)
+            n2 = 0.25 * (1+xi) * (1-eta)
+            n3 = 0.25 * (1+xi) * (1+eta)
+            n4 = 0.25 * (1-xi) * (1+eta)
+            
+            points[idx] = n1*v1 + n2*v2 + n3*v3 + n4*v4
+            # Weight is the product of weights in both directions
+            weights[idx] = GW3[i] * GW3[j]
+            idx += 1
+            
+    # Normalize weights so they sum to 4.0 (for a standard -1 to 1 domain)
+    # Then multiply by Area/4 in the main loop to get physical integration
+    return points, weights
+
+# 7-point rule for Triangles (Barycentric coordinates L1, L2, L3)
+# Format: [L1, L2, L3, Weight]
+TRI_7P = np.array([
+    [0.3333333333, 0.3333333333, 0.3333333333, 0.2250000000], # Centroid
+    [0.7974269853, 0.1012865073, 0.1012865073, 0.1259391805], # Near Vertex 1
+    [0.1012865073, 0.7974269853, 0.1012865073, 0.1259391805], # Near Vertex 2
+    [0.1012865073, 0.1012865073, 0.7974269853, 0.1259391805], # Near Vertex 3
+    [0.0597158717, 0.4701420641, 0.4701420641, 0.1323941527], # Near Mid-edge 1
+    [0.4701420641, 0.0597158717, 0.4701420641, 0.1323941527], # Near Mid-edge 2
+    [0.4701420641, 0.4701420641, 0.0597158717, 0.1323941527]  # Near Mid-edge 3
+])
+
+@njit
+def get_tri_points_7p(v1, v2, v3):
+    """
+    Returns 7 spatial points and weights for a high-order triangle rule.
+    """
+    points = np.zeros((7, 3))
+    weights = np.zeros(7)
+    for i in range(7):
+        # Linear interpolation using barycentric coordinates
+        l1, l2, l3, w = TRI_7P[i]
+        points[i] = l1*v1 + l2*v2 + l3*v3
+        weights[i] = w
+    return points, weights
 
 @njit
 def compute_element_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
@@ -162,6 +221,42 @@ def compute_element_contribution(receiver_pt, element_vertices, element_normal, 
         
     return g_sum, h_sum
 
+@njit
+def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
+    g_sum = 0.0 + 0j
+    h_sum = 0.0 + 0j
+    
+    if len(vertices) == 3:
+        pts, wts = get_tri_points_7p(vertices[0], vertices[1], vertices[2])
+        n_pts = 7
+    else:
+        pts, wts = get_quad_points_3x3(vertices[0], vertices[1], vertices[2], vertices[3])
+        n_pts = 9
+        
+    for p in range(n_pts):
+        r_vec = receiver_pt - pts[p]
+        r = np.linalg.norm(r_vec)
+        
+        # Kernel
+        exp_kr = np.exp(1j * k * r)
+        g_val = exp_kr * inv_4pi / r
+        
+        # H Kernel derivative
+        dot_prod = np.dot(r_vec, normal) / r
+        h_val = H_sign * g_val * (1j * k - 1.0/r) * dot_prod
+        
+        # Integration weight
+        # For triangles, weights sum to 1.0, so multiply by Area
+        # For quads (bilinear), weights sum to 4.0, so multiply by Area/4
+        if n_pts == 7:
+            w_eff = wts[p] * area
+        else:
+            w_eff = wts[p] * (area / 4.0)
+            
+        g_sum += g_val * w_eff
+        h_sum += h_val * w_eff
+        
+    return g_sum, h_sum
 
 def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes, P_mics):
     """
