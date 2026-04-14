@@ -2,10 +2,10 @@
 
 import numpy as np
 from numba import njit, prange
-from utils import compute_element_contribution, compute_high_order_contribution
+from utils import compute_mid_order_contribution, compute_high_order_contribution
 
 @njit(parallel=True)
-def assemble_system(element_nodes, centers, areas, normals, k, H_sign, hi_order_length):
+def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_length):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -16,7 +16,7 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, hi_order_
     normals: (N, 3) array
     k: wave number (complex or float)
     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
-    hi_order_length: see in main.py the factor used for a distance when high-order integration should be used.
+    max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
     """
     n_els = len(centers)    # number of BEM elements
     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
@@ -33,8 +33,8 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, hi_order_
             if i == j: # Analytical self-term approximations for diagonal terms
                 G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
                 H[i, j] = 0.5  # Jump term for smooth surfaces
-                # All off-diagonal terms benefit from quadrature, especially near-field neighbors.
-            elif r < hi_order_length:
+            # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
+            elif r < max_el_length[j] * 3:
                 # high-order
                 g_val, h_val = compute_high_order_contribution(
                     r_pt, 
@@ -45,9 +45,9 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, hi_order_
                 )
                 G[i, j] = g_val
                 H[i, j] = h_val
-            elif r > hi_order_length and r < hi_order_length*5/3:
+            elif r < max_el_length[j] * 5:
                 # mid-order
-                g_val, h_val = compute_element_contribution(
+                g_val, h_val = compute_mid_order_contribution(
                     r_pt, 
                     element_nodes[j], # Array of actual nodal coordinates
                     normals[j], 

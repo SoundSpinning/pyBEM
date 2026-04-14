@@ -186,7 +186,7 @@ def get_tri_points_7p(v1, v2, v3):
     return points, weights
 
 @njit
-def compute_element_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
+def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
     """Integrates G and H kernels over one element using quadrature."""
     n_nodes = len(element_vertices)
     
