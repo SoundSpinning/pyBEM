@@ -89,20 +89,22 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
         if 'VELO' in bc:
             # Velocity is known (v), Pressure (p) is unknown
             A[:, j] = H[:, j]
-            B += G[:, j] * bc['VELO'] * (1j * rho_omega)
-            # Simultaneous VELO + IMPE (Robin BC)
+            # B += G[:, j] * bc['VELO'] * (1j * rho_omega)
+            B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
+            # 1.1 Simultaneous VELO + IMPE (Robin BC)
             if 'IMPE' in bc:
                 # Admittance logic: v = p / Z. 
                 # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
                 # Safety check for division by zero
                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-                A[:, j] = H[:, j] - (G[:, j] / z_val)
+                # Units must match: H is unitless, G is [L], so we need [1/L]
+                # (i * omega * rho) / Z  has units of [1/L]
+                A[:, j] += G[:, j] * (1j * rho_omega / z_val)
         
         # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
         elif 'PRES' in bc:
             # Pressure is known (p), Velocity (v) is unknown
-            A[:, j] = -G[:, j]
-            # * (1j * rho_omega)
+            A[:, j] = -G[:, j] * (1j * rho_omega)
             B -= H[:, j] * bc['PRES']
         
         # Case 3: Impedance (Absorbent material)
@@ -111,7 +113,11 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
             # Safety check for division by zero
             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-            A[:, j] = H[:, j] - (G[:, j] / z_val)
+            # Units must match: H is unitless, G is [L], so we need [1/L]
+            # (i * omega * rho) / Z  has units of [1/L]
+            A[:, j] = H[:, j] + (G[:, j] * (1j * rho_omega / z_val))
+            # A[:, j] = H[:, j] + (G[:, j] / z_val)
+            # A[:, j] = H[:, j] - (G[:, j] / z_val)
         
         # Case 4: Rigid Wall, v=0 (Default)
         else:
@@ -155,10 +161,9 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             # We knew Velocity, p_sol gave us Pressure
             p_final[j] = p_sol[j]
             v_final[j] = bc['VELO']
-            # * (1j * rho_omega)   # Do NOT use it here, see in solve_bem_system.
+            # * (1j * rho_omega)   # Do NOT use it here, it's in solve_bem_system.
             if 'IMPE' in bc:
                 # We solved for Pressure, Velocity is p/Z
-                # p_final[j] = p_sol[j]
                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
                 v_final[j] += p_sol[j] / z_val
             
@@ -179,7 +184,6 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             v_final[j] = 0.0 + 0.0j
             
     return p_final, v_final
-    # * (1j * rho_omega)   # Do NOT use it here at output, see in solve_bem_system.
 
 @njit(parallel=True)
 def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega):
@@ -192,7 +196,7 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
     num_surf = len(bem_centers)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
     inv_4pi = 1.0 / (4.0 * np.pi)
-    # TODO: when input VELO present, we have 1 too many '* (1j * rho_omega)' on thos els.
+    # TODO: when input VELO present, we have 1 too many '* (1j * rho_omega)' on those els.
     #       to be reviewed in the future.
     v_surf = v_surf * (1j * rho_omega)
 
@@ -211,7 +215,7 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
             h_val = g_val * (1j * k - 1.0 / r) * r_dot_n
             
             # p_mic = G*v + H*p (integrated over area)
-            # TODO: check the sign fot interior vs exterior when the time comes.
+            # TODO: check the sign for interior vs exterior when the time comes.
             sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
             
         p_mics[i] = sum_p

@@ -224,13 +224,21 @@ def start_pybem_app():
     BC CHECKs (ELEMENTAL) - Only for 1st Freq:"""
                             # Get indices of elements that are part of the inlet surface
                             inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['inlet_S2']]
-                            # inlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['outlet_S2']]
+                            outlet_indices = [i for i, ids in enumerate(sorted_bem_ids) if ids in parser.elsets['outlet_S2']]
 
+                            log_DEBUG += f"\n    INLET"
                             for idx in inlet_indices[-4:]: # Just check a few
                                 p_val = p_surf[idx]
                                 v_val = v_surf[idx]
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
-                                log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB | {v_val}mm/s"
+                                log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}:\n    {p_val}MPa | {db:.2f}dB | {v_val}mm/s | {(180/np.pi)*(np.angle(p_val)-np.angle(v_val)):.2f}deg V wrt P"
+
+                            log_DEBUG += f"\n    OUTLET"
+                            for idx in outlet_indices[-4:]: # Just check a few
+                                p_val = p_surf[idx]
+                                v_val = v_surf[idx]
+                                db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
+                                log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}:\n    {p_val}MPa | {db:.2f}dB | {v_val}mm/s | {(180/np.pi)*(np.angle(p_val)-np.angle(v_val)):.2f}deg V wrt P"
                             
                     t_slv_2 = time.time()
                     
