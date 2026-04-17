@@ -211,19 +211,30 @@ class PMXParser:
         elif h_up.startswith('*BOUNDARY'):
             self.model_str += f'***\n{header}\n'
             if 'OP=NEW' in h_up: return
+            r_i = self._get_param(header, 'LOAD CASE')
             amp = self._get_param(header, 'AMPLITUDE')
             for line in data:
                 if line.startswith('**') or not line: 
                     continue # SKIP COMMENTS
                 self.model_str += line+'\n'
                 p = self._split(line)
-                # PRES is usually index 3 in Abaqus *Boundary
-                self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': float(p[3]), 'amp': amp})
+                # PRES is index 3 in *Boundary entries
+                if r_i == '1':
+                    if amp != None:
+                        self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3])), 'AMP_real': amp})
+                    else:
+                        self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3]))})
+                elif r_i == '2':
+                    if amp != None:
+                        self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3])*1j), 'AMP_imag': amp})
+                    else:
+                        self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3])*1j)})
 
         # Acoustic Velocity, DoF = 8
         elif h_up.startswith('*CLOAD'):
             self.model_str += f'***\n{header}\n'
             if 'OP=NEW' in h_up: return
+            r_i = self._get_param(header, 'LOAD CASE')
             amp = self._get_param(header, 'AMPLITUDE')
             for line in data:
                 if line.startswith('**') or not line: 
@@ -231,17 +242,39 @@ class PMXParser:
                 self.model_str += line+'\n'
                 p = self._split(line)
                 # VELO is index 2 in *Cload
-                self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': float(p[2]), 'amp': amp})
+                if r_i == '1':
+                    if amp != None:
+                        self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2])), 'AMP_real': amp})
+                    else:
+                        self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2]))})
+                elif r_i == '2':
+                    if amp != None:
+                        self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2])*1j), 'AMP_imag': amp})
+                    else:
+                        self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2])*1j)})
 
         # Acoustic Impedance
         elif h_up.startswith('*IMPEDANCE'):
             self.model_str += f'***\n{header}\n'
+            if 'OP=NEW' in h_up: return
+            r_i = self._get_param(header, 'LOAD CASE')
+            amp = self._get_param(header, 'AMPLITUDE')
             for line in data:
                 if line.startswith('**') or not line: 
                     continue # SKIP COMMENTS
                 self.model_str += line+'\n'
                 p = self._split(line)
-                self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': float(p[1])})
+                # IMPE is index 1 in *Impedance
+                if r_i == '1':
+                    if amp != None:
+                        self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1])), 'AMP_real': amp})
+                    else:
+                        self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1]))})
+                elif r_i == '2':
+                    if amp != None:
+                        self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1])*1j), 'AMP_imag': amp})
+                    else:
+                        self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1])*1j)})
 
         # ---  ) End Step ---
         elif h_up.startswith('*END STEP'):
@@ -264,7 +297,7 @@ class PMXParser:
 
     def get_bcs(self):
         """
-        Converts Surface or Set-based BCs into per-element values for the solver.
+        Converts Surface or Elset-based BCs into per-element values for the solver.
         This handles the PrePoMax / Abaqus hierarchy: BC -> Surface -> ELSET -> Elements.
         """
         bc_dict = {}; log_bc_info = ''
@@ -276,10 +309,6 @@ class PMXParser:
             elset_name = surf_data.get('elset')
             if elset_name in self.elsets:
                 surface_to_elements[surf_name] = self.elsets[elset_name]
-            else:
-                # TODO: Some .inp files list elements directly in the surface,
-                # if your parser handles that, add logic here.
-                pass
 
         # 2. Process each BC definition
         for bc in self.bc_data:
@@ -294,13 +323,14 @@ class PMXParser:
             elif target_name in self.elsets:
                 target_ids = self.elsets[target_name]
             
-            # Step 3: Check if target is an NSET (find elements sharing these nodes)
-            elif target_name in self.nsets:
-                target_nodes = set(self.nsets[target_name])
-                # Find any element where ALL nodes are in this NSET
-                for eid, conn in self.elements.items():
-                    if all(nid in target_nodes for nid in conn):
-                        target_ids.append(eid)
+            # Removed below as N/A for Prepomax / Abaqus syntax for acoustics
+            # # Step 3: Check if target is an NSET (find elements sharing these nodes)
+            # elif target_name in self.nsets:
+            #     target_nodes = set(self.nsets[target_name])
+            #     # Find any element where ALL nodes are in this NSET
+            #     for eid, conn in self.elements.items():
+            #         if all(nid in target_nodes for nid in conn):
+            #             target_ids.append(eid)
 
             # 3. Assign bc_dict values to the map
             if not target_ids:
@@ -312,13 +342,37 @@ class PMXParser:
             for eid in target_ids:
                 if eid not in bc_dict: 
                     bc_dict[eid] = {}
-                
-                # Assign type (PRES, VELO, IMPE) and value
-                bc_dict[eid][bc['type']] = bc['val']
-                
-                # Keep amplitude reference if it exists
-                if 'amp' in bc and bc['amp']:
-                    bc_dict[eid]['amp_name'] = bc['amp']
+                    # Assign type (PRES, VELO, IMPE) and value
+                    bc_dict[eid][bc['type']] = bc['val']
+                    # Keep amplitude curves if they exist
+                    for amp in ['AMP_real', 'AMP_imag']:
+                        if amp in bc:
+                            bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
+
+                else: # if el_id already used then add to existing to get: (real, imag)
+                    if bc['type'] in bc_dict[eid]:
+                        bc_dict[eid][bc['type']] += bc['val']
+                        # Keep amplitude curves if they exist
+                        for amp in ['AMP_real', 'AMP_imag']:
+                            if amp in bc:
+                                bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
+                    # Can't mix PRES with other BCs
+                    elif bc['type'] != 'PRES' and 'PRES' in bc_dict[eid]:
+                        raise ValueError(f"\n ( !e! ) Cannot mix PRES and other BCs type on the same element.\n Please check your '{self.model_name}.inp' file.\n")
+                    # Allow for VELO + IMPE mix at same BEM element
+                    elif bc['type'] != 'PRES' and bc['type'] not in bc_dict[eid]:
+                        # Assign type (VELO, IMPE) and value
+                        bc_dict[eid][bc['type']] = bc['val']
+                        # Keep amplitude curves if they exist
+                        for amp in ['AMP_real', 'AMP_imag']:
+                            if amp in bc:
+                                bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
+                    elif bc['type'] != 'PRES' and bc['type'] in bc_dict[eid]:
+                        bc_dict[eid][bc['type']] += bc['val']
+                        # Keep amplitude curves if they exist
+                        for amp in ['AMP_real', 'AMP_imag']:
+                            if amp in bc:
+                                bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
 
         log_bc_info += f" BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
         return bc_dict, log_bc_info

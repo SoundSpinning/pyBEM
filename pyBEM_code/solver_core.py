@@ -68,19 +68,6 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
 
     return G, H
 
-                # # Vector from source j to receiver i
-                # r_vec = centers[i] - centers[j]
-                # r = np.linalg.norm(r_vec)
-                # exp_jkr = np.exp(1j * k * r)
-                
-                # # (G-matrix): Free-space 3D Helmholtz Green's function
-                # g_val = exp_jkr * inv_4pi / r
-                # G[i, j] = g_val * areas[j]
-                
-                # # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-                # r_dot_n = np.dot(r_vec, normals[j]) / r
-                # H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
-
 # @njit(parallel=True)   # it crashes Numba if dictionaries present
 def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     """
@@ -98,13 +85,20 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     for j, eid in enumerate(sorted_bem_ids):
         bc = bc_map.get(eid, {})
 
-        # Case 1: Velocity is known (Vibrating Wall)
+        # Case 1: Velocity is known (Vibrating Wall - Neumann BC)
         if 'VELO' in bc:
             # Velocity is known (v), Pressure (p) is unknown
             A[:, j] = H[:, j]
             B += G[:, j] * bc['VELO'] * (1j * rho_omega)
+            # Simultaneous VELO + IMPE (Robin BC)
+            if 'IMPE' in bc:
+                # Admittance logic: v = p / Z. 
+                # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
+                # Safety check for division by zero
+                z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                A[:, j] = H[:, j] - (G[:, j] / z_val)
         
-        # Case 2: Pressure is known (Open end / Source)
+        # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
         elif 'PRES' in bc:
             # Pressure is known (p), Velocity (v) is unknown
             A[:, j] = -G[:, j]
@@ -112,13 +106,12 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             B -= H[:, j] * bc['PRES']
         
         # Case 3: Impedance (Absorbent material)
-        elif 'IMPE' in bc:
+        elif 'IMPE' in bc and 'VELO' not in bc:
             # Admittance logic: v = p / Z. 
             # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
             # Safety check for division by zero
             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
             A[:, j] = H[:, j] - (G[:, j] / z_val)
-            # A[:, j] = H[:, j] + (G[:, j] / z_val)
         
         # Case 4: Rigid Wall, v=0 (Default)
         else:
@@ -163,13 +156,18 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             p_final[j] = p_sol[j]
             v_final[j] = bc['VELO']
             # * (1j * rho_omega)   # Do NOT use it here, see in solve_bem_system.
+            if 'IMPE' in bc:
+                # We solved for Pressure, Velocity is p/Z
+                # p_final[j] = p_sol[j]
+                z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                v_final[j] += p_sol[j] / z_val
             
         elif 'PRES' in bc:
             # We knew Pressure, p_sol gave us Velocity
             p_final[j] = bc['PRES']
             v_final[j] = p_sol[j]
             
-        elif 'IMPE' in bc:
+        elif 'IMPE' in bc and 'VELO' not in bc:
             # We solved for Pressure, Velocity is p/Z
             p_final[j] = p_sol[j]
             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
@@ -275,3 +273,69 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
 #                 r_dot_n = np.dot(r_vec, normals[j]) / r
 #                 H[i, j] = H_sign * TMP_FACTOR * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
 #     return G, H
+
+### 
+### 1st solve implementation before combined BCs + Amplitude curves support
+### 
+# # @njit(parallel=True)   # it crashes Numba if dictionaries present
+# def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
+#     """
+#     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
+#     Solves Ax=B.
+#     Returns the complex pressure for every element.
+#     sorted_bem_ids: sorted list of element IDs to ensure index alignment
+#     """
+#     num_elements = len(sorted_bem_ids)
+#     A = np.zeros((num_elements, num_elements), dtype=np.complex128)
+#     B = np.zeros(num_elements, dtype=np.complex128)
+
+#     # We MUST use the same index 'j' that corresponds to the matrix columns (0, 1, 2...)
+#     # eid is the ACTUAL ID from the .inp (1, 101, 500...)
+#     for j, eid in enumerate(sorted_bem_ids):
+#         bc = bc_map.get(eid, {})
+
+#         # Case 1: Velocity is known (Vibrating Wall)
+#         if 'VELO' in bc:
+#             # Velocity is known (v), Pressure (p) is unknown
+#             A[:, j] = H[:, j]
+#             B += G[:, j] * bc['VELO'] * (1j * rho_omega)
+        
+#         # Case 2: Pressure is known (Open end / Source)
+#         elif 'PRES' in bc:
+#             # Pressure is known (p), Velocity (v) is unknown
+#             A[:, j] = -G[:, j]
+#             # * (1j * rho_omega)
+#             B -= H[:, j] * bc['PRES']
+        
+#         # Case 3: Impedance (Absorbent material)
+#         elif 'IMPE' in bc:
+#             # Admittance logic: v = p / Z. 
+#             # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
+#             # Safety check for division by zero
+#             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+#             A[:, j] = H[:, j] - (G[:, j] / z_val)
+#             # A[:, j] = H[:, j] + (G[:, j] / z_val)
+        
+#         # Case 4: Rigid Wall, v=0 (Default)
+#         else:
+#             A[:, j] = H[:, j]
+
+#     # --- Solver Feedback ---
+#     # Check Matrix Condition Number (good UX)
+#     # If this number is too high, the mesh might be bad
+#     # if log:
+#     #     # Matrix Condition Number tells us if the mesh is 'broken' or math is unstable
+#     #     # Note: This can be slow for huge matrices, use sparingly!
+#     #     cond = np.linalg.cond(A)
+#     #     if cond > 1e12:
+#     #         log.write("      WARNING: Matrix is ill-conditioned. Check for overlapping elements!\n")
+#     cond = 'N/A'   # turned off as expensive.
+    
+#     # Solve the linear system Ax = B
+#     # Solve for the unknown surface values (usually Pressure)
+#     bem_solution = np.linalg.solve(A, B)
+    
+#     # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
+#     p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
+    
+#     return (p_final, v_final, cond)

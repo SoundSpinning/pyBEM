@@ -130,6 +130,7 @@ def start_pybem_app():
         # 6. Setup BCs
         # we get BCs at the ready for the solver
         bc_map, log_bc_info = parser.get_bcs()
+        print(bc_map)
         log_info += '\n'+log_bc_info
         print(f"{log_info}")
         if DEBUG:
@@ -228,11 +229,9 @@ def start_pybem_app():
                             for idx in inlet_indices[-4:]: # Just check a few
                                 p_val = p_surf[idx]
                                 v_val = v_surf[idx]
-                                db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
+                                db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
                                 log_DEBUG += f"\n    Element inp_ID{sorted_bem_ids[idx]}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB | {v_val}mm/s"
                             
-                            # log_DEBUG += f"\n\n    k, omega & rho_omega at {f}Hz: {k:.5}, {omega:.5} & {rho_omega:.5}"
-                    
                     t_slv_2 = time.time()
                     
                     # 3.3. Project to Mics (The Radiation Pass)
@@ -274,7 +273,7 @@ def start_pybem_app():
                             log_DEBUG += f"\n\n    BC CHECKs (NODAL) - Only for 1st Freq:"
                             for idx, nid in inlet_indices[-4:]: # Just check a few nodes
                                 p_val = nodal_p_surf[idx]
-                                db = 20 * np.log10(max(np.abs(p_val), 2e-14) / P_REF)
+                                db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
                                 log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
                         # Checks on assembly matrices
                         # np.matrix.tofile(H_bem[:,0], 'matrix.txt', sep=' ', format='%s')

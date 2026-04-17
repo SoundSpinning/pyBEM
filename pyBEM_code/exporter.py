@@ -108,7 +108,7 @@ class PVExporter:
             # 2. SPL (dB)
             f.write('        <DataArray type="Float32" Name="SPL_dB" format="ascii">\n')
             for nid in self.sorted_node_ids:
-                p_mag = max(abs(nodal_pressures[nid]), 2e-14)   # avoid log10(0)
+                p_mag = max(abs(nodal_pressures[nid]), 2e-30)   # avoid log10(0)
                 spl = 20 * np.log10(p_mag / self.P_REF)
                 f.write(f"{spl:.2f} ")
             f.write('\n        </DataArray>\n')
