@@ -8,7 +8,7 @@ from tqdm import tqdm
 # Import our custom modules
 from version import __solver__
 from pmx_parser import PMXParser
-from solver_core import assemble_system, solve_bem_system, calculate_field_points
+from solver_core import assemble_static, assemble_system, solve_bem_system, calculate_field_points
 from exporter import PVExporter
 from utils import prepare_geometry, calculate_signed_volume, averaged_at_nodes
 from constants import DEBUG, P_REF
@@ -156,25 +156,32 @@ def start_pybem_app():
         max_freq = max(parser.frequencies)
         num_freqs = len(parser.frequencies)
         del_freq = parser.frequencies[1] - parser.frequencies[0]
-        # # This value controls when high-order integration kicks in.
-        # # i.e. only for contributions when near the BEM element of interest.
-        # # TODO: test in the future this factor for near distance.
-        # # hi_order_length = np.mean(max_el_length) * 2.5
-        # hi_order_length = np.mean(max_el_length) * 3.0
+        # This value controls when high-order integration kicks in.
+        # i.e. only for contributions when near the BEM element of interest.
+        # TODO: test in the future this factor for near distance.
+        hi_order_length = np.mean(max_el_length)
 
         str_CPUs += (f"""
  First Assembly and compile of [G] & [H] matrices takes longer. 
  Hold tight, it gets faster after, see times per Freq table in '{parser.model_name}.log'.
- """)
+ """)   
         print(f"\n{'-' * 80}")
         print(f" ACOUSTICS job started at:  {time.ctime()}")
         print(f" --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---{str_CPUs}")
-
+        
         with open(log_f, "a") as log:
             log.write(f"\n{'-' * 80}")
             log.write(f"\n ACOUSTICS job started at: {time.ctime()}")
             log.write(f"\n --- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) ---\n")
             log.write(str_CPUs)
+            log.flush() # Forces writing to disk, so we can tail the .log file in real-time
+        
+        # Calculate the static terms (diagonal) of the [H] matrix, k=0
+        k = 0
+        H_static = assemble_static(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, hi_order_length)
+        print(H_static)
+        
+        with open(log_f, "a") as log:
             log.write(f"\n{'=' * 98}")
             log.write(f"""
  {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
@@ -197,7 +204,7 @@ def start_pybem_app():
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
                 # Using the pre-calculated NumPy arrays from the sorted_bem_ids loop
-                G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length)
+                G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, hi_order_length, H_static)
                 t_assembly = time.time() - t_asm_0
 
                 # --- TIMING: SOLVE ---
@@ -283,11 +290,13 @@ def start_pybem_app():
                                 p_val = nodal_p_surf[idx]
                                 db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
                                 log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
-                        # Checks on assembly matrices
-                        # np.matrix.tofile(H_bem[:,0], 'matrix.txt', sep=' ', format='%s')
+                    if f == parser.frequencies[-1]:
+                        # # Checks on assembly matrices
+                        # np.matrix.tofile(H_bem[:], 'matrix.txt', sep=' ', format='%s')
+                        # np.matrix.tofile(G_bem[:], 'matrix.txt', sep=' ', format='%s')
                         log_DEBUG += f"""
 
-    ASSY MATRIX CHECKS:
+    ASSY MATRIX CHECKS @ {parser.frequencies[-1]:.1f}Hz:
     Sum of Col#1 in [H]: {np.sum(H_bem[:,0])}
     Sum of last Col# in [H]: {np.sum(H_bem[:,-1])}
     Sum of Row#1 in [H]: {np.sum(H_bem[0,:])}

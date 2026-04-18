@@ -4,8 +4,75 @@ import numpy as np
 from numba import njit, prange
 from utils import compute_mid_order_contribution, compute_high_order_contribution
 
+# @njit(parallel=True)
+def assemble_static(element_nodes, centers, areas, normals, k, H_sign, hi_order_length):
+    """
+    Computes G and H matrices using element normals:
+    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
+    - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
+      Hij = (Gij / r) * (jk*r - 1) * r_dot_n
+    centers: (N, 3) array
+    areas: (N,) array
+    normals: (N, 3) array
+    k: wave number (complex or float)
+    Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
+    max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
+    """
+    n_els = len(centers)    # number of BEM elements
+    inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+    # Build 2D complex matrices
+    G = np.zeros((n_els, n_els), dtype=np.complex128)
+    H = np.zeros((n_els, n_els), dtype=np.complex128)
+
+    for i in range(n_els):
+        r_pt = centers[i]
+        for j in range(n_els):
+            # Vector from source j to receiver i
+            r_vec = r_pt - centers[j]
+            r = np.linalg.norm(r_vec)
+            if i == j: # Analytical self-term approximations for diagonal terms
+                continue
+            #     G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
+            #     H[i, j] = 0.5  # Jump term for smooth surfaces
+            # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
+            # elif r < max_el_length[j] * 3:
+            elif r < hi_order_length * 3:
+                # high-order
+                g_val, h_val = compute_high_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+            # elif r < max_el_length[j] * 5:
+            elif r < hi_order_length * 5:
+                # mid-order
+                g_val, h_val = compute_mid_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+            else:
+                exp_jkr = np.exp(1j * k * r)
+                # (G-matrix): Free-space 3D Helmholtz Green's function
+                g_val = exp_jkr * inv_4pi / r
+                G[i, j] = g_val * areas[j]
+                
+                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+                r_dot_n = np.dot(r_vec, normals[j]) / r
+                H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+    H_static = np.real(-np.sum(H, axis=1))
+    return H_static
+
 @njit(parallel=True)
-def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_length):
+def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_length, hi_order_length, H_static):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -32,9 +99,11 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
             r = np.linalg.norm(r_vec)
             if i == j: # Analytical self-term approximations for diagonal terms
                 G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
-                H[i, j] = 0.5  # Jump term for smooth surfaces
+                # H[i, j] = 0.5  # Jump term for smooth surfaces
+                H[i, j] = H_static[j]
             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            elif r < max_el_length[j] * 3:
+            # elif r < max_el_length[j] * 3:
+            elif r < hi_order_length * 3:
                 # high-order
                 g_val, h_val = compute_high_order_contribution(
                     r_pt, 
@@ -45,7 +114,8 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 )
                 G[i, j] = g_val
                 H[i, j] = h_val
-            elif r < max_el_length[j] * 5:
+            # elif r < max_el_length[j] * 5:
+            elif r < hi_order_length * 5:
                 # mid-order
                 g_val, h_val = compute_mid_order_contribution(
                     r_pt, 
@@ -89,7 +159,6 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
         if 'VELO' in bc:
             # Velocity is known (v), Pressure (p) is unknown
             A[:, j] = H[:, j]
-            # B += G[:, j] * bc['VELO'] * (1j * rho_omega)
             B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
             # 1.1 Simultaneous VELO + IMPE (Robin BC)
             if 'IMPE' in bc:
@@ -99,7 +168,8 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
                 # Units must match: H is unitless, G is [L], so we need [1/L]
                 # (i * omega * rho) / Z  has units of [1/L]
-                A[:, j] += G[:, j] * (1j * rho_omega / z_val)
+                A[:, j] -= G[:, j] * (1j * rho_omega / z_val)
+                # A[:, j] += G[:, j] * (1j * rho_omega / z_val)
         
         # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
         elif 'PRES' in bc:
@@ -115,9 +185,8 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
             # Units must match: H is unitless, G is [L], so we need [1/L]
             # (i * omega * rho) / Z  has units of [1/L]
-            A[:, j] = H[:, j] + (G[:, j] * (1j * rho_omega / z_val))
-            # A[:, j] = H[:, j] + (G[:, j] / z_val)
-            # A[:, j] = H[:, j] - (G[:, j] / z_val)
+            A[:, j] = H[:, j] - (G[:, j] * (1j * rho_omega / z_val))
+            # A[j, j] = 0.5 - (G[:, j] * (1j * rho_omega / z_val))
         
         # Case 4: Rigid Wall, v=0 (Default)
         else:
