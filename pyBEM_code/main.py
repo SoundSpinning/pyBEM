@@ -159,7 +159,8 @@ def start_pybem_app():
         # This value controls when high-order integration kicks in.
         # i.e. only for contributions when near the BEM element of interest.
         # TODO: test in the future this factor for near distance.
-        hi_order_length = np.mean(max_el_length)
+        # hi_order_length = np.mean(max_el_length)
+        hi_order_length = np.max(max_el_length)
 
         str_CPUs += (f"""
  First Assembly and compile of [G] & [H] matrices takes longer. 
@@ -178,7 +179,7 @@ def start_pybem_app():
         
         # Calculate the static terms (diagonal) of the [H] matrix, k=0
         k = 0
-        H_static = assemble_static(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, hi_order_length)
+        H_static = assemble_static(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, hi_order_length)
         print(H_static)
         
         with open(log_f, "a") as log:
@@ -220,7 +221,7 @@ def start_pybem_app():
                     t_slv_1 = time.time()
                 
                     # log_DEBUG:
-                    if f == parser.frequencies[0]:
+                    if f == parser.frequencies[-1]:
                         if DEBUG:
                             log_DEBUG = f"""
 {'-' * 80}
@@ -285,7 +286,7 @@ def start_pybem_app():
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
-                    if f == parser.frequencies[0]:
+                    if f == parser.frequencies[-1]:
                         if DEBUG:
                             if len(parser.nsets) > 0:
                                 inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['inlet']]
@@ -296,7 +297,7 @@ def start_pybem_app():
                                     log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
                     if f == parser.frequencies[-1]:
                         # Checks on assembly matrices
-                        np.matrix.tofile(H_bem[:], 'matrix.txt', sep=' ', format='%s')
+                        # np.matrix.tofile(H_bem[:], 'matrix.txt', sep=' ', format='%s')
                         # np.matrix.tofile(G_bem[:], 'matrix.txt', sep=' ', format='%s')
                         log_DEBUG += f"""
 

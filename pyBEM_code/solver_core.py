@@ -5,7 +5,7 @@ from numba import njit, prange
 from utils import compute_mid_order_contribution, compute_high_order_contribution
 
 # @njit(parallel=True)
-def assemble_static(element_nodes, centers, areas, normals, k, H_sign, hi_order_length):
+def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_length, hi_order_length):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -30,7 +30,7 @@ def assemble_static(element_nodes, centers, areas, normals, k, H_sign, hi_order_
             # Vector from source j to receiver i
             r_vec = r_pt - centers[j]
             r = np.linalg.norm(r_vec)
-            if i == j: # Analytical self-term approximations for diagonal terms
+            if i == j: # Analytical self-term approximations skipped
                 continue
             #     G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
             #     H[i, j] = 0.5  # Jump term for smooth surfaces
@@ -103,7 +103,7 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 # H[i, j] = 0.5  # Jump term for smooth surfaces
                 H[i, j] = H_static[j]
             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            # # elif r < max_el_length[j] * 3:
+            # elif r < max_el_length[j] * 3:
             elif r < hi_order_length * 3:
                 # high-order
                 g_val, h_val = compute_high_order_contribution(
