@@ -68,7 +68,8 @@ def assemble_static(element_nodes, centers, areas, normals, k, H_sign, hi_order_
                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
                 r_dot_n = np.dot(r_vec, normals[j]) / r
                 H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
-    H_static = np.real(-np.sum(H, axis=1))
+    
+    H_static = np.real(-np.sum(H, axis=1, dtype=np.complex128))
     return H_static
 
 @njit(parallel=True)
@@ -102,7 +103,7 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 # H[i, j] = 0.5  # Jump term for smooth surfaces
                 H[i, j] = H_static[j]
             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            # elif r < max_el_length[j] * 3:
+            # # elif r < max_el_length[j] * 3:
             elif r < hi_order_length * 3:
                 # high-order
                 g_val, h_val = compute_high_order_contribution(
@@ -135,7 +136,6 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
                 r_dot_n = np.dot(r_vec, normals[j]) / r
                 H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
-
     return G, H
 
 # @njit(parallel=True)   # it crashes Numba if dictionaries present
@@ -169,7 +169,6 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
                 # Units must match: H is unitless, G is [L], so we need [1/L]
                 # (i * omega * rho) / Z  has units of [1/L]
                 A[:, j] -= G[:, j] * (1j * rho_omega / z_val)
-                # A[:, j] += G[:, j] * (1j * rho_omega / z_val)
         
         # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
         elif 'PRES' in bc:
@@ -186,7 +185,6 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             # Units must match: H is unitless, G is [L], so we need [1/L]
             # (i * omega * rho) / Z  has units of [1/L]
             A[:, j] = H[:, j] - (G[:, j] * (1j * rho_omega / z_val))
-            # A[j, j] = 0.5 - (G[:, j] * (1j * rho_omega / z_val))
         
         # Case 4: Rigid Wall, v=0 (Default)
         else:

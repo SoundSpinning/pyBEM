@@ -278,21 +278,25 @@ def start_pybem_app():
                 try:
                     t_avg_0 = time.time()
                     # 4.1. Get nodal averages for BEM elements & Mics nodes
-                    nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas,sorted_mics_nodes, p_mics)
+                    if sorted_mics_els:
+                        nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas, sorted_mics_nodes, p_mics)
+                    else:
+                        nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas, None, None)
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
                     if f == parser.frequencies[0]:
-                        if DEBUG:                            
-                            inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['inlet']]
-                            log_DEBUG += f"\n\n    BC CHECKs (NODAL) - Only for 1st Freq:"
-                            for idx, nid in inlet_indices[-4:]: # Just check a few nodes
-                                p_val = nodal_p_surf[idx]
-                                db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
-                                log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
+                        if DEBUG:
+                            if len(parser.nsets) > 0:
+                                inlet_indices = [(i, ids) for i, ids in enumerate(sorted_nodes.keys()) if ids in parser.nsets['inlet']]
+                                log_DEBUG += f"\n\n    BC CHECKs (NODAL) - Only for 1st Freq:"
+                                for idx, nid in inlet_indices[-4:]: # Just check a few nodes
+                                    p_val = nodal_p_surf[idx]
+                                    db = 20 * np.log10(max(np.abs(p_val), 2e-30) / P_REF)
+                                    log_DEBUG += f"\n    Node inp_ID{nid}->PV_ID{idx}: {p_val}MPa | {db:.2f}dB"
                     if f == parser.frequencies[-1]:
-                        # # Checks on assembly matrices
-                        # np.matrix.tofile(H_bem[:], 'matrix.txt', sep=' ', format='%s')
+                        # Checks on assembly matrices
+                        np.matrix.tofile(H_bem[:], 'matrix.txt', sep=' ', format='%s')
                         # np.matrix.tofile(G_bem[:], 'matrix.txt', sep=' ', format='%s')
                         log_DEBUG += f"""
 
@@ -365,6 +369,7 @@ def start_pybem_app():
 
     except ValueError as e:
         print(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
+        traceback.print_exc()
     except Exception as e:
         print(f"\n[ERROR] {e}")
         traceback.print_exc()

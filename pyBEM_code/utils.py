@@ -75,13 +75,42 @@ def calculate_signed_volume(centers, areas, normals):
     CoG = [CoGx, CoGy, CoGz]
     return volume, area, CoG
 
+# ---------------------------------
 ###
 ### Gauss Points for QUADS & TRIAS
 ###
+# ---------------------------------
+###
+### TERMINOLOGY
+###
+# ---------------------------------
+# ξ (Xi) and η (Eta) are the standard Greek letters used to represent the local (or "parent") coordinate system of an element.
+# ξ (Xi - pronounced "Ksee" or "Zai"): This represents the horizontal axis of the local square.
+# η (Eta - pronounced "Ay-tuh"): This represents the vertical axis of the local square.
+# In short: ξ is "Local X" and η is "Local Y." We use Greek letters just to make sure we don't accidentally confuse a point on the element with a point in the room!
+
 # QUAD4 Gauss points and weights for 2x2 quadrature
-# Local coordinates: +/- 1/sqrt(3)
-QUAD_GP = np.array([-0.5773502691896257, 0.5773502691896257])
-QUAD_GW = np.array([1.0, 1.0])
+# ---------------------------------
+# Local coordinates: -/+ 1/sqrt(3): [-0.5773502691896257, 0.5773502691896257]
+Q_GP = 1./3.**0.5
+# NOTE: The logic here takes into account that BEM normals point AWAY from the fluid.
+#       This is against usual RH rules with (+) normals into the material, e.g. in FEA.
+#       As a result, it is not that trivial which order / signs the GPoints must follow.
+QUAD_GP = np.array([
+    [-Q_GP, -Q_GP],   # Bottom-Left
+    [-Q_GP,  Q_GP],   # Top-Left
+    [ Q_GP,  Q_GP],   # Top-Right
+    [ Q_GP, -Q_GP],   # Bottom-Right
+])
+# # test influence of order of GPoints 
+# QUAD_GP = np.array([
+#     [-Q_GP, -Q_GP],   # Bottom-Left
+#     [ Q_GP,  Q_GP],   # Top-Right
+#     [ Q_GP, -Q_GP],   # Bottom-Right
+#     [-Q_GP,  Q_GP],   # Top-Left
+# ])
+# Standard 2x2 Weights sum to 4.0
+QUAD_GW = np.array([1.0, 1.0, 1.0, 1.0])
 
 @njit
 def get_quad_points(v1, v2, v3, v4):
@@ -91,27 +120,32 @@ def get_quad_points(v1, v2, v3, v4):
     For a standard quad element, these points are located at ±0.577 in local coordinates.
     """
     points = np.zeros((4, 3))
-    idx = 0
-    for xi in QUAD_GP:
-        for eta in QUAD_GP:
-            # Bilinear interpolation of the surface
-            # Ni are the shape functions
-            n1 = 0.25 * (1-xi) * (1-eta)
-            n2 = 0.25 * (1+xi) * (1-eta)
-            n3 = 0.25 * (1+xi) * (1+eta)
-            n4 = 0.25 * (1-xi) * (1+eta)
-            points[idx] = n1*v1 + n2*v2 + n3*v3 + n4*v4
-            idx += 1
-    return points
+    weigths = QUAD_GW
+    for i in range(4):
+        xi, eta = QUAD_GP[i]
+        # Bilinear interpolation of the surface; Ni are the shape functions
+        n1 = 0.25 * (1-xi) * (1-eta)  # Bottom-Left
+        n2 = 0.25 * (1-xi) * (1+eta)  # Top-Left
+        n3 = 0.25 * (1+xi) * (1+eta)  # Top-Right
+        n4 = 0.25 * (1+xi) * (1-eta)  # Bottom-Right
+        points[i] = n1*v1 + n2*v2 + n3*v3 + n4*v4
+        
+    return points, weigths
 
 # TRI3 Gauss points in Barycentric coordinates (L1, L2, L3)
+# ---------------------------------
 # These points are at (2/3, 1/6, 1/6), (1/6, 2/3, 1/6), (1/6, 1/6, 2/3)
+# TRI_GP = np.array([
+#     [0.666666666, 0.166666666, 0.166666666],
+#     [0.166666666, 0.666666666, 0.166666666],
+#     [0.166666666, 0.166666666, 0.666666666]
+# ])
 TRI_GP = np.array([
-    [0.666666666, 0.166666666, 0.166666666],
-    [0.166666666, 0.666666666, 0.166666666],
-    [0.166666666, 0.166666666, 0.666666666]
+    [2/3., 1/6., 1/6.],
+    [1/6., 2/3., 1/6.],
+    [1/6., 1/6., 2/3.]
 ])
-TRI_GW = 1.0 / 3.0 # Weights sum to 1.0
+TRI_GW = np.array([1/3., 1/3., 1/3.]) # Weights sum to 1.0
 
 @njit
 def get_tri_points(v1, v2, v3):
@@ -120,16 +154,54 @@ def get_tri_points(v1, v2, v3):
     The points are located at the midpoints of the TRIA edges connecting the nodes.
     """
     points = np.zeros((3, 3))
+    weights = TRI_GW
     for i in range(3):
         # Linear interpolation using barycentric coordinates
         points[i] = TRI_GP[i,0]*v1 + TRI_GP[i,1]*v2 + TRI_GP[i,2]*v3
-    return points
+    return points, weights
 
-# 3x3 Gauss points and weights
-# Points: -sqrt(0.6), 0, +sqrt(0.6)
-GP3 = np.array([-0.7745966692, 0.0, 0.7745966692])
+# QUAD4 Gauss points and weights for 3x3 quadrature
+# ---------------------------------
+# GPoints: -sqrt(0.6), 0, +sqrt(0.6)
+# GP3 = np.array([-0.7745966692, 0.0, 0.7745966692])
+Q_GP3 = 0.6**0.5
+# QUAD_GP3 = np.array([-Q_GP3, 0.0, Q_GP3])
+
+# NOTE: The logic here takes into account that BEM normals point AWAY from the fluid.
+#       This is against usual RH rules with (+) normals into the material, e.g. in FEA.
+#       As a result, it is not that trivial which order / signs the GPoints must follow.
+# 1.- Local Coords:
+    # Define the 9 local (xi, eta) pairs explicitly to match theBEM winding.
+    # We order them row-by-row, but keep the signs aligned with the 'Away' from fluid normal.
+QUAD_GP3 = np.array([
+    [-Q_GP3, -Q_GP3], [-Q_GP3, 0],      [-Q_GP3, Q_GP3], # Bottom row
+    [ 0, Q_GP3],      [ 0,  0],         [ Q_GP3, Q_GP3], # Middle row (Point 4 is CoG)
+    [ Q_GP3, 0],      [ Q_GP3, -Q_GP3], [ 0, -Q_GP3]     # Top row
+])
+# standard ordering with (+) normals, NOT for BEM
+# QUAD_GP3 = np.array([
+#     [-Q_GP3, -Q_GP3], [ 0, -Q_GP3], [ Q_GP3, -Q_GP3], # Bottom row
+#     [-Q_GP3,  0], [ 0,  0], [ Q_GP3,  0],             # Middle row (Point 4 is CoG)
+#     [-Q_GP3,  Q_GP3], [ 0,  Q_GP3], [ Q_GP3,  Q_GP3]  # Top row
+# ])
+
+# 2.- Local Weights:
 # Weights: 5/9, 8/9, 5/9
-GW3 = np.array([0.5555555556, 0.8888888889, 0.5555555556])
+# GW3 = np.array([0.5555555556, 0.8888888889, 0.5555555556])
+# Q_GW3 = np.array([5/9., 8/9., 5/9.])
+Q_GW3_side = 5/9.
+Q_GW3_mid = 8/9.
+# Define corresponding weights (matching the i, j index of GW3)
+# QUAD_GW3 = np.array([
+#     Q_GW3[0]*Q_GW3[0], Q_GW3[1]*Q_GW3[0], Q_GW3[2]*Q_GW3[0],
+#     Q_GW3[0]*Q_GW3[1], Q_GW3[1]*Q_GW3[1], Q_GW3[2]*Q_GW3[1],
+#     Q_GW3[0]*Q_GW3[2], Q_GW3[1]*Q_GW3[2], Q_GW3[2]*Q_GW3[2]
+# ])
+QUAD_GW3 = np.array([
+    Q_GW3_side*Q_GW3_side, Q_GW3_side*Q_GW3_mid,  Q_GW3_side*Q_GW3_side,
+    Q_GW3_side*Q_GW3_mid,  Q_GW3_mid*Q_GW3_mid,   Q_GW3_side*Q_GW3_side,
+    Q_GW3_side*Q_GW3_mid,  Q_GW3_side*Q_GW3_side, Q_GW3_side*Q_GW3_mid
+])
 
 @njit
 def get_quad_points_3x3(v1, v2, v3, v4):
@@ -138,28 +210,51 @@ def get_quad_points_3x3(v1, v2, v3, v4):
     """
     points = np.zeros((9, 3))
     weights = np.zeros(9)
-    idx = 0
-    for i in range(3):
-        for j in range(3):
-            xi = GP3[i]
-            eta = GP3[j]
+
+    for i in range(9):
+        xi, eta = QUAD_GP3[i]
             
-            # Shape functions for bilinear quad
-            n1 = 0.25 * (1-xi) * (1-eta)
-            n2 = 0.25 * (1+xi) * (1-eta)
-            n3 = 0.25 * (1+xi) * (1+eta)
-            n4 = 0.25 * (1-xi) * (1+eta)
-            
-            points[idx] = n1*v1 + n2*v2 + n3*v3 + n4*v4
-            # Weight is the product of weights in both directions
-            weights[idx] = GW3[i] * GW3[j]
-            idx += 1
-            
-    # Normalize weights so they sum to 4.0 (for a standard -1 to 1 domain)
-    # Then multiply by Area/4 in the main loop to get physical integration
+        # Shape functions for bilinear quad
+        n1 = 0.25 * (1-xi) * (1-eta)  # Bottom-Left
+        n2 = 0.25 * (1-xi) * (1+eta)  # Top-Left
+        n3 = 0.25 * (1+xi) * (1+eta)  # Top-Right
+        n4 = 0.25 * (1+xi) * (1-eta)  # Bottom-Right
+        
+        points[i] = n1*v1 + n2*v2 + n3*v3 + n4*v4
+        weights[i] = QUAD_GW3[i]
+
     return points, weights
 
+# Old code for reference, messy with nodes order.
+# def get_quad_points_3x3(v1, v2, v3, v4):
+#     """
+#     Returns 9 points and 9 weights for a 3x3 integration rule.
+#     """
+#     points = np.zeros((9, 3))
+#     weights = np.zeros(9)
+#     idx = 0
+#     for i in range(3):
+#         for j in range(3):
+#             xi = QUAD_GP3[i]
+#             eta = QUAD_GP3[j]
+            
+#             # Shape functions for bilinear quad
+#             n1 = 0.25 * (1-xi) * (1-eta)
+#             n2 = 0.25 * (1+xi) * (1-eta)
+#             n3 = 0.25 * (1+xi) * (1+eta)
+#             n4 = 0.25 * (1-xi) * (1+eta)
+            
+#             points[idx] = n1*v1 + n2*v2 + n3*v3 + n4*v4
+#             # Weight is the product of weights in both directions
+#             weights[idx] = QUAD_GW3[i] * QUAD_GW3[j]
+#             idx += 1
+            
+#     # Normalize weights so they sum to 4.0 (for a standard -1 to 1 domain)
+#     # Then multiply by Area/4 in the main loop to get physical integration
+#     return points, weights
+
 # 7-point rule for Triangles (Barycentric coordinates L1, L2, L3)
+# ---------------------------------
 # Format: [L1, L2, L3, Weight]
 TRI_7P = np.array([
     [0.3333333333, 0.3333333333, 0.3333333333, 0.2250000000], # Centroid
@@ -193,31 +288,32 @@ def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal
     # Initialize sums
     g_sum = 0.0 + 0j
     h_sum = 0.0 + 0j
+    sum_w = 0.0
     
     # 1. Get Integration Points
     if n_nodes == 3: # TRIA3
-        pts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
+        pts, wts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
         n_pts = 3
     else: # QUAD4
-        pts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
+        pts, wts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
         n_pts = 4
-        
+        # print("\n", receiver_pt)
+        # print(pts, wts)
     # 2. Sum Contributions
     for p_idx in range(n_pts):
         r_vec = receiver_pt - pts[p_idx]
         r = np.linalg.norm(r_vec)
+        sum_w += wts[p_idx]
         
         # Kernel math
         exp_jkr = np.exp(1j * k * r)
         g_val = exp_jkr * inv_4pi / r
         
-        # Quadrature weight (uniform for these simple rules)
-        weight = element_area / n_pts
-        
-        g_sum += g_val * weight
+        w_eff = (wts[p_idx] / sum_w) * element_area
+        g_sum += g_val * w_eff
         
         dot_prod = np.dot(r_vec, element_normal) / r
-        h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * weight
+        h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * w_eff
         
     return g_sum, h_sum
 
@@ -225,6 +321,7 @@ def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal
 def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
     g_sum = 0.0 + 0j
     h_sum = 0.0 + 0j
+    sum_w = 0.0
     
     if len(vertices) == 3:
         pts, wts = get_tri_points_7p(vertices[0], vertices[1], vertices[2])
@@ -232,14 +329,17 @@ def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_si
     else:
         pts, wts = get_quad_points_3x3(vertices[0], vertices[1], vertices[2], vertices[3])
         n_pts = 9
-        
+        # print("\n", receiver_pt)
+        # print(pts, wts)
+
     for p in range(n_pts):
         r_vec = receiver_pt - pts[p]
         r = np.linalg.norm(r_vec)
+        sum_w += wts[p]
         
         # Kernel
-        exp_kr = np.exp(1j * k * r)
-        g_val = exp_kr * inv_4pi / r
+        exp_jkr = np.exp(1j * k * r)
+        g_val = exp_jkr * inv_4pi / r
         
         # H Kernel derivative
         dot_prod = np.dot(r_vec, normal) / r
@@ -248,17 +348,18 @@ def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_si
         # Integration weight
         # For triangles, weights sum to 1.0, so multiply by Area
         # For quads (bilinear), weights sum to 4.0, so multiply by Area/4
-        if n_pts == 7:
-            w_eff = wts[p] * area
-        else:
-            w_eff = wts[p] * (area / 4.0)
+        # if n_pts == 7:
+        #     w_eff = wts[p] * area
+        # else:
+        #     w_eff = wts[p] * (area / 4.0)
+        w_eff = (wts[p] / sum_w) * area
             
         g_sum += g_val * w_eff
         h_sum += h_val * w_eff
         
     return g_sum, h_sum
 
-def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes, P_mics):
+def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=None):
     """
     Averages element-centered results to nodes.
     nodes: dict {nid: [x, y, z]}
@@ -289,12 +390,13 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes, P_mics):
             node_sums[nid] += val
             area_sums[nid] += area
             # count[nid] += 1
-    # We iterate through the nodes provided for Mics
-    for i, (nid, coords) in enumerate(mic_nodes.items()):
-        val = P_mics[i]
-        node_sums[nid] += val
-        area_sums[nid] = 1
-        # count[nid] = 1
+    # We iterate through the nodes for Mics, if provided
+    if mic_nodes is not None:
+        for i, (nid, coords) in enumerate(mic_nodes.items()):
+            val = P_mics[i]
+            node_sums[nid] += val
+            area_sums[nid] = 1
+            # count[nid] = 1
 
     # 3. Perform the average
     # We only divide where area > 0 to avoid DivisionByZero
