@@ -40,6 +40,7 @@ def start_pybem_app():
         parser = PMXParser(filename)
         parser.load_model()
         rho = parser.density
+        damping = parser.damping
 
         # Sort nodes & element dictionaries as read from the input parser
         # This ensures later on that index 0 is always Element 1, index 1 is 2, etc.
@@ -93,6 +94,13 @@ def start_pybem_app():
         bem_nodal_coords, bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, sorted_bem_els)
         # print(bem_nodal_coords)
         # print(bem_centers)
+        
+        # This value controls when high-order integration kicks in.
+        # i.e. only for contributions when near the BEM element of interest.
+        # TODO: test in the future this factor for near distance.
+        # hi_order_length = np.mean(max_el_length)
+        # hi_order_length = np.max(max_el_length)
+        hi_order_length = np.percentile(max_el_length, 95)
 
         # 5. CHECK on BEM volume: is it interior or exterior, 
         #    or check for holes / free edges in mesh.
@@ -101,8 +109,8 @@ def start_pybem_app():
  INPUT MESH: Total BEM AREA is: ( {bem_total_area:.4} L**2 )
              CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L
              ( i ) The MAX BEM element aspect ratio found is: ( {np.max(elem_ratio):.2f} )
-                   Mesh element size is (approx.): ( {np.mean(max_el_length):.2f} L )
-             ( i ) The MAX Freq suggested is (approx.): ( {parser.speed_of_sound / (8*np.mean(max_el_length)):.1f}Hz )
+                   Mesh element size is (approx.): ( {hi_order_length:.2f} L )
+             ( i ) The MAX Freq suggested is (approx.): ( {parser.speed_of_sound / (8*hi_order_length):.1f}Hz )
 """
         if bem_total_vol > 1e-9:
             BEM_TYPE = "INTERIOR"
@@ -156,11 +164,6 @@ def start_pybem_app():
         max_freq = max(parser.frequencies)
         num_freqs = len(parser.frequencies)
         del_freq = parser.frequencies[1] - parser.frequencies[0]
-        # This value controls when high-order integration kicks in.
-        # i.e. only for contributions when near the BEM element of interest.
-        # TODO: test in the future this factor for near distance.
-        # hi_order_length = np.mean(max_el_length)
-        hi_order_length = np.max(max_el_length)
 
         str_CPUs += (f"""
  First Assembly and compile of [G] & [H] matrices takes longer. 
@@ -200,7 +203,10 @@ def start_pybem_app():
                 # 1. Physics: Calculate wave number (k) using speed of sound from parser
                 omega = 2.0 * np.pi * f
                 k = omega / parser.speed_of_sound
-                #    Calculate rho*omega to be used when VELO BC present in solver
+                # DAMPING: In most acoustic BEM, we input the Loss Factor η, where η=2ζ.
+                if damping is not None:
+                    k = k * (1 - (1j * damping * 0.5))
+                # Calculate rho*omega to be used when VELO BC present in solver
                 rho_omega = rho * omega
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
@@ -255,13 +261,15 @@ def start_pybem_app():
                     if sorted_mics_els:
                         p_mics = calculate_field_points(
                             sorted_mics_centers,
+                            bem_nodal_coords, 
                             bem_centers, 
                             bem_areas, 
                             bem_normals, 
                             p_surf, 
                             v_surf, 
                             k,
-                            rho_omega
+                            rho_omega,
+                            hi_order_length, H_sign
                         )
                     t_slv_3 = time.time()
                     

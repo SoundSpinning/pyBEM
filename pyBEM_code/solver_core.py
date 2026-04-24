@@ -30,13 +30,17 @@ def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_le
             # Vector from source j to receiver i
             r_vec = r_pt - centers[j]
             r = np.linalg.norm(r_vec)
+            if max_el_length[j] > hi_order_length:
+                order_length = max_el_length[j]
+            else:
+                order_length = hi_order_length
+            
             if i == j: # Analytical self-term approximations skipped
                 continue
             #     G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
             #     H[i, j] = 0.5  # Jump term for smooth surfaces
             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            # elif r < max_el_length[j] * 3:
-            elif r < hi_order_length * 3:
+            elif r < order_length * 3:
                 # high-order
                 g_val, h_val = compute_high_order_contribution(
                     r_pt, 
@@ -47,8 +51,7 @@ def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 )
                 G[i, j] = g_val
                 H[i, j] = h_val
-            # elif r < max_el_length[j] * 5:
-            elif r < hi_order_length * 5:
+            elif r < order_length * 5:
                 # mid-order
                 g_val, h_val = compute_mid_order_contribution(
                     r_pt, 
@@ -98,13 +101,17 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
             # Vector from source j to receiver i
             r_vec = r_pt - centers[j]
             r = np.linalg.norm(r_vec)
+            if max_el_length[j] > hi_order_length:
+                order_length = max_el_length[j]
+            else:
+                order_length = hi_order_length
+            
             if i == j: # Analytical self-term approximations for diagonal terms
                 G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
                 # H[i, j] = 0.5  # Jump term for smooth surfaces
                 H[i, j] = H_static[j]
             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            # elif r < max_el_length[j] * 3:
-            elif r < hi_order_length * 3:
+            elif r < order_length * 3:
                 # high-order
                 g_val, h_val = compute_high_order_contribution(
                     r_pt, 
@@ -115,8 +122,7 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 )
                 G[i, j] = g_val
                 H[i, j] = h_val
-            # elif r < max_el_length[j] * 5:
-            elif r < hi_order_length * 5:
+            elif r < order_length * 5:
                 # mid-order
                 g_val, h_val = compute_mid_order_contribution(
                     r_pt, 
@@ -136,6 +142,7 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
                 r_dot_n = np.dot(r_vec, normals[j]) / r
                 H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+    
     return G, H
 
 # @njit(parallel=True)   # it crashes Numba if dictionaries present
@@ -253,7 +260,7 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
     return p_final, v_final
 
 @njit(parallel=True)
-def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega):
+def calculate_field_points(mic_centers, element_nodes, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega, order_length, H_sign):
     """
     Pass 2: Projects solved surface (BEM) results onto Microphone points.
     mic_centers: mics nodal coords.
@@ -272,20 +279,30 @@ def calculate_field_points(mic_centers, bem_centers, bem_areas, bem_normals, p_s
         for j in range(num_surf):
             r_vec = mic_centers[i] - bem_centers[j]
             r = np.linalg.norm(r_vec)
-            
+
+            # if r < order_length * 0.5:
+            #     # high-order
+            #     g_val, h_val = compute_high_order_contribution(
+            #         mic_centers[i], 
+            #         element_nodes[j], # Array of actual nodal coordinates
+            #         bem_normals[j], 
+            #         bem_areas[j], 
+            #         k, H_sign, inv_4pi
+            #     )
+            # else:
             # Green's Function (G)
             g_val = np.exp(1j * k * r) * inv_4pi / r
-            
+
             # Derivative of Green's Function (H)
             # Dot product of (r_vec) and the surface normal / r
             r_dot_n = np.dot(r_vec, bem_normals[j]) / r
-            h_val = g_val * (1j * k - 1.0 / r) * r_dot_n
+            h_val = H_sign * g_val * (1j * k - 1.0 / r) * r_dot_n
             
             # p_mic = G*v + H*p (integrated over area)
             # TODO: check the sign for interior vs exterior when the time comes.
             sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
-            
         p_mics[i] = sum_p
+
     return p_mics
 
 ###
