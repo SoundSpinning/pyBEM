@@ -165,7 +165,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
         # Case 1: Velocity is known (Vibrating Wall - Neumann BC)
         if 'VELO' in bc:
             # Velocity is known (v), Pressure (p) is unknown
-            A[:, j] = H[:, j]
+            A[:, j] += H[:, j]
             B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
             # 1.1 Simultaneous VELO + IMPE (Robin BC)
             if 'IMPE' in bc:
@@ -175,12 +175,12 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
                 # Units must match: H is unitless, G is [L], so we need [1/L]
                 # (i * omega * rho) / Z  has units of [1/L]
-                A[:, j] -= G[:, j] * (1j * rho_omega / z_val)
+                A[:, j] += G[:, j] * (1j * rho_omega / z_val)
         
         # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
         elif 'PRES' in bc:
             # Pressure is known (p), Velocity (v) is unknown
-            A[:, j] = -G[:, j] * (1j * rho_omega)
+            A[:, j] -= G[:, j] * (1j * rho_omega)
             B -= H[:, j] * bc['PRES']
         
         # Case 3: Impedance (Absorbent material)
@@ -191,11 +191,11 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
             # Units must match: H is unitless, G is [L], so we need [1/L]
             # (i * omega * rho) / Z  has units of [1/L]
-            A[:, j] = H[:, j] - (G[:, j] * (1j * rho_omega / z_val))
+            A[:, j] += H[:, j] + (G[:, j] * (1j * rho_omega / z_val))
         
         # Case 4: Rigid Wall, v=0 (Default)
         else:
-            A[:, j] = H[:, j]
+            A[:, j] += H[:, j]
 
     # --- Solver Feedback ---
     # Check Matrix Condition Number (good UX)
