@@ -1,5 +1,5 @@
 # True == writes debug info to model_name.log file
-DEBUG = True
+DEBUG = False
 
 # Flag that should turn to "INTERIOR" or "EXTERIOR",
 # after pre-processing and checking on the BEM model volume sign.

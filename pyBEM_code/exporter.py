@@ -28,7 +28,7 @@ class PVExporter:
     def _prepare_directory(self):
         """Wipes old results and creates a fresh PV directory."""
         if os.path.exists(self.pv_dir):
-            print(f"\n--- Cleaning old results in '{self.pv_dir}' folder ---")
+            print(f" --- Cleaning old results in '{self.pv_dir}' folder ---")
             shutil.rmtree(self.pv_dir) # Deletes the folder and everything in it
         os.makedirs(self.pv_dir)
 

@@ -2,10 +2,93 @@
 
 import numpy as np
 from numba import njit, prange
-from utils import compute_mid_order_contribution, compute_high_order_contribution
+from utils import pre_high_order, pre_mid_order, compute_mid_order_contribution, compute_high_order_contribution
 
-# @njit(parallel=True)
-def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_length, hi_order_length):
+def pre_assembly(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length):
+    """
+    Pre-Computes G and H (static, k=0) matrices using the input mesh:
+    - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
+    - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
+    centers: (N, 3) array
+    areas: (N,) array
+    normals: (N, 3) array
+    max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
+    order_length: single value from percentile 95% from max_el_length on all BEM elements.
+    """
+    n_els = len(centers)    # number of BEM elements
+    inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+
+    # Build 2D real matrices; k=0 ==> not complex
+    G = np.zeros((n_els, n_els), dtype=np.float64)
+    H = np.zeros((n_els, n_els), dtype=np.float64)
+    tmp_H = np.zeros((n_els, n_els), dtype=np.float64)
+    R = np.zeros((n_els, n_els), dtype=np.float32)
+
+    for i in range(n_els):
+        r_pt = centers[i]
+        for j in range(n_els):
+            # Vector from source j to receiver i
+            r_vec = r_pt - centers[j]
+            r = np.linalg.norm(r_vec)
+            R[i, j] = r
+            if max_el_length[j] > order_length:
+                order_length = max_el_length[j]
+            
+            if i == j: # Analytical self-term approximations for diagonal terms
+                G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
+                # H[i, j] = 0.5  # Jump term for smooth surfaces
+                # H[i, j] = H_static[j]
+            # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
+            elif r < order_length * 3:
+                # high-order
+                g_val, h_val, tmp_h_val = pre_high_order(
+                # g_val, h_val = compute_high_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+                tmp_H[i, j] = tmp_h_val
+            elif r < order_length * 5:
+                # mid-order
+                g_val, h_val, tmp_h_val = pre_mid_order(
+                # g_val, h_val = compute_mid_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+                tmp_H[i, j] = tmp_h_val
+            else:
+                # exp_jkr = np.exp(1j * k * r)
+                # (G-matrix): Free-space 3D Helmholtz Green's function
+                # g_val = exp_jkr * inv_4pi / r
+                g_val = inv_4pi / r
+                G[i, j] = g_val * areas[j]
+                
+                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+                r_dot_n = np.dot(r_vec, normals[j]) / r
+                # tmp_H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+                tmp_H[i, j] = H_sign * (G[i, j]) * (- 1.0 / r) * r_dot_n
+                H[i, j] = r_dot_n
+    
+    # [Hii] = SUM of the [Hij] off diagonal terms to improve accuracy on the Jump term
+    # In Numpy axis=0 ==> cols | axis=1 ==> rows
+    H_static = np.real(-np.sum(tmp_H, axis=1, dtype=np.complex128))
+    print(H_static)
+    for i in range(n_els):
+        H[i, i] = H_static[i]
+    del tmp_H, H_static
+    return G, H, R, n_els
+
+@njit(parallel=True)
+def main_assembly(pre_G, pre_H, pre_R, num_elems, k, H_sign):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -18,65 +101,37 @@ def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_le
     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
     max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
     """
-    n_els = len(centers)    # number of BEM elements
-    inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+    n_els = num_elems    # number of BEM elements
+    # inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
     # Build 2D complex matrices
     G = np.zeros((n_els, n_els), dtype=np.complex128)
     H = np.zeros((n_els, n_els), dtype=np.complex128)
+    R = pre_R
 
-    for i in range(n_els):
-        r_pt = centers[i]
+    for i in prange(n_els):
+        # r_pt = centers[i]
         for j in range(n_els):
-            # Vector from source j to receiver i
-            r_vec = r_pt - centers[j]
-            r = np.linalg.norm(r_vec)
-            if max_el_length[j] > hi_order_length:
-                order_length = max_el_length[j]
+            if i == j:
+                G[i, j] = pre_G[i, j]
+                H[i, j] = pre_H[i, j]
             else:
-                order_length = hi_order_length
-            
-            if i == j: # Analytical self-term approximations skipped
-                continue
-            #     G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
-            #     H[i, j] = 0.5  # Jump term for smooth surfaces
-            # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            elif r < order_length * 3:
-                # high-order
-                g_val, h_val = compute_high_order_contribution(
-                    r_pt, 
-                    element_nodes[j], # Array of actual nodal coordinates
-                    normals[j], 
-                    areas[j], 
-                    k, H_sign, inv_4pi
-                )
-                G[i, j] = g_val
-                H[i, j] = h_val
-            elif r < order_length * 5:
-                # mid-order
-                g_val, h_val = compute_mid_order_contribution(
-                    r_pt, 
-                    element_nodes[j], # Array of actual nodal coordinates
-                    normals[j], 
-                    areas[j], 
-                    k, H_sign, inv_4pi
-                )
-                G[i, j] = g_val
-                H[i, j] = h_val
-            else:
-                exp_jkr = np.exp(1j * k * r)
+                exp_jkr = np.exp(1j * k * R[i, j])
                 # (G-matrix): Free-space 3D Helmholtz Green's function
-                g_val = exp_jkr * inv_4pi / r
-                G[i, j] = g_val * areas[j]
+                g_val = exp_jkr * pre_G[i, j]
+                G[i, j] = g_val
                 
                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-                r_dot_n = np.dot(r_vec, normals[j]) / r
-                H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+                # r_dot_n = np.dot(r_vec, normals[j]) / r
+                # H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / R[i, j])
+                H[i, j] = H_sign * g_val * (1j * k - 1.0 / R[i, j]) * pre_H[i, j]
+                # h_val = H_sign * g_val * (1j * k - 1.0 / pre_mics_R[i, j]) * pre_mics_H[i, j]
     
-    H_static = np.real(-np.sum(H, axis=1, dtype=np.complex128))
-    return H_static
+    return G, H
 
-@njit(parallel=True)
-def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_length, hi_order_length, H_static):
+# @njit(parallel=True)
+# @njit(cache=True)
+@njit(parallel=True, cache=True)
+def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length):
     """
     Computes G and H matrices using element normals:
     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
@@ -101,10 +156,77 @@ def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_le
             # Vector from source j to receiver i
             r_vec = r_pt - centers[j]
             r = np.linalg.norm(r_vec)
-            if max_el_length[j] > hi_order_length:
+            if max_el_length[j] > order_length:
                 order_length = max_el_length[j]
+            
+            if i == j: # Analytical self-term approximations skipped
+                continue
+            # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
+            elif r < order_length * 3:
+                # high-order
+                g_val, h_val = compute_high_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
+            elif r < order_length * 5:
+                # mid-order
+                g_val, h_val = compute_mid_order_contribution(
+                    r_pt, 
+                    element_nodes[j], # Array of actual nodal coordinates
+                    normals[j], 
+                    areas[j], 
+                    k, H_sign, inv_4pi
+                )
+                G[i, j] = g_val
+                H[i, j] = h_val
             else:
-                order_length = hi_order_length
+                # for k = 0 all exp == 1, so remove?
+                exp_jkr = np.exp(1j * k * r)
+                # (G-matrix): Free-space 3D Helmholtz Green's function
+                g_val = exp_jkr * inv_4pi / r
+                G[i, j] = g_val * areas[j]
+                
+                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
+                r_dot_n = np.dot(r_vec, normals[j]) / r
+                H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
+    
+    # In Numpy axis=0 ==> cols | axis=1 ==> rows
+    H_static = np.real(-np.sum(H, axis=1, dtype=np.complex128))
+    return H_static
+
+@njit(parallel=True, cache=True)
+def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length, H_static):
+    """
+    Computes G and H matrices using element normals:
+    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
+    - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
+      Hij = (Gij / r) * (jk*r - 1) * r_dot_n
+    centers: (N, 3) array
+    areas: (N,) array
+    normals: (N, 3) array
+    k: wave number (complex or float)
+    Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
+    max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
+    """
+    n_els = len(centers)    # number of BEM elements
+    inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+    # Build 2D complex matrices
+    G = np.zeros((n_els, n_els), dtype=np.complex128)
+    H = np.zeros((n_els, n_els), dtype=np.complex128)
+
+    for i in prange(n_els):
+        r_pt = centers[i]
+        for j in range(n_els):
+            # Vector from source j to receiver i
+            r_vec = r_pt - centers[j]
+            r = np.linalg.norm(r_vec)
+            if max_el_length[j] > order_length:
+                order_length = max_el_length[j]
             
             if i == j: # Analytical self-term approximations for diagonal terms
                 G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
@@ -167,7 +289,7 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
             # Velocity is known (v), Pressure (p) is unknown
             A[:, j] += H[:, j]
             B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
-            # 1.1 Simultaneous VELO + IMPE (Robin BC)
+            # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
             if 'IMPE' in bc:
                 # Admittance logic: v = p / Z. 
                 # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
@@ -259,8 +381,8 @@ def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
             
     return p_final, v_final
 
-@njit(parallel=True)
-def calculate_field_points(mic_centers, element_nodes, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega, order_length, H_sign):
+@njit(parallel=True, cache=True)
+def pre_mics(mic_centers, bem_centers, bem_normals):
     """
     Pass 2: Projects solved surface (BEM) results onto Microphone points.
     mic_centers: mics nodal coords.
@@ -268,8 +390,37 @@ def calculate_field_points(mic_centers, element_nodes, bem_centers, bem_areas, b
     """
     num_mics = len(mic_centers)
     num_surf = len(bem_centers)
-    p_mics = np.zeros(num_mics, dtype=np.complex128)
+    pre_mics_G = np.zeros((num_mics, num_surf), dtype=np.float64)
+    pre_mics_H = np.zeros((num_mics, num_surf), dtype=np.float64)
+    pre_mics_R = np.zeros((num_mics, num_surf), dtype=np.float32)
     inv_4pi = 1.0 / (4.0 * np.pi)
+
+    for i in prange(num_mics):
+        for j in range(num_surf):
+            r_vec = mic_centers[i] - bem_centers[j]
+            r = np.linalg.norm(r_vec)
+            pre_mics_R[i, j] = r
+
+            # Green's Function (G) 1/r
+            pre_mics_G[i, j] = inv_4pi / r
+
+            # Dot product of (r_vec) and the surface normal / r
+            r_dot_n = np.dot(r_vec, bem_normals[j]) / r
+            pre_mics_H[i, j] = r_dot_n
+
+    return pre_mics_G, pre_mics_H, pre_mics_R, num_mics
+
+@njit(parallel=True, cache=True)
+def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_surf, v_surf, k, rho_omega, H_sign):
+    """
+    Pass 2: Projects solved surface (BEM) results onto Microphone points.
+    mic_centers: mics nodal coords.
+    bem_centers: BEM elements CoG coords.
+    """
+    # num_mics = len(mic_centers)
+    num_surf = len(bem_areas)
+    p_mics = np.zeros(num_mics, dtype=np.complex128)
+    # inv_4pi = 1.0 / (4.0 * np.pi)
     # TODO: when input VELO present, we have 1 too many '* (1j * rho_omega)' on those els.
     #       to be reviewed in the future.
     v_surf = v_surf * (1j * rho_omega)
@@ -277,26 +428,16 @@ def calculate_field_points(mic_centers, element_nodes, bem_centers, bem_areas, b
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
         for j in range(num_surf):
-            r_vec = mic_centers[i] - bem_centers[j]
-            r = np.linalg.norm(r_vec)
+            # r_vec = mic_centers[i] - bem_centers[j]
+            # r = np.linalg.norm(r_vec)
 
-            # if r < order_length * 0.5:
-            #     # high-order
-            #     g_val, h_val = compute_high_order_contribution(
-            #         mic_centers[i], 
-            #         element_nodes[j], # Array of actual nodal coordinates
-            #         bem_normals[j], 
-            #         bem_areas[j], 
-            #         k, H_sign, inv_4pi
-            #     )
-            # else:
             # Green's Function (G)
-            g_val = np.exp(1j * k * r) * inv_4pi / r
+            g_val = np.exp(1j * k * pre_mics_R[i, j]) * pre_mics_G[i, j]
 
             # Derivative of Green's Function (H)
             # Dot product of (r_vec) and the surface normal / r
-            r_dot_n = np.dot(r_vec, bem_normals[j]) / r
-            h_val = H_sign * g_val * (1j * k - 1.0 / r) * r_dot_n
+            # r_dot_n = np.dot(r_vec, bem_normals[j]) / r
+            h_val = H_sign * g_val * (1j * k - 1.0 / pre_mics_R[i, j]) * pre_mics_H[i, j]
             
             # p_mic = G*v + H*p (integrated over area)
             # TODO: check the sign for interior vs exterior when the time comes.
@@ -304,6 +445,53 @@ def calculate_field_points(mic_centers, element_nodes, bem_centers, bem_areas, b
         p_mics[i] = sum_p
 
     return p_mics
+
+# Superseeded with the above function for speed
+# @njit(parallel=True)
+# def calculate_mics(mic_centers, bem_centers, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega, H_sign):
+#     """
+#     Pass 2: Projects solved surface (BEM) results onto Microphone points.
+#     mic_centers: mics nodal coords.
+#     bem_centers: BEM elements CoG coords.
+#     """
+#     num_mics = len(mic_centers)
+#     num_surf = len(bem_centers)
+#     p_mics = np.zeros(num_mics, dtype=np.complex128)
+#     inv_4pi = 1.0 / (4.0 * np.pi)
+#     # TODO: when input VELO present, we have 1 too many '* (1j * rho_omega)' on those els.
+#     #       to be reviewed in the future.
+#     v_surf = v_surf * (1j * rho_omega)
+
+#     for i in prange(num_mics):
+#         sum_p = 0.0 + 0.0j
+#         for j in range(num_surf):
+#             r_vec = mic_centers[i] - bem_centers[j]
+#             r = np.linalg.norm(r_vec)
+
+#             # if r < order_length * 0.5:
+#             #     # high-order
+#             #     g_val, h_val = compute_high_order_contribution(
+#             #         mic_centers[i], 
+#             #         element_nodes[j], # Array of actual nodal coordinates
+#             #         bem_normals[j], 
+#             #         bem_areas[j], 
+#             #         k, H_sign, inv_4pi
+#             #     )
+#             # else:
+#             # Green's Function (G)
+#             g_val = np.exp(1j * k * r) * inv_4pi / r
+
+#             # Derivative of Green's Function (H)
+#             # Dot product of (r_vec) and the surface normal / r
+#             r_dot_n = np.dot(r_vec, bem_normals[j]) / r
+#             h_val = H_sign * g_val * (1j * k - 1.0 / r) * r_dot_n
+            
+#             # p_mic = G*v + H*p (integrated over area)
+#             # TODO: check the sign for interior vs exterior when the time comes.
+#             sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
+#         p_mics[i] = sum_p
+
+#     return p_mics
 
 ###
 ### 1st ASSEMBLY implementation for BEM element centers only, no gaussian points;

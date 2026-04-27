@@ -258,6 +258,48 @@ def get_tri_points_7p(v1, v2, v3):
     return points, weights
 
 @njit
+def pre_mid_order(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
+    """Integrates G and H kernels over one element using 'TRIA_3p & QUAD_4p' quadrature."""
+    n_nodes = len(element_vertices)
+    
+    # Initialize sums
+    g_sum = 0.0
+    h_sum = 0.0
+    tmp_h_sum = 0.0
+    sum_w = 0.0
+    
+    # 1. Get Integration Points & Weights
+    if n_nodes == 3: # TRIA3
+        pts, wts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
+        n_pts = 3
+    else: # QUAD4
+        pts, wts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
+        n_pts = 4
+    sum_w = np.sum(wts)
+
+    # 2. Sum Contributions
+    for p_idx in range(n_pts):
+        r_vec = receiver_pt - pts[p_idx]
+        r = np.linalg.norm(r_vec)
+        
+        # Kernel math & Integration weights
+        # G Kernel
+        # exp_jkr = np.exp(1j * k * r)
+        # g_val = exp_jkr * inv_4pi / r
+        g_val = inv_4pi / r
+        
+        w_eff = (wts[p_idx] / sum_w) * element_area
+        g_sum += g_val * w_eff
+        
+        # H Kernel
+        dot_prod = np.dot(r_vec, element_normal) / r
+        # tmp_h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * w_eff
+        tmp_h_sum += H_sign * g_val * (- 1.0/r) * dot_prod * w_eff
+        h_sum += dot_prod * w_eff
+        
+    return g_sum, h_sum, tmp_h_sum
+
+@njit
 def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
     """Integrates G and H kernels over one element using 'TRIA_3p & QUAD_4p' quadrature."""
     n_nodes = len(element_vertices)
@@ -298,6 +340,53 @@ def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal
     return g_sum, h_sum
 
 @njit
+def pre_high_order(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
+    """Integrates G and H kernels over one element using 'TRIA_7p & QUAD_9p' quadrature."""
+    n_nodes = len(vertices)
+    
+    # Initialize sums
+    g_sum = 0.0
+    h_sum = 0.0
+    tmp_h_sum = 0.0
+    sum_w = 0.0
+    
+    # 1. Get Integration Points & Weights
+    if n_nodes == 3:
+        pts, wts = get_tri_points_7p(vertices[0], vertices[1], vertices[2])
+        n_pts = 7
+    else:
+        pts, wts = get_quad_points_3x3(vertices[0], vertices[1], vertices[2], vertices[3])
+        n_pts = 9
+    # print("\n", receiver_pt)
+    # print(pts, wts)
+    sum_w = np.sum(wts)
+
+    # 2. Sum Contributions
+    for p in range(n_pts):
+        r_vec = receiver_pt - pts[p]
+        r = np.linalg.norm(r_vec)
+        
+        # G Kernel
+        # exp_jkr = np.exp(1j * k * r)
+        # g_val = exp_jkr * inv_4pi / r
+        g_val = inv_4pi / r
+        
+        # H Kernel derivative
+        dot_prod = np.dot(r_vec, normal) / r
+        # tmp_h_val = H_sign * g_val * (1j * k - 1.0/r) * dot_prod
+        tmp_h_val = H_sign * g_val * (- 1.0/r) * dot_prod
+        h_val = dot_prod
+        
+        # Integration weight
+        w_eff = (wts[p] / sum_w) * area
+            
+        g_sum += g_val * w_eff
+        h_sum += h_val * w_eff
+        tmp_h_sum += tmp_h_val * w_eff
+        
+    return g_sum, h_sum, tmp_h_sum
+
+@njit
 def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
     """Integrates G and H kernels over one element using 'TRIA_7p & QUAD_9p' quadrature."""
     n_nodes = len(vertices)
@@ -322,17 +411,15 @@ def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_si
     for p in range(n_pts):
         r_vec = receiver_pt - pts[p]
         r = np.linalg.norm(r_vec)
+        # Integration weight
+        w_eff = (wts[p] / sum_w) * area
         
         # G Kernel
         exp_jkr = np.exp(1j * k * r)
         g_val = exp_jkr * inv_4pi / r
-        
         # H Kernel derivative
         dot_prod = np.dot(r_vec, normal) / r
         h_val = H_sign * g_val * (1j * k - 1.0/r) * dot_prod
-        
-        # Integration weight
-        w_eff = (wts[p] / sum_w) * area
             
         g_sum += g_val * w_eff
         h_sum += h_val * w_eff
@@ -347,7 +434,7 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=
     P_bem: array of complex values (one per element)
     mic_nodes: dict {nid: [x, y, z]}
     P_mics: array of complex values (one per node)
-    nodal_pressures: array of complex values (one per node)
+    nodal_pressures: output array of complex values (one per node)
     """
     # 1. Determine the size needed for the array
     # We use max_id + 1 so we can index directly by node_id
@@ -369,21 +456,17 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=
         for nid in conn:
             node_sums[nid] += val
             area_sums[nid] += area
-            # count[nid] += 1
     # We iterate through the nodes for Mics, if provided
     if mic_nodes is not None:
         for i, (nid, coords) in enumerate(mic_nodes.items()):
             val = P_mics[i]
             node_sums[nid] += val
             area_sums[nid] = 1
-            # count[nid] = 1
 
     # 3. Perform the average
     # We only divide where area > 0 to avoid DivisionByZero
     # This also gets the nodal results in the right index order for PV output
-    # mask = count > 0
     mask = area_sums > 0
-    # nodal_pressures[mask] = node_sums[mask] / count[mask]
     nodal_pressures[mask] = node_sums[mask] / area_sums[mask]
 
     return nodal_pressures
