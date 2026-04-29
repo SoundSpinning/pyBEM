@@ -4,132 +4,218 @@ import numpy as np
 from numba import njit, prange
 from utils import pre_high_order, pre_mid_order, compute_mid_order_contribution, compute_high_order_contribution
 
-def pre_assembly(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length):
+@njit(parallel=True, cache=True)
+def pre_assembly(element_nodes, centers, areas, normals):
     """
     Pre-Computes G and H (static, k=0) matrices using the input mesh:
     - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
     - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
+    It also pre-computes fast arrays with all GPs info for fast assembly in the solve.
+    element_nodes: BEM elem nodal coords
     centers: (N, 3) array
     areas: (N,) array
     normals: (N, 3) array
-    max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
-    order_length: single value from percentile 95% from max_el_length on all BEM elements.
     """
     n_els = len(centers)    # number of BEM elements
     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
 
-    # Build 2D real matrices; k=0 ==> not complex
-    G = np.zeros((n_els, n_els), dtype=np.float64)
-    H = np.zeros((n_els, n_els), dtype=np.float64)
-    tmp_H = np.zeros((n_els, n_els), dtype=np.float64)
-    R = np.zeros((n_els, n_els), dtype=np.float32)
-
+    # --- STEP 1: Calculate Total GPs ---
+    total_gps = 0
+    gp_per_element = np.zeros(n_els, dtype=np.int64)  # Force i64 for numba to work
+    # Here we aim at all possible GPs for centroid, mid- and high-order integration options.
     for i in range(n_els):
-        r_pt = centers[i]
-        for j in range(n_els):
-            # Vector from source j to receiver i
-            r_vec = r_pt - centers[j]
-            r = np.linalg.norm(r_vec)
-            R[i, j] = r
-            if max_el_length[j] > order_length:
-                order_length = max_el_length[j]
-            
-            if i == j: # Analytical self-term approximations for diagonal terms
-                G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
-                # H[i, j] = 0.5  # Jump term for smooth surfaces
-                # H[i, j] = H_static[j]
-            # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-            elif r < order_length * 3:
-                # high-order
-                g_val, h_val, tmp_h_val = pre_high_order(
-                # g_val, h_val = compute_high_order_contribution(
-                    r_pt, 
-                    element_nodes[j], # Array of actual nodal coordinates
-                    normals[j], 
-                    areas[j], 
-                    k, H_sign, inv_4pi
-                )
-                G[i, j] = g_val
-                H[i, j] = h_val
-                tmp_H[i, j] = tmp_h_val
-            elif r < order_length * 5:
-                # mid-order
-                g_val, h_val, tmp_h_val = pre_mid_order(
-                # g_val, h_val = compute_mid_order_contribution(
-                    r_pt, 
-                    element_nodes[j], # Array of actual nodal coordinates
-                    normals[j], 
-                    areas[j], 
-                    k, H_sign, inv_4pi
-                )
-                G[i, j] = g_val
-                H[i, j] = h_val
-                tmp_H[i, j] = tmp_h_val
-            else:
-                # exp_jkr = np.exp(1j * k * r)
-                # (G-matrix): Free-space 3D Helmholtz Green's function
-                # g_val = exp_jkr * inv_4pi / r
-                g_val = inv_4pi / r
-                G[i, j] = g_val * areas[j]
-                
-                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-                r_dot_n = np.dot(r_vec, normals[j]) / r
-                # tmp_H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
-                tmp_H[i, j] = H_sign * (G[i, j]) * (- 1.0 / r) * r_dot_n
-                H[i, j] = r_dot_n
+        elem_n_nodes = len(element_nodes[i])
+        if elem_n_nodes == 3:
+            num_gps = 1+3+7
+        else:
+            num_gps = 1+4+9
+        gp_per_element[i] = num_gps
+        total_gps += num_gps
+
+    print(f"""
+ For ( {n_els} ) BEM elements, found a total of ( {total_gps} ) possible Integration / Gauss Points.""")
     
-    # [Hii] = SUM of the [Hij] off diagonal terms to improve accuracy on the Jump term
-    # In Numpy axis=0 ==> cols | axis=1 ==> rows
-    H_static = np.real(-np.sum(tmp_H, axis=1, dtype=np.complex128))
-    print(H_static)
-    for i in range(n_els):
-        H[i, i] = H_static[i]
-    del tmp_H, H_static
-    return G, H, R, n_els
+    # --- STEP 2: Pre-allocate with Exact Size for speed ---
+    # These are "Flat Lists" with all GPoints + dtype to save on RAM
+    GP_start_idx = np.zeros(n_els, dtype=np.int64)
+    offset = 0
+    for j in range(n_els):
+        GP_start_idx[j] = offset
+        offset += gp_per_element[j]
 
-@njit(parallel=True)
-def main_assembly(pre_G, pre_H, pre_R, num_elems, k, H_sign):
+    # Static Influence Matrices
+    # Rows = Centroids (n_els), Cols = Every single GP in the system
+    G_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+    H_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+    R_map = np.zeros((n_els, total_gps), dtype=np.float32)
+
+    cursor = 0
+    for j in prange(n_els):      # Parallel Loop over SOURCE elements
+        n_pts = gp_per_element[j]
+        cursor = GP_start_idx[j]
+        nj = normals[j]          # THIS element normal
+        nodes = element_nodes[j] # Node coords for THIS element
+        area = areas[j]          # Area for THIS element
+        # temp arrays of Flat Lists
+        pts_coords = np.zeros((n_pts, 3), dtype=np.float64)
+        pts_weights = np.zeros(n_pts, dtype=np.float64)
+        # Calculate ALL possible GPs(coords, weights) per SOURCE element
+        if n_pts == 11: # TRIAs: 1 + 3 + 7 GPs levels
+            mid_gp_idx = 3 + 1
+        elif n_pts == 14: # QUADs: 1 + 4 + 9 GPs levels
+            mid_gp_idx = 4 + 1
+        
+        # Integration options:
+        # used later in solver as a function of distance receiver --> source elements:
+        # CENTROID (1pnt):
+        pts_coords[0] = centers[j]
+        pts_weights[0] = 1 * area
+        # MID-order (3pnts or 4pnts):
+        pts, weights = pre_mid_order(nodes, area)
+        pts_coords[1:mid_gp_idx] = pts
+        pts_weights[1:mid_gp_idx] = weights
+        # HIGH-order (7pnts or 9pnts):
+        pts, weights = pre_high_order(nodes, area)
+        pts_coords[mid_gp_idx:] = pts
+        pts_weights[mid_gp_idx:] = weights
+
+        # --- STEP 3: Fill the "Flat Lists" ---
+        for i in range(n_els): # Loop over RECEIVER elements
+            r_pt = centers[i]
+            # Explicit loop is "The Numba Way" - no axis issues here
+            for p in range(n_pts):
+                # 1. Calculate the vector from GP to Receiver Center
+                rx = r_pt[0] - pts_coords[p, 0]
+                ry = r_pt[1] - pts_coords[p, 1]
+                rz = r_pt[2] - pts_coords[p, 2]
+                # 2. Distance math
+                r2 = rx*rx + ry*ry + rz*rz
+                if r2 < 1e-18: # Safety for self-term
+                    continue
+                r = np.sqrt(r2)
+                idx = cursor + p
+                R_map[i, idx] = r
+
+                # Fill Static Influence Matrices
+                # 3. Bake the G Static Map: G = weight / (4 * pi * r)
+                g_base = pts_weights[p] * inv_4pi / r
+                G_static_map[i, idx] = g_base
+
+                # 4. Bake the H Static Map: H = G_static * (dot / r^2)
+                dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
+                H_static_map[i, idx] = g_base * (dot / r2)
+
+    # Calc the static [H] diagonal self terms
+    H_diag_static = np.zeros(n_els, dtype=np.float64)
+    G_diag_static = np.zeros(n_els, dtype=np.float64)
+    for i in range(n_els):
+        row_sum = 0.0
+        G_diag_static[i] = np.sqrt(areas[i] / np.pi) * 2.0 * inv_4pi
+        for j in range(n_els):
+            if i == j: 
+                continue # Skip the pre-diagonals in ther sum
+            
+            n_pts = gp_per_element[j]
+            if n_pts == 11:   # TRIAs: 1 + 3 + 7
+                start = GP_start_idx[j] + 4
+                n_pts = 7
+            elif n_pts == 14: # QUADs: 1 + 4 + 9
+                start = GP_start_idx[j] + 5
+                n_pts = 9
+            # SUM ONLY HIGH ORDER from the static pre-baked H values for this source element
+            for p in range(start, start + n_pts):
+                row_sum += H_static_map[i, p]
+
+        # The BEM Diagonal Balance
+        H_diag_static[i] = -row_sum
+
+    return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
+
+@njit(parallel=True, cache=True)
+def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length):
     """
-    Computes G and H matrices using element normals:
-    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
-    - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
-      Hij = (Gij / r) * (jk*r - 1) * r_dot_n
-    centers: (N, 3) array
-    areas: (N,) array
-    normals: (N, 3) array
+    Computes G and H matrices PRE static ones + dynamic terms:
+    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) * G_static
+    - Derivative Kernel (H-matrix): Hij = H_sign * exp(jk*r) * (jk*r - 1) * H_static
     k: wave number (complex or float)
     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
     max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
     """
-    n_els = num_elems    # number of BEM elements
-    # inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+    n_els = len(H_diag_static)    # number of BEM elements
+
     # Build 2D complex matrices
     G = np.zeros((n_els, n_els), dtype=np.complex128)
     H = np.zeros((n_els, n_els), dtype=np.complex128)
-    R = pre_R
 
     for i in prange(n_els):
-        # r_pt = centers[i]
-        for j in range(n_els):
+        for j in range(n_els):  # from source j to receiver i
+            start = GP_start_idx[j]
+            # We use the centroid (the first point in the block) for the distance check
+            r_centroid = R_map[i, start]
+
+            # Thresholds for mid- or high-order GPs based on distance logic
+            if max_el_length[j] > order_length:
+                order_length = max_el_length[j]
+            limit_high = order_length * 3
+            limit_mid = order_length * 5
+
+            # Identify element types by total_GPs count from PRE
+            # Used to set limits between different integration orders.
+            total_gps = gp_per_element[j]
+            is_tria = (total_gps == 11) # TRIA: 1 (Cent) + 3 (Mid) + 7 (High)
+            # This is where the High-Order slice starts
+            high_start_idx = 4 if is_tria else 5   # QUAD: 1 (Cent) + 4 (Mid) + 9 (High)
+
             if i == j:
-                G[i, j] = pre_G[i, j]
-                H[i, j] = pre_H[i, j]
+                G[i, j] = G_diag_static[j]
+                H[i, j] = H_diag_static[j]
+            
+            elif r_centroid < limit_high:
+                # --- HIGH ORDER (Full Integration) ---
+                # Sum all GPs for this order (e.g., indices 0 to 13)
+                g_sum = 0.0 + 0.0j
+                h_sum = 0.0 + 0.0j
+                p_start, p_end = high_start_idx, total_gps
+
+                for p in range(p_start, p_end):
+                    r_p = R_map[i, p]
+                    exp_jkr = np.exp(1j * k * r_p)
+                    # G logic
+                    g_sum += exp_jkr * G_static_map[i, p]
+                    # H logic: H_static already contains r_dot_n/r^2
+                    h_sum += H_sign * exp_jkr * (1.0 - 1j * k * r_p) * H_static_map[i, p]
+
+                G[i, j] = g_sum
+                H[i, j] = h_sum
+
+            elif r_centroid < limit_mid:
+                # --- MID ORDER (Reduced Integration) ---
+                g_sum = 0.0 + 0.0j
+                h_sum = 0.0 + 0.0j
+                p_start, p_end = 1, high_start_idx
+
+                for p in range(p_start, p_end):
+                    r_p = R_map[i, p]
+                    exp_jkr = np.exp(1j * k * r_p)
+                    g_sum += exp_jkr * G_static_map[i, p]
+                    h_sum += H_sign * exp_jkr * (1.0 - 1j * k * r_p) * H_static_map[i, p]
+
+                G[i, j] = g_sum
+                H[i, j] = h_sum
+            
             else:
-                exp_jkr = np.exp(1j * k * R[i, j])
-                # (G-matrix): Free-space 3D Helmholtz Green's function
-                g_val = exp_jkr * pre_G[i, j]
-                G[i, j] = g_val
-                
-                # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-                # r_dot_n = np.dot(r_vec, normals[j]) / r
-                # H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / R[i, j])
-                H[i, j] = H_sign * g_val * (1j * k - 1.0 / R[i, j]) * pre_H[i, j]
-                # h_val = H_sign * g_val * (1j * k - 1.0 / pre_mics_R[i, j]) * pre_mics_H[i, j]
+                # --- FAR FIELD (Centroid Only) ---
+                # 1. Get the Correct Index for the Centroid (the first GP in the block)
+                r_p = R_map[i, start]
+                # 2. Phase term
+                exp_jkr = np.exp(1j * k * r_p)
+                # 3. G: exp(jkr) * static_G (which is weight/4pi*r)
+                G[i, j] = exp_jkr * G_static_map[i, start]
+                # 4. H
+                H[i, j] = H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, start]
     
     return G, H
 
-# @njit(parallel=True)
-# @njit(cache=True)
 @njit(parallel=True, cache=True)
 def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length):
     """

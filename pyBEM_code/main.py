@@ -13,6 +13,8 @@ from exporter import PVExporter
 from utils import prepare_geometry, calculate_signed_volume, averaged_at_nodes
 from constants import DEBUG, P_REF
 
+np.set_printoptions(threshold=100)
+
 def start_pybem_app():
     # 0. Ask the user for the file name
     print(f"{__solver__}")
@@ -187,13 +189,35 @@ def start_pybem_app():
             log.write(str_CPUs)
             log.flush() # Forces writing to disk, so we can tail the .log file in real-time
         
-        # Calculate the static terms (diagonal) of the [H] matrix, k=0
+        # Calculate the static [G] & [H] matrices, k=0
         k = 0
-        H_static = assemble_static(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, order_length)
-        # pre_G, pre_H, pre_R, num_elems = pre_assembly(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, order_length)
+        # OLD way, not used
+        # H_static = assemble_static(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, order_length)
+        # print(H_static)
+
+        gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static = pre_assembly(bem_nodal_coords, bem_centers, bem_areas, bem_normals)
+#         print(f"""
+#  GP_start_idx: num_dim = {GP_start_idx.ndim} | shape {GP_start_idx.shape} | size {GP_start_idx.size}
+#     {GP_start_idx[:]}
+ 
+#  R_map: num_dim = {R_map.ndim} | shape {R_map.shape} | size {R_map.size}
+#     {R_map[:]}
+ 
+#  G_static_map: num_dim = {G_static_map.ndim} | shape {G_static_map.shape} | size {G_static_map.size}
+#     {G_static_map[:]}
+ 
+#  H_static_map: num_dim = {H_static_map.ndim} | shape {H_static_map.shape} | size {H_static_map.size}
+#     {H_static_map[:]}
+ 
+#  G_diag_static: num_dim = {G_diag_static.ndim} | shape {G_diag_static.shape} | size {G_diag_static.size}
+#     {G_diag_static[:]}
+
+#  H_diag_static: num_dim = {H_diag_static.ndim} | shape {H_diag_static.shape} | size {H_diag_static.size}
+#     {H_diag_static[:]}
+# """)
+
         # Checks on assembly matrices
         # np.matrix.tofile(pre_H[:], 'pre_H_matrix.txt', sep=' ', format='%s')
-        # print(H_static)
         t_pre_1 = time.time()
         t_pre_assy = t_pre_1 - global_t0
 
@@ -233,10 +257,11 @@ def start_pybem_app():
 
                 # 2. Matrix Assembly: Assemble G and H matrices (The heavy math)
                 # Using the pre-calculated NumPy matrices from pre_assembly()
-                # OLD method
-                G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, order_length, H_static)
+                G_bem, H_bem = main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length)
 
-                # G_bem, H_bem = main_assembly(pre_G, pre_H, pre_R, num_elems, k, H_sign)
+                # OLD method
+                # G_bem, H_bem = assemble_system(bem_nodal_coords, bem_centers, bem_areas, bem_normals, k, H_sign, max_el_length, order_length, H_static)
+
                 t_assembly = time.time() - t_asm_0
                 global_assy += t_assembly
 
