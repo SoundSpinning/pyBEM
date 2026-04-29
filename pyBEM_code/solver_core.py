@@ -177,13 +177,14 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
                 h_sum = 0.0 + 0.0j
                 p_start, p_end = high_start_idx, total_gps
 
-                for p in range(p_start, p_end):
-                    r_p = R_map[i, p]
+                for p_offset in range(p_start, p_end):
+                    p_global = start + p_offset # Shift to the correct element's data
+                    r_p = R_map[i, p_global]
                     exp_jkr = np.exp(1j * k * r_p)
                     # G logic
-                    g_sum += exp_jkr * G_static_map[i, p]
+                    g_sum += exp_jkr * G_static_map[i, p_offset]
                     # H logic: H_static already contains r_dot_n/r^2
-                    h_sum += H_sign * exp_jkr * (1.0 - 1j * k * r_p) * H_static_map[i, p]
+                    h_sum += H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, p_global]
 
                 G[i, j] = g_sum
                 H[i, j] = h_sum
@@ -194,11 +195,12 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
                 h_sum = 0.0 + 0.0j
                 p_start, p_end = 1, high_start_idx
 
-                for p in range(p_start, p_end):
-                    r_p = R_map[i, p]
+                for p_offset in range(p_start, p_end):
+                    p_global = start + p_offset # Shift to the correct element's data
+                    r_p = R_map[i, p_offset]
                     exp_jkr = np.exp(1j * k * r_p)
-                    g_sum += exp_jkr * G_static_map[i, p]
-                    h_sum += H_sign * exp_jkr * (1.0 - 1j * k * r_p) * H_static_map[i, p]
+                    g_sum += exp_jkr * G_static_map[i, p_offset]
+                    h_sum += H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, p_offset]
 
                 G[i, j] = g_sum
                 H[i, j] = h_sum
