@@ -10,7 +10,7 @@ from version import __solver__
 from pmx_parser import PMXParser
 from solver_core import pre_assembly, pre_mics, main_assembly, assemble_static, assemble_system, solve_bem_system, calculate_mics
 from exporter import PVExporter
-from utils import prepare_geometry, calculate_signed_volume, averaged_at_nodes
+from utils import prepare_geometry, get_geo_info, averaged_at_nodes
 from constants import DEBUG, P_REF
 
 np.set_printoptions(threshold=100)
@@ -51,6 +51,7 @@ def start_pybem_app():
         sorted_node_ids = list(sorted_nodes.keys())
         sorted_bem_els = dict(sorted(parser.elements.items()))
         sorted_bem_ids = list(sorted_bem_els.keys())
+        # print(sorted_bem_els)
 
         sorted_mics_els = {}
         # If mics mesh exists in the model
@@ -105,12 +106,22 @@ def start_pybem_app():
         # order_length = np.max(max_el_length)
         order_length = np.percentile(max_el_length, 95)
 
-        # 5. CHECK on BEM volume: is it interior or exterior, 
-        #    or check for holes / free edges in mesh.
-        bem_total_vol, bem_total_area, bem_CoG = calculate_signed_volume(bem_centers, bem_areas, bem_normals)
-        log_info += f"""
+        # 5. CHECKs on BEM input mesh: is it interior or exterior, 
+        #    check for holes / free edges in mesh and for normals consistency
+        bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(sorted_bem_els, bem_centers, bem_areas, bem_normals)
+
+        # Check for failure conditions
+        mesh_is_broken = (free_edges > 0 or conflicts > 0)
+        log_info += (f"""
  INPUT MESH: Total BEM AREA is: ( {bem_total_area:.4} L**2 )
-             CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L
+             CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L""")
+        if not mesh_is_broken:  # if all OK
+            log_info += (f"""
+             BEM element normals checked:
+             ( i ) Normals appear to be aligned consistently.\n""")
+
+        # LOG info below based on the Divergence Theorem
+        log_info += f"""
              ( i ) The MAX BEM element aspect ratio found is: ( {np.max(elem_ratio):.2f} )
                    Mesh element size is (approx.): ( {order_length:.2f} L )
              ( i ) The MAX Freq suggested is (approx.): ( {parser.speed_of_sound / (8*order_length):.1f}Hz )
@@ -120,23 +131,51 @@ def start_pybem_app():
             H_sign = -1.0
             log_info += (f"""
              Closed (+) Volume detected: ( {bem_total_vol:.4} L**3 )
-             ( i ) Normals point OUTWARDS ==> {BEM_TYPE} analysis expected.\n""")
+             ( i ) Normals point OUTWARDS ==> Assuming {BEM_TYPE} analysis.\n""")
         elif bem_total_vol < -1e-9:
             BEM_TYPE = "EXTERIOR"
             H_sign = 1.0
             log_info += (f"""
              Closed (-) Volume detected: ( {bem_total_vol:.4} L**3 )
-             ( i ) Normals point INWARDS ==> {BEM_TYPE} analysis expected.\n""")
+             ( i ) Normals point INWARDS ==> Assuming {BEM_TYPE} analysis.\n""")
         else:
             log_info += (f"""
- ERROR       Open surface or zero volume detected. CHECK your mesh and normals.
-             ( !e! ) BEM element normals must be consistent and pointing AWAY from the acoustic domain.
+ ERROR       Mesh topology is invalid for a closed BEM domain. 
+             CHECK for: 
+                1. Unconnected edges, free edges and holes.
+                2. Inconsistent normal directions.
+             ( i ) BEM (Direct) requires a water tight shell mesh, and 
+                   element normals must be consistent and pointing AWAY from the acoustic domain to be analysed.
 """)
             print(f"{log_info}")
             with open(log_f, "w") as log:
                 log.write(log_top)
                 log.write(log_info)
             raise ValueError(f"\n ERROR in PRE-PROCESSING: see '{log_f}' for more details.\n")
+    
+        # Report if mesh checks failure conditions apply
+        if mesh_is_broken:
+            log_info += "\n" + "!"*60 + "\n"
+            log_info += " FATAL ERROR: MESH TOPOLOGY VIOLATION\n"
+            log_info += "!"*60 + "\n"
+
+            if free_edges > 0:
+                log_info += f" [!] FREE EDGES: {free_edges} unshared edges detected.\n"
+                log_info += "     REASON: The mesh is not water-tight. BEM requires a closed manifold.\n"
+
+            if conflicts > 0:
+                log_info += f" [!] NORMAL CONFLICTS: {conflicts} normal inconsistencies.\n"
+                log_info += "     REASON: BEM elements normals are not consistent.\n"
+
+            log_info += "!"*60 + "\n"
+            log_info += " SOLUTION: Fix the mesh in your Pre-processor and re-run.\n ( i ) BEM (Direct) requires a water tight shell mesh, and\n element normals must be consistent and pointing AWAY from the acoustic domain to be analysed."
+
+            # Write to file so the user can actually read what happened
+            with open(log_f, "w") as log:
+                log.write(log_top + log_info)
+
+            # Raise the error to stop the solver immediately
+            raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: ( {free_edges} ) free edges, ( {conflicts} ) normal misalignments. See '{log_f}'")
 
         # 6. Setup BCs
         # we get BCs at the ready for the solver
@@ -238,7 +277,15 @@ def start_pybem_app():
             log.write(f"\n{'=' * 98}\n")
             log.flush() # Forces writing to disk, so we can tail the .log file in real-time
 
-            # --- Freq loop: The progress bar ---
+            # Manual control for the integration level (Centroid, mid-, high-order)
+            # based on an avrg element size from largest edge in all BEM elements.
+            # Multiply by a high number to use on all high-order integration.
+            # See `main_assembly()` for the logic behind it.
+            # order_length = order_length * 100
+            
+            ### 
+            ### --- FREQ LOOP & The progress bar ---
+            ### 
             pbar = tqdm(parser.frequencies, desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e", mininterval=0.10)
             for f in pbar:
                 # Update the bar's suffix so we show the freq value

@@ -1,5 +1,6 @@
 import numpy as np
 from numba import njit
+from collections import defaultdict
 
 def calculate_element_properties(nodes, connectivity):
     """
@@ -59,21 +60,78 @@ def prepare_geometry(nodes, elements):
         unit_normals.append(n)
         ratios.append(max_ratio)
         lengths.append(max_len)
-    return nodal_coords, np.array(centers), np.array(areas), np.array(unit_normals), np.array(ratios), np.array(lengths)
+    return nodal_coords, np.array(centers), np.array(areas), np.array(unit_normals, dtype=np.float64), np.array(ratios), np.array(lengths)
 
-def calculate_signed_volume(centers, areas, normals):
+def get_geo_info(elements, centers, areas, normals):
     """
-    Calculates from the BEM elements: volume, total area & CoG.
+    Calculates mesh metrics and audits normal consistency.
+    Args:
+        elements: dict {el_id: [node_ids]}
+        centers:  (N, 3) array of element centroids
+        areas:    (N,)   array of element areas
+        normals:  (N, 3) array of element unit normals
     """
-    # The sum of (Center dot Normal) * Area for volume & CoG calcs
-    # 1.0/3.0 because it's a 3D volume integral
-    volume = np.sum([np.dot(c, n) * a for c, a, n in zip(centers, areas, normals)]) / 3.0
-    area = np.sum([areas])
-    CoGx = np.sum([(centers[i,0]) * areas[i] for i in range(len(centers))]) / area 
-    CoGy = np.sum([(centers[i,1]) * areas[i] for i in range(len(centers))]) / area 
-    CoGz = np.sum([(centers[i,2]) * areas[i] for i in range(len(centers))]) / area 
-    CoG = [CoGx, CoGy, CoGz]
-    return volume, area, CoG
+    
+    # --- 1. PHYSICAL CHARACTERISTICS ---
+    # Vectorized Volume: V = 1/3 * sum((C_i dot N_i) * A_i)
+    # np.einsum is a very efficient way to do (centers * normals).sum(axis=1)
+    # Centroids dot Normals weighted by Area
+    dots = np.einsum('ij,ij->i', centers, normals)
+    volume = np.sum(dots * areas) / 3.0
+    # Total BEM AREA
+    total_area = np.sum(areas)
+    # CoG: Weighted average of centers by area
+    # (N,3) * (N,1) summed over N, then divided by scalar total_area
+    CoG = np.sum(centers * areas[:, np.newaxis], axis=0) / total_area
+
+    # --- 2. TOPOLOGICAL AUDIT (Edge Consistency) ---
+    # We check if every shared edge is traversed in opposite directions
+    edge_map = defaultdict(list)
+    conflicts = 0
+    
+    # We iterate over the values of the dictionary [node_ids]
+    for nodes in elements.values():
+        num_nodes = len(nodes)
+        
+        # Build the closed loop of edges for this element
+        # TRI: (0,1), (1,2), (2,0)
+        # QUAD: (0,1), (1,2), (2,3), (3,0)
+        edges = [(nodes[j], nodes[(j + 1) % num_nodes]) for j in range(num_nodes)]
+        
+        for e in edges:
+            # Sorted tuple is our unique edge ID (e.g., (10, 25))
+            edge_key = tuple(sorted(e))
+            
+            # Check if this edge has been visited by another element
+            for existing_edge in edge_map[edge_key]:
+                # If the existing edge was traversed in the SAME direction, 
+                # then one element is 'winding' clockwise and the other counter-clockwise.
+                # This is a Right-Hand Rule violation!
+                if existing_edge == e:
+                    conflicts += 1
+            
+            edge_map[edge_key].append(e)
+
+    # --- 3. MANIFOLD CHECK (Water-tightness) ---
+    # In a closed BEM mesh, every edge MUST be shared by exactly 2 elements
+    # If len is 1, there is a hole. If len > 2, it's non-manifold (invalid)
+    open_edges = sum(1 for e_list in edge_map.values() if len(e_list) != 2)
+
+    return volume, total_area, CoG, conflicts, open_edges
+
+# def get_geo_info(centers, areas, normals):
+#     """
+#     Calculates from the BEM elements: volume (Divergence Theorem), total area & CoG.
+#     """
+#     # Divergence Theorem: The sum of (Center dot Normal) * Area for volume & CoG calcs
+#     # 1.0/3.0 because it's a 3D volume integral
+#     volume = np.sum([np.dot(c, n) * a for c, a, n in zip(centers, areas, normals)]) / 3.0
+#     area = np.sum([areas])
+#     CoGx = np.sum([(centers[i,0]) * areas[i] for i in range(len(centers))]) / area 
+#     CoGy = np.sum([(centers[i,1]) * areas[i] for i in range(len(centers))]) / area 
+#     CoGz = np.sum([(centers[i,2]) * areas[i] for i in range(len(centers))]) / area 
+#     CoG = [CoGx, CoGy, CoGz]
+#     return volume, area, CoG
 
 # ---------------------------------
 ###

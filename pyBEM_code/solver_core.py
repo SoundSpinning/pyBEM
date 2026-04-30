@@ -153,12 +153,6 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
             # We use the centroid (the first point in the block) for the distance check
             r_centroid = R_map[i, start]
 
-            # Thresholds for mid- or high-order GPs based on distance logic
-            if max_el_length[j] > order_length:
-                order_length = max_el_length[j]
-            limit_high = order_length * 3
-            limit_mid = order_length * 5
-
             # Identify element types by total_GPs count from PRE
             # Used to set limits between different integration orders.
             total_gps = gp_per_element[j]
@@ -166,58 +160,96 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
             # This is where the High-Order slice starts
             high_start_idx = 4 if is_tria else 5   # QUAD: 1 (Cent) + 4 (Mid) + 9 (High)
 
+            # Thresholds for mid- or high-order GPs based on distance logic
+            # Local thresholds to avoid parallel race conditions
+            limit_high = order_length * 3
+            limit_mid = order_length * 5
+
             if i == j:
                 G[i, j] = G_diag_static[j]
                 H[i, j] = H_diag_static[j]
             
-            elif r_centroid < limit_high:
-                # --- HIGH ORDER (Full Integration) ---
-                # Sum all GPs for this order (e.g., indices 0 to 13)
-                g_sum = 0.0 + 0.0j
-                h_sum = 0.0 + 0.0j
-                p_start, p_end = high_start_idx, total_gps
+            else:
+                # Set the integration slice
+                if r_centroid < limit_high:
+                    p_start, p_end = high_start_idx, total_gps
+                elif r_centroid < limit_mid:
+                    p_start, p_end = 1, high_start_idx
+                else:
+                    p_start, p_end = 0, 1
 
+                g_temp = 0.0 + 0.0j
+                h_temp = 0.0 + 0.0j
+            
                 for p_offset in range(p_start, p_end):
-                    p_global = start + p_offset # Shift to the correct element's data
+                    p_global = start + p_offset
+
                     r_p = R_map[i, p_global]
                     exp_jkr = np.exp(1j * k * r_p)
-                    # G logic
-                    g_sum += exp_jkr * G_static_map[i, p_offset]
-                    # H logic: H_static already contains r_dot_n/r^2
-                    h_sum += H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, p_global]
 
-                G[i, j] = g_sum
-                H[i, j] = h_sum
+                    # Fetch pre-baked static terms using global index
+                    gs = G_static_map[i, p_global]
+                    hs = H_static_map[i, p_global]
 
-            elif r_centroid < limit_mid:
-                # --- MID ORDER (Reduced Integration) ---
-                g_sum = 0.0 + 0.0j
-                h_sum = 0.0 + 0.0j
-                p_start, p_end = 1, high_start_idx
+                    g_temp += exp_jkr * gs
+                    # Using (1 - jkr) convention to match standard exterior/interior derivatives
+                    h_temp += H_sign * exp_jkr * (1j * k * r_p - 1.0) * hs
 
-                for p_offset in range(p_start, p_end):
-                    p_global = start + p_offset # Shift to the correct element's data
-                    r_p = R_map[i, p_offset]
-                    exp_jkr = np.exp(1j * k * r_p)
-                    g_sum += exp_jkr * G_static_map[i, p_offset]
-                    h_sum += H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, p_offset]
-
-                G[i, j] = g_sum
-                H[i, j] = h_sum
-            
-            else:
-                # --- FAR FIELD (Centroid Only) ---
-                # 1. Get the Correct Index for the Centroid (the first GP in the block)
-                r_p = R_map[i, start]
-                # 2. Phase term
-                exp_jkr = np.exp(1j * k * r_p)
-                # 3. G: exp(jkr) * static_G (which is weight/4pi*r)
-                G[i, j] = exp_jkr * G_static_map[i, start]
-                # 4. H
-                H[i, j] = H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, start]
-    
+                G[i, j] = g_temp
+                H[i, j] = h_temp
     return G, H
 
+            # if max_el_length[j] > order_length:
+            #     order_length = max_el_length[j]
+            # limit_high = order_length * 3
+            # limit_mid = order_length * 5
+
+            # elif r_centroid < limit_high:
+            #     # --- HIGH ORDER (Full Integration) ---
+            #     # Sum all GPs for this order (e.g., indices 0 to 13)
+            #     g_sum = 0.0 + 0.0j
+            #     h_sum = 0.0 + 0.0j
+            #     p_start, p_end = high_start_idx, total_gps
+
+            #     for p_offset in range(p_start, p_end):
+            #         p_global = start + p_offset # Shift to the correct element's data
+            #         r_p = R_map[i, p_global]
+            #         exp_jkr = np.exp(1j * k * r_p)
+            #         # G logic
+            #         g_sum += exp_jkr * G_static_map[i, p_global]
+            #         # H logic: H_static already contains r_dot_n/r^2
+            #         h_sum += H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, p_global]
+
+            #     G[i, j] = g_sum
+            #     H[i, j] = h_sum
+
+            # elif r_centroid < limit_mid:
+            #     # --- MID ORDER (Reduced Integration) ---
+            #     g_sum = 0.0 + 0.0j
+            #     h_sum = 0.0 + 0.0j
+            #     p_start, p_end = 1, high_start_idx
+
+            #     for p_offset in range(p_start, p_end):
+            #         p_global = start + p_offset # Shift to the correct element's data
+            #         r_p = R_map[i, p_global]
+            #         exp_jkr = np.exp(1j * k * r_p)
+            #         g_sum += exp_jkr * G_static_map[i, p_global]
+            #         h_sum += H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, p_global]
+
+            #     G[i, j] = g_sum
+            #     H[i, j] = h_sum
+            
+            # else:
+            #     # --- FAR FIELD (Centroid Only) ---
+            #     # 1. Get the Correct Index for the Centroid (the first GP in the block)
+            #     r_p = R_map[i, start]
+            #     # 2. Phase term
+            #     exp_jkr = np.exp(1j * k * r_p)
+            #     # 3. G: exp(jkr) * static_G (which is weight/4pi*r)
+            #     G[i, j] = exp_jkr * G_static_map[i, start]
+            #     # 4. H
+            #     H[i, j] = H_sign * exp_jkr * (1j * k * r_p - 1.0) * H_static_map[i, start]
+    
 @njit(parallel=True, cache=True)
 def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length):
     """
