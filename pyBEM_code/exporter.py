@@ -89,7 +89,7 @@ class PVExporter:
         nodal_pressures: array of complex values
         group_ids: dict or array of integers (1 for BEM, 2 for Mics)
         """
-        filename = f"Result_{freq:.1f}Hz.vtu"
+        filename = f"Freq_{freq:.1f}Hz.vtu"
         filepath = os.path.join(self.pv_dir, filename)
         
         with open(filepath, 'w') as f:

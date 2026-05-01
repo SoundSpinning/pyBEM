@@ -1,6 +1,14 @@
 import numpy as np
 from numba import njit
 from collections import defaultdict
+import psutil
+import os
+
+def get_ram():
+    process = psutil.Process(os.getpid())
+    # rss is the Resident Set Size (actual RAM used) in bytes
+    # return process.memory_info().rss / (1024**2) # Convert to MB
+    return process.memory_info().rss / (1000**2) # Convert to MB
 
 def calculate_element_properties(nodes, connectivity):
     """

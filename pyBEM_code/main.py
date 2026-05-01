@@ -10,7 +10,7 @@ from version import __solver__
 from pmx_parser import PMXParser
 from solver_core import pre_assembly, pre_mics, main_assembly, assemble_static, assemble_system, solve_bem_system, calculate_mics
 from exporter import PVExporter
-from utils import prepare_geometry, get_geo_info, averaged_at_nodes
+from utils import get_ram, prepare_geometry, get_geo_info, averaged_at_nodes
 from constants import DEBUG, P_REF
 
 np.set_printoptions(threshold=100)
@@ -235,6 +235,8 @@ def start_pybem_app():
         # print(H_static)
 
         gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static = pre_assembly(bem_nodal_coords, bem_centers, bem_areas, bem_normals)
+
+
 #         print(f"""
 #  GP_start_idx: num_dim = {GP_start_idx.ndim} | shape {GP_start_idx.shape} | size {GP_start_idx.size}
 #     {GP_start_idx[:]}
@@ -264,16 +266,18 @@ def start_pybem_app():
         if parser.mics_elements:
             pre_mics_G, pre_mics_H, pre_mics_R, num_mics = pre_mics(sorted_mics_centers, bem_centers, bem_normals)
 
+        # get RAM
+        pre_RAM = get_ram()
         # PRE times & logs
         t_pre_mics = time.time() - t_pre_1
         t_pre = t_pre_assy + t_pre_mics
-        print(f" PRE Assembly (and compile) of [G] & [H] matrices took: ( {t_pre:.2f}s )\n     BEM ( {t_pre_assy:.2f}s ) + MICS ( {t_pre_mics:.2f}s )\n")
+        print(f" PRE Assembly (and compile) of [G] & [H] matrices took: ( {t_pre:.2f}s )\n     BEM ( {t_pre_assy:.2f}s ) + MICS ( {t_pre_mics:.2f}s )  |  RAM ( {pre_RAM:.2f}MB )\n")
         
         with open(log_f, "a") as log:
-            log.write(f"\n PRE Assembly (and compile) of [G] & [H] matrices took: ( {t_pre:.2f}s ):\n     BEM ( {t_pre_assy:.2f}s ) + MICS ( {t_pre_mics:.2f}s )\n")
+            log.write(f"\n PRE Assembly (and compile) of [G] & [H] matrices took: ( {t_pre:.2f}s ):\n     BEM ( {t_pre_assy:.2f}s ) + MICS ( {t_pre_mics:.2f}s )  |  RAM ( {pre_RAM:.2f}MB )\n")
             log.write(f"\n{'=' * 98}")
             log.write(f"""
- {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'Matrix':<8} | {'Results file':<20} | {'Status':^6}""")
+ {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}""")
             log.write(f"\n{'=' * 98}\n")
             log.flush() # Forces writing to disk, so we can tail the .log file in real-time
 
@@ -393,6 +397,7 @@ def start_pybem_app():
                         nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas, sorted_mics_nodes, p_mics)
                     else:
                         nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas, None, None)
+                    solve_RAM = get_ram()
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
@@ -431,9 +436,9 @@ def start_pybem_app():
                     t_exp_1 = time.time()
                     all_t_exp += t_exp_1-t_exp_0
                     
-                    # Write formatted table header to LOG
-                    rslt_f = f'Result_{f:.1f}Hz.vtu'
-                    log.write(f" {f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {cond:<8} | {rslt_f:<20} | {'OK':^6}\n")
+                    # Write formatted table to LOG
+                    rslt_f = f'Freq_{f:.1f}Hz.vtu'
+                    log.write(f" {f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
                     log.flush() # Forces write to disk so we can tail the log in real-time
 
                 except Exception as e:
