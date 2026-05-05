@@ -4,15 +4,22 @@ from collections import defaultdict
 import psutil
 import os
 
+def get_cpus():
+    # CPUs
+    cpus = psutil.cpu_count(logical=False)
+    # Threads
+    cores = psutil.cpu_count(logical=True)
+    return cpus, cores
+
 def get_ram():
     process = psutil.Process(os.getpid())
     # rss is the Resident Set Size (actual RAM used) in bytes
-    # return process.memory_info().rss / (1024**2) # Convert to MB
-    return process.memory_info().rss / (1000**2) # Convert to MB
+    # Convert to MB with an adjust to match Win10 task manager
+    return (process.memory_info().rss / (1024**2)) * 1.14
 
 def calculate_element_properties(nodes, connectivity):
     """
-    Calculates normals, the center (centroid) and surface area of elements.
+    Calculates normals, the center (centroid) and surface area of a single element.
     Supports S3 (3 nodes) and S4 (4 nodes).
     """
     # Get the coordinates for each node ID in the connectivity list
@@ -72,7 +79,7 @@ def prepare_geometry(nodes, elements):
 
 def get_geo_info(elements, centers, areas, normals):
     """
-    Calculates mesh metrics and audits normal consistency.
+    Calculates mesh metrics, checks for issues and normal consistency.
     Args:
         elements: dict {el_id: [node_ids]}
         centers:  (N, 3) array of element centroids
@@ -81,10 +88,11 @@ def get_geo_info(elements, centers, areas, normals):
     """
     
     # --- 1. PHYSICAL CHARACTERISTICS ---
-    # Vectorized Volume: V = 1/3 * sum((C_i dot N_i) * A_i)
     # np.einsum is a very efficient way to do (centers * normals).sum(axis=1)
     # Centroids dot Normals weighted by Area
     dots = np.einsum('ij,ij->i', centers, normals)
+    # Total BEM VOLUME
+    # Vectorized Volume: V = 1/3 * sum((C_i dot N_i) * A_i)
     volume = np.sum(dots * areas) / 3.0
     # Total BEM AREA
     total_area = np.sum(areas)
@@ -92,8 +100,8 @@ def get_geo_info(elements, centers, areas, normals):
     # (N,3) * (N,1) summed over N, then divided by scalar total_area
     CoG = np.sum(centers * areas[:, np.newaxis], axis=0) / total_area
 
-    # --- 2. TOPOLOGICAL AUDIT (Edge Consistency) ---
-    # We check if every shared edge is traversed in opposite directions
+    # --- 2. TOPOLOGICAL AUDIT (Edge / Normal Consistency) ---
+    # We check if every shared edge by 2 elements is ordered in opposite directions
     edge_map = defaultdict(list)
     conflicts = 0
     
@@ -127,20 +135,7 @@ def get_geo_info(elements, centers, areas, normals):
 
     return volume, total_area, CoG, conflicts, open_edges
 
-# def get_geo_info(centers, areas, normals):
-#     """
-#     Calculates from the BEM elements: volume (Divergence Theorem), total area & CoG.
-#     """
-#     # Divergence Theorem: The sum of (Center dot Normal) * Area for volume & CoG calcs
-#     # 1.0/3.0 because it's a 3D volume integral
-#     volume = np.sum([np.dot(c, n) * a for c, a, n in zip(centers, areas, normals)]) / 3.0
-#     area = np.sum([areas])
-#     CoGx = np.sum([(centers[i,0]) * areas[i] for i in range(len(centers))]) / area 
-#     CoGy = np.sum([(centers[i,1]) * areas[i] for i in range(len(centers))]) / area 
-#     CoGz = np.sum([(centers[i,2]) * areas[i] for i in range(len(centers))]) / area 
-#     CoG = [CoGx, CoGy, CoGz]
-#     return volume, area, CoG
-
+# ---------------------------------
 # ---------------------------------
 ###
 ### Gauss Points for QUADS & TRIAS
@@ -150,10 +145,12 @@ def get_geo_info(elements, centers, areas, normals):
 ### TERMINOLOGY
 ###
 # ---------------------------------
-# ξ (Xi) and η (Eta) are the standard Greek letters used to represent the local (or "parent") coordinate system of an element.
+# ξ (Xi) and η (Eta) are the standard Greek letters,
+# used to represent the local (or "parent") coordinate system of an element.
 # ξ (Xi - pronounced "Ksee" or "Zai"): This represents the horizontal axis of the local square.
 # η (Eta - pronounced "Ay-tuh"): This represents the vertical axis of the local square.
-# In short: ξ is "Local X" and η is "Local Y." We use Greek letters just to make sure we don't accidentally confuse a point on the element with a point in the room!
+# In short: ξ is "Local X" and η is "Local Y." 
+# We use Greek letters just to make sure we don't accidentally confuse a gauss point on the element with an input node!
 
 # QUAD4 Gauss points and weights for 2x2 quadrature
 # ---------------------------------
@@ -161,29 +158,30 @@ def get_geo_info(elements, centers, areas, normals):
 Q_GP = 1./3.**0.5
 # NOTE: The logic here takes into account that BEM normals point AWAY from the fluid.
 #       This is against usual RH rules with (+) normals into the material, e.g. in FEA.
-#       As a result, it is not that trivial which order / signs the GPoints must follow.
+#       As a result, it is not trivial which order / signs the GPoints must follow.
 QUAD_GP = np.array([
     [-Q_GP, -Q_GP],   # Bottom-Left
     [-Q_GP,  Q_GP],   # Top-Left
     [ Q_GP,  Q_GP],   # Top-Right
     [ Q_GP, -Q_GP],   # Bottom-Right
 ])
-# # test influence of order of GPoints 
+## test influence of order of GPoints 
 # QUAD_GP = np.array([
 #     [-Q_GP, -Q_GP],   # Bottom-Left
-#     [ Q_GP,  Q_GP],   # Top-Right
 #     [ Q_GP, -Q_GP],   # Bottom-Right
+#     [ Q_GP,  Q_GP],   # Top-Right
 #     [-Q_GP,  Q_GP],   # Top-Left
 # ])
+
 # Standard 2x2 Weights sum to 4.0
 QUAD_GW = np.array([1.0, 1.0, 1.0, 1.0])
 
 @njit
 def get_quad_points(v1, v2, v3, v4):
     """
-    Computes 4 spatial points on a quad4 element surface defined by its 4 vertices.
+    Computes 4 spatial points on a quad4 element surface defined by its 4 nodes.
     2x2 Gauss Quadrature: Instead of calculating the kernel once at the center, we sample it at 4 specific locations (Gauss points) and take a weighted average. 
-    For a standard quad element, these points are located at ±0.577 in local coordinates.
+    For a standard quad element, these points are located at ±0.57735 in local coordinates.
     """
     points = np.zeros((4, 3))
     weigths = QUAD_GW
@@ -235,10 +233,10 @@ Q_GP3 = 0.6**0.5
 
 # NOTE: The logic here takes into account that BEM normals point AWAY from the fluid.
 #       This is against usual RH rules with (+) normals into the material, e.g. in FEA.
-#       As a result, it is not that trivial which order / signs the GPoints must follow.
+#       As a result, it is not trivial which order / signs the GPoints must follow.
 # 1.- Local Coords:
-    # Define the 9 local (xi, eta) pairs explicitly to match theBEM winding.
-    # We order them row-by-row, but keep the signs aligned with the 'Away' from fluid normal.
+    # Define the 9 local (xi, eta) pairs explicitly to match the BEM winding; i.e. node order.
+    # We order them row-by-row, but keep the signs aligned with the 'Away' from fluid normal rule.
 QUAD_GP3 = np.array([
     [-Q_GP3, -Q_GP3], [-Q_GP3, 0],      [-Q_GP3, Q_GP3], # Bottom row
     [ 0, Q_GP3],      [ 0,  0],         [ Q_GP3, Q_GP3], # Middle row (Point 4 is CoG)
@@ -298,16 +296,6 @@ TRI_7P = np.array([
     [0.0597158717, 0.4701420641, 0.4701420641, 0.1323941527], # Near Mid-edge 2
     [0.4701420641, 0.0597158717, 0.4701420641, 0.1323941527]  # Near Mid-edge 3
 ])
-# old (wrong) implementation
-# TRI_7P = np.array([
-#     [0.3333333333, 0.3333333333, 0.3333333333, 0.2250000000], # Centroid
-#     [0.7974269853, 0.1012865073, 0.1012865073, 0.1259391805], # Near Vertex 1
-#     [0.1012865073, 0.7974269853, 0.1012865073, 0.1259391805], # Near Vertex 2
-#     [0.1012865073, 0.1012865073, 0.7974269853, 0.1259391805], # Near Vertex 3
-#     [0.0597158717, 0.4701420641, 0.4701420641, 0.1323941527], # Near Mid-edge 1
-#     [0.4701420641, 0.0597158717, 0.4701420641, 0.1323941527], # Near Mid-edge 2
-#     [0.4701420641, 0.4701420641, 0.0597158717, 0.1323941527]  # Near Mid-edge 3
-# ])
 
 @njit
 def get_tri_points_7p(v1, v2, v3):
@@ -324,11 +312,13 @@ def get_tri_points_7p(v1, v2, v3):
     return points, weights
 
 # PRE-processing: we need 1st to know all GPoints we'll have in total.
-# This is during preprocessing, so that we make use of fast numpy & numba methods
+# This is during pre-processing, so that we make use of fast numpy & numba methods
 @njit
 def pre_mid_order(element_nodes, element_area):
-    """PRE-processing step to calculate total number of GPoints.
-       'TRIA_3p & QUAD_4p' quadrature."""
+    """
+    PRE-processing step to calculate total number of GPoints & weights.
+    'TRIA_3p & QUAD_4p' quadrature.
+    """
     n_nodes = len(element_nodes)
     
     # 1. Get number of Integration Points
@@ -342,102 +332,107 @@ def pre_mid_order(element_nodes, element_area):
 
 @njit
 def pre_high_order(element_nodes, element_area):
-    """PRE-processing step to calculate total number of GPoints.
-       'TRIA_7p & QUAD_9p' quadrature."""
+    """
+    PRE-processing step to calculate total number of GPoints & weights.
+    'TRIA_7p & QUAD_9p' quadrature.
+    """
     n_nodes = len(element_nodes)
     
     # 1. Get Integration Points & Weights
-    if n_nodes == 3:
+    if n_nodes == 3: # TRIA3
         pts, wts = get_tri_points_7p(element_nodes[0], element_nodes[1], element_nodes[2])
-    else:
+    else: # QUAD4
         pts, wts = get_quad_points_3x3(element_nodes[0], element_nodes[1], element_nodes[2], element_nodes[3])
     sum_w = np.sum(wts)
     
     return pts, wts * element_area / sum_w
 
-@njit
-def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
-    """Integrates G and H kernels over one element using 'TRIA_3p & QUAD_4p' quadrature."""
-    n_nodes = len(element_vertices)
+### NOT used anymore
+# OLD methods where we did the main calcs in solve instead of in PRE.
+# This gave the correct results, but was much, much slower.
+# @njit
+# def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
+#     """Integrates G and H kernels over one element using 'TRIA_3p & QUAD_4p' quadrature."""
+#     n_nodes = len(element_vertices)
     
-    # Initialize sums
-    g_sum = 0.0 + 0j
-    h_sum = 0.0 + 0j
-    sum_w = 0.0
+#     # Initialize sums
+#     g_sum = 0.0 + 0j
+#     h_sum = 0.0 + 0j
+#     sum_w = 0.0
     
-    # 1. Get Integration Points & Weights
-    if n_nodes == 3: # TRIA3
-        pts, wts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
-        n_pts = 3
-    else: # QUAD4
-        pts, wts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
-        n_pts = 4
-    # print("\n", receiver_pt)
-    # print(pts, wts)
-    sum_w = np.sum(wts)
+#     # 1. Get Integration Points & Weights
+#     if n_nodes == 3: # TRIA3
+#         pts, wts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
+#         n_pts = 3
+#     else: # QUAD4
+#         pts, wts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
+#         n_pts = 4
+#     # print("\n", receiver_pt)
+#     # print(pts, wts)
+#     sum_w = np.sum(wts)
 
-    # 2. Sum Contributions
-    for p_idx in range(n_pts):
-        r_vec = receiver_pt - pts[p_idx]
-        r = np.linalg.norm(r_vec)
+#     # 2. Sum Contributions
+#     for p_idx in range(n_pts):
+#         r_vec = receiver_pt - pts[p_idx]
+#         r = np.linalg.norm(r_vec)
         
-        # Kernel math & Integration weights
-        # G Kernel
-        exp_jkr = np.exp(1j * k * r)
-        g_val = exp_jkr * inv_4pi / r
+#         # Kernel math & Integration weights
+#         # G Kernel
+#         exp_jkr = np.exp(1j * k * r)
+#         g_val = exp_jkr * inv_4pi / r
         
-        w_eff = (wts[p_idx] / sum_w) * element_area
-        g_sum += g_val * w_eff
+#         w_eff = (wts[p_idx] / sum_w) * element_area
+#         g_sum += g_val * w_eff
         
-        # H Kernel
-        dot_prod = np.dot(r_vec, element_normal) / r
-        h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * w_eff
+#         # H Kernel
+#         dot_prod = np.dot(r_vec, element_normal) / r
+#         h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * w_eff
         
-    return g_sum, h_sum
+#     return g_sum, h_sum
 
-@njit
-def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
-    """Integrates G and H kernels over one element using 'TRIA_7p & QUAD_9p' quadrature."""
-    n_nodes = len(vertices)
+# @njit
+# def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
+#     """Integrates G and H kernels over one element using 'TRIA_7p & QUAD_9p' quadrature."""
+#     n_nodes = len(vertices)
     
-    # Initialize sums
-    g_sum = 0.0 + 0j
-    h_sum = 0.0 + 0j
-    sum_w = 0.0
+#     # Initialize sums
+#     g_sum = 0.0 + 0j
+#     h_sum = 0.0 + 0j
+#     sum_w = 0.0
     
-    # 1. Get Integration Points & Weights
-    if n_nodes == 3:
-        pts, wts = get_tri_points_7p(vertices[0], vertices[1], vertices[2])
-        n_pts = 7
-    else:
-        pts, wts = get_quad_points_3x3(vertices[0], vertices[1], vertices[2], vertices[3])
-        n_pts = 9
-    # print("\n", receiver_pt)
-    # print(pts, wts)
-    sum_w = np.sum(wts)
+#     # 1. Get Integration Points & Weights
+#     if n_nodes == 3:
+#         pts, wts = get_tri_points_7p(vertices[0], vertices[1], vertices[2])
+#         n_pts = 7
+#     else:
+#         pts, wts = get_quad_points_3x3(vertices[0], vertices[1], vertices[2], vertices[3])
+#         n_pts = 9
+#     # print("\n", receiver_pt)
+#     # print(pts, wts)
+#     sum_w = np.sum(wts)
 
-    # 2. Sum Contributions
-    for p in range(n_pts):
-        r_vec = receiver_pt - pts[p]
-        r = np.linalg.norm(r_vec)
-        # Integration weight
-        w_eff = (wts[p] / sum_w) * area
+#     # 2. Sum Contributions
+#     for p in range(n_pts):
+#         r_vec = receiver_pt - pts[p]
+#         r = np.linalg.norm(r_vec)
+#         # Integration weight
+#         w_eff = (wts[p] / sum_w) * area
         
-        # G Kernel
-        exp_jkr = np.exp(1j * k * r)
-        g_val = exp_jkr * inv_4pi / r
-        # H Kernel derivative
-        dot_prod = np.dot(r_vec, normal) / r
-        h_val = H_sign * g_val * (1j * k - 1.0/r) * dot_prod
+#         # G Kernel
+#         exp_jkr = np.exp(1j * k * r)
+#         g_val = exp_jkr * inv_4pi / r
+#         # H Kernel derivative
+#         dot_prod = np.dot(r_vec, normal) / r
+#         h_val = H_sign * g_val * (1j * k - 1.0/r) * dot_prod
             
-        g_sum += g_val * w_eff
-        h_sum += h_val * w_eff
+#         g_sum += g_val * w_eff
+#         h_sum += h_val * w_eff
         
-    return g_sum, h_sum
+#     return g_sum, h_sum
 
 def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=None):
     """
-    Averages element-centered results to nodes.
+    Averages element-centered and GPoints results to nodes.
     nodes: dict {nid: [x, y, z]}
     elements: dict {eid: [n1, n2, ...]}
     P_bem: array of complex values (one per element)
@@ -446,15 +441,13 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=
     nodal_pressures: output array of complex values (one per node)
     """
     # 1. Determine the size needed for the array
-    # We use max_id + 1 so we can index directly by node_id
+    # We use max_id + 1 so we can index directly by node_id; i.e fast.
     max_node_id = max(nodes.keys())
     
     # Initialize buffers
     # node_sums: stores the accumulated elemental pressure
-    # count: stores how many elements share a node (for averaging)
     node_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
     area_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
-    # count = np.zeros(max_node_id + 1, dtype=np.float32)
     nodal_pressures = np.zeros(max_node_id + 1, dtype=np.complex128)
 
     # 2. Map element results to their constituent nodes
@@ -479,48 +472,3 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=
     nodal_pressures[mask] = node_sums[mask] / area_sums[mask]
 
     return nodal_pressures
-
-
-# NOTE: it does same as above but 5 x slower, do not use.
-# np.arrays win!
-# def averaged_at_nodes(nodes, elements, element_values):
-#     """
-#     Averages element-centered results to nodes.
-#     nodes: dict {nid: [x, y, z]}
-#     elements: dict {eid: [n1, n2, ...]}
-#     element_values: array of complex values (one per element)
-#     nodal_pressures: array of complex values (one per node)
-#     """
-#     # 1. Determine the size needed for the array
-#     # We use num_nodes + 1 so we can index directly by node_id
-#     num_nodes = len(nodes.keys())
-#     node_ids = nodes.keys()
-#     node_sums = {}
-#     count = {}
-#     nodal_pressures = {}
-    
-#     # Initialize buffers
-#     # node_sums: stores the accumulated elemental pressure
-#     # count: stores how many elements share that node (for averaging)
-#     for nid in node_ids:
-#         node_sums[nid] = np.zeros(1, dtype=np.complex128)
-#         count[nid] = np.zeros(1, dtype=np.float32)
-#         nodal_pressures[nid] = np.zeros(1, dtype=np.complex128)
-
-#     # 2. Map element results to their constituent nodes
-#     # We iterate through the elements provided (could be BEM or Mics)
-#     for i, (eid, conn) in enumerate(elements.items()):
-#         val = element_values[i]
-#         for nid in conn:
-#             node_sums[nid] += val
-#             count[nid] += 1
-
-#     # 3. Perform the average
-#     # We only divide where count > 0 to avoid DivisionByZero
-#     # mask = count > 0
-#     for nid in node_ids:
-#         if count[nid][0] > 0:
-#             nodal_pressures[nid] = node_sums[nid][0] / count[nid][0]
-#         # nodal_pressures[i] = node_sums[i] / 1
-
-#     return nodal_pressures

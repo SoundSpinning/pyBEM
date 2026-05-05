@@ -43,9 +43,7 @@ class PVExporter:
         fstr_mesh += ('      <Points>\n')
         fstr_mesh += ('        <DataArray type="Float32" Name="Points" NumberOfComponents="3" format="ascii">\n')
         for nid in self.sorted_node_ids:
-            # print(nid, self.nodes[nid])
             fstr_mesh += (f"{self.nodes[nid][0]} {self.nodes[nid][1]} {self.nodes[nid][2]} ")
-            # print(f"{self.nodes[nid][0]} {self.nodes[nid][1]} {self.nodes[nid][2]} ")
         fstr_mesh += ('\n        </DataArray>\n')
         fstr_mesh += ('      </Points>\n')
 
@@ -53,10 +51,8 @@ class PVExporter:
         fstr_mesh += ('      <Cells>\n')
         fstr_mesh += ('        <DataArray type="Int32" Name="connectivity" format="ascii">\n')
         for eid in self.sorted_el_ids:
-            # print(eid, self.all_elements[eid])
             conn = self.all_elements[eid]
             fstr_mesh += (" ".join(str(self.nodal_id_map[nid]) for nid in conn) + " ")
-            # print(" ".join(str(self.nodal_id_map[nid]) for nid in conn) + " ")
         fstr_mesh += ('\n        </DataArray>\n')
 
         fstr_mesh += ('        <DataArray type="Int32" Name="offsets" format="ascii">\n')
@@ -138,4 +134,3 @@ class PVExporter:
         xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
         with open(pvd_path, "w") as f:
             f.write(xml_str)
-        # print(f"\n--- All DONE! ---")

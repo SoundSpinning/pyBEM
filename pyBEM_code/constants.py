@@ -1,11 +1,7 @@
-# True == writes debug info to model_name.log file
+# If True ==> writes debug info to model_name.log file
 DEBUG = False
 
-# Flag that should turn to "INTERIOR" or "EXTERIOR",
-# after pre-processing and checking on the BEM model volume sign.
-# BEM_TYPE = None
-
-P_REF = 2e-11   # MPa, mm models for air @20C
+P_REF = 2e-11   # dB reference for MPa, mm models for air @20C
 
 # List of all supported Abaqus/PrePoMax keywords for pyBEM
 SUPPORTED_KEYWORDS = [

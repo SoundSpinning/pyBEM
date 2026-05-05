@@ -1,19 +1,20 @@
 import os
+# import gc
 import numpy as np
-from numba import get_num_threads, set_num_threads
+from numba import set_num_threads
 import traceback
 import time
 from tqdm import tqdm
 
-# Import our custom modules
+# Import custom modules
 from version import __solver__
 from pmx_parser import PMXParser
-from solver_core import pre_assembly, pre_mics, main_assembly, assemble_static, assemble_system, solve_bem_system, calculate_mics
+from solver_core import pre_assembly, pre_mics, main_assembly, solve_bem_system, calculate_mics
 from exporter import PVExporter
-from utils import get_ram, prepare_geometry, get_geo_info, averaged_at_nodes
+from utils import get_cpus, get_ram, prepare_geometry, get_geo_info, averaged_at_nodes
 from constants import DEBUG, P_REF
 
-np.set_printoptions(threshold=100)
+np.set_printoptions(threshold=100)  # limit terminal prints
 
 def start_pybem_app():
     # 0. Ask the user for the file name
@@ -26,16 +27,15 @@ def start_pybem_app():
         print(f"ERROR: File '{filename}' not found in the current folder.")
         return
 
-    # Assign number of CPU cores for the parallel solve with numba (@njit in 'solver_core.py')
-    n_CPUs = get_num_threads()
+    # Assign number of CPUs for the parallel solve with numba:
+    # "@njit(parallel=True, cache=True" in 'solver_core.py')
+    n_CPUs, n_threads = get_cpus()
     used_CPUs = n_CPUs
-    # leave 2 CPU cores free on machine for user to do other work
-    if n_CPUs > 4:
-        used_CPUs = n_CPUs - 2   
-        set_num_threads(used_CPUs)
+    set_num_threads(used_CPUs)
     str_CPUs = (f"""
- Number of CPU cores found on this machine: ( {n_CPUs} )
- MAX number of cores used for parallel solve is: ( {used_CPUs} )
+ Number of CPUs found on this machine: ( {n_CPUs} )
+ Number of threads found on this machine: ( {n_threads} )
+ MAX number of CPUs used for parallel solve is: ( {used_CPUs} )
 """)
     
     try:
@@ -96,10 +96,8 @@ def start_pybem_app():
 
         # 4. Geometry Prep (Centers, Areas, Normals)
         bem_nodal_coords, bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, sorted_bem_els)
-        # print(bem_nodal_coords)
-        # print(bem_centers)
         
-        # This value controls when high-order integration kicks in.
+        # This value controls when mid- or high-order integration kicks in.
         # i.e. only for contributions when near the BEM element of interest.
         # TODO: test in the future this factor for near distance.
         # order_length = np.mean(max_el_length)
@@ -107,54 +105,56 @@ def start_pybem_app():
         order_length = np.percentile(max_el_length, 95)
 
         # 5. CHECKs on BEM input mesh: is it interior or exterior, 
-        #    check for holes / free edges in mesh and for normals consistency
+        #    check for cracks, holes & free edges in mesh and for normals consistency.
         bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(sorted_bem_els, bem_centers, bem_areas, bem_normals)
 
-        # Check for failure conditions
+        # Report in LOG all info & Check for failure conditions
         mesh_is_broken = (free_edges > 0 or conflicts > 0)
+
         log_info += (f"""
  INPUT MESH: Total BEM AREA is: ( {bem_total_area:.4} L**2 )
              CoG of the BEM domain is at: [ {bem_CoG[0]:.4}, {bem_CoG[1]:.4}, {bem_CoG[2]:.4} ] L""")
-        if not mesh_is_broken:  # if all OK
+        if not mesh_is_broken:  # if all OK on connectivity
             log_info += (f"""
              BEM element normals checked:
              ( i ) Normals appear to be aligned consistently.\n""")
 
-        # LOG info below based on the Divergence Theorem
-        log_info += f"""
+            # LOG info below based on the Divergence Theorem
+            log_info += f"""
              ( i ) The MAX BEM element aspect ratio found is: ( {np.max(elem_ratio):.2f} )
                    Mesh element size is (approx.): ( {order_length:.2f} L )
              ( i ) The MAX Freq suggested is (approx.): ( {parser.speed_of_sound / (8*order_length):.1f}Hz )
 """
-        if bem_total_vol > 1e-9:
-            BEM_TYPE = "INTERIOR"
-            H_sign = -1.0
-            log_info += (f"""
+            if bem_total_vol > 1e-9:
+                BEM_TYPE = "INTERIOR"
+                H_sign = -1.0
+                log_info += (f"""
              Closed (+) Volume detected: ( {bem_total_vol:.4} L**3 )
              ( i ) Normals point OUTWARDS ==> Assuming {BEM_TYPE} analysis.\n""")
-        elif bem_total_vol < -1e-9:
-            BEM_TYPE = "EXTERIOR"
-            H_sign = 1.0
-            log_info += (f"""
+            elif bem_total_vol < -1e-9:
+                BEM_TYPE = "EXTERIOR"
+                H_sign = 1.0
+                log_info += (f"""
              Closed (-) Volume detected: ( {bem_total_vol:.4} L**3 )
              ( i ) Normals point INWARDS ==> Assuming {BEM_TYPE} analysis.\n""")
-        else:
-            log_info += (f"""
+            else:
+                log_info += (f"""
  ERROR       Mesh topology is invalid for a closed BEM domain. 
              CHECK for: 
-                1. Unconnected edges, free edges and holes.
+                1. Unconnected edges (cracks), free edges and holes.
                 2. Inconsistent normal directions.
-             ( i ) BEM (Direct) requires a water tight shell mesh, and 
-                   element normals must be consistent and pointing AWAY from the acoustic domain to be analysed.
+             ( i ) BEM (Direct) requires a water-tight shell mesh, and 
+                   element normals must be consistent and pointing AWAY from the acoustic domain.
 """)
-            print(f"{log_info}")
-            with open(log_f, "w") as log:
-                log.write(log_top)
-                log.write(log_info)
-            raise ValueError(f"\n ERROR in PRE-PROCESSING: see '{log_f}' for more details.\n")
+                print(f"{log_info}")
+                with open(log_f, "w") as log:
+                    log.write(log_top)
+                    log.write(log_info)
+                raise ValueError(f"\n ERROR in PRE-PROCESSING: see '{log_f}' for more details.\n")
     
         # Report if mesh checks failure conditions apply
-        if mesh_is_broken:
+        # if mesh_is_broken:
+        else:
             log_info += "\n" + "!"*60 + "\n"
             log_info += " FATAL ERROR: MESH TOPOLOGY VIOLATION\n"
             log_info += "!"*60 + "\n"
@@ -326,6 +326,8 @@ def start_pybem_app():
                     #      use cond sparingly, can take ~20% of solve time.
                     # 3.2. 'derive_surface_vectors()': Reconstructs full P and V vectors for the BEM elements.
                     p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega, log=log)
+                    solve_RAM = get_ram()
+                    # gc.collect()       # Force Python to actually free the RAM
                     t_slv_1 = time.time()
                 
                     # log_DEBUG:
@@ -397,7 +399,6 @@ def start_pybem_app():
                         nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas, sorted_mics_nodes, p_mics)
                     else:
                         nodal_p_surf = averaged_at_nodes(sorted_nodes, sorted_bem_els, p_surf, bem_areas, None, None)
-                    solve_RAM = get_ram()
                     t_avg_1 = time.time()
                     all_t_avr += t_avg_1-t_avg_0
                     
@@ -435,6 +436,9 @@ def start_pybem_app():
                     exporter.write_vtu(f, nodal_pressures, group_ids=group_ids)
                     t_exp_1 = time.time()
                     all_t_exp += t_exp_1-t_exp_0
+
+                    # clear out
+                    # del p_surf, v_surf, p_mics, nodal_pressures
                     
                     # Write formatted table to LOG
                     rslt_f = f'Freq_{f:.1f}Hz.vtu'

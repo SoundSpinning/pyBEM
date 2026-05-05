@@ -334,15 +334,6 @@ class PMXParser:
             # Step 2: Check if target is an ELSET
             elif target_name in self.elsets:
                 target_ids = self.elsets[target_name]
-            
-            # Removed below as N/A for Prepomax / Abaqus syntax for acoustics
-            # # Step 3: Check if target is an NSET (find elements sharing these nodes)
-            # elif target_name in self.nsets:
-            #     target_nodes = set(self.nsets[target_name])
-            #     # Find any element where ALL nodes are in this NSET
-            #     for eid, conn in self.elements.items():
-            #         if all(nid in target_nodes for nid in conn):
-            #             target_ids.append(eid)
 
             # 3. Assign bc_dict values to the map
             if not target_ids:
@@ -400,7 +391,7 @@ class PMXParser:
         return [x.strip() for x in line.split(',') if x.strip()]
 
     def write_debug_inp(self):
-        """The 'Receipt' file for debugging."""
+        """The 'Parsed' input file for debugging and checks."""
         with open(f"bem_{self.model_name}.inp", 'w') as f:
             f.write(__solver__)
             f.write(self.top_log)
