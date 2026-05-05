@@ -10,7 +10,8 @@ from tqdm import tqdm
 from version import __solver__
 from pmx_parser import PMXParser
 from solver_core import pre_assembly, pre_mics, main_assembly, solve_bem_system, calculate_mics
-from exporter import PVExporter
+# from exporter import PVExporter
+from exporter_2 import PVExporter
 from utils import get_cpus, get_ram, prepare_geometry, get_geo_info, averaged_at_nodes
 from constants import DEBUG, P_REF
 
@@ -29,7 +30,7 @@ def start_pybem_app():
 
     # Assign number of CPUs for the parallel solve with numba:
     # "@njit(parallel=True, cache=True" in 'solver_core.py')
-    n_CPUs, n_threads = get_cpus()
+    n_CPUs, n_threads, safe_ram_gb = get_cpus()
     used_CPUs = n_CPUs
     set_num_threads(used_CPUs)
     str_CPUs = (f"""
@@ -290,6 +291,7 @@ def start_pybem_app():
             ### 
             ### --- FREQ LOOP & The progress bar ---
             ### 
+            print(f"{'=' * 80}")
             pbar = tqdm(parser.frequencies, desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e", mininterval=0.10)
             for f in pbar:
                 # Update the bar's suffix so we show the freq value
@@ -432,16 +434,19 @@ def start_pybem_app():
                     # OLD method, ignore. Since they are NumPy arrays, adding them merges the results
                     # nodal_pressures = nodal_p_surf + nodal_p_mics
                     
-                    # Write the .vtu file for this frequency
-                    exporter.write_vtu(f, nodal_pressures, group_ids=group_ids)
+                    # OLD: Write the .vtu file for this frequency
+                    # exporter.write_vtu(f, nodal_pressures, group_ids=group_ids)
+                    # In Memory method
+                    exporter.add_frequency_step(f, nodal_pressures)
                     t_exp_1 = time.time()
-                    all_t_exp += t_exp_1-t_exp_0
+                    all_t_exp += t_exp_1 - t_exp_0
 
                     # clear out
                     # del p_surf, v_surf, p_mics, nodal_pressures
                     
                     # Write formatted table to LOG
-                    rslt_f = f'Freq_{f:.1f}Hz.vtu'
+                    # rslt_f = f'Freq_{f:.1f}Hz.vtu'
+                    rslt_f = f'In Memory'
                     log.write(f" {f:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
                     log.flush() # Forces write to disk so we can tail the log in real-time
 
@@ -451,12 +456,15 @@ def start_pybem_app():
                     log.write(f"{f:<7.1f}Hz | {t_assembly:<11.4f}s | {t_solve:<8.4f}s | {cond:<8} | {rslt_f:<20} | FAILED: {str(e)}\n")
                     pbar.write(f"Error at {f}Hz: See '{log_f}' for details.")
                     traceback.print_exc()
-            # print(v_surf)
-            # print(p_mics)
-            # print(nodal_pressures)
+            print(f"{'=' * 80}")
 
             # 5. Final results output
-            exporter.write_pvd()
+            t_exp_0 = time.time()
+            # exporter.write_pvd()
+            exporter.finalise()
+            t_exp_1 = time.time()
+            all_t_exp += t_exp_1 - t_exp_0
+
             log.write(f"\n{'-' * 80}")
             log.write(f"\n --- All Frequency Results saved ---")
             # additional avg timings

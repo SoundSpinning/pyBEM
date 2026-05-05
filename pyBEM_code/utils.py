@@ -9,7 +9,10 @@ def get_cpus():
     cpus = psutil.cpu_count(logical=False)
     # Threads
     cores = psutil.cpu_count(logical=True)
-    return cpus, cores
+    # RAM on machine
+    available_ram_gb = psutil.virtual_memory().available / (1024**3)
+    safe_ram_gb = available_ram_gb * 0.9
+    return cpus, cores, safe_ram_gb
 
 def get_ram():
     process = psutil.Process(os.getpid())
