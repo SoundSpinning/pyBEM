@@ -31,7 +31,7 @@ SUB_KEYWORDS = [
 ]
 
 def TOP_LOG_LINES(self): return f"""
-{'-' * 80}
+    =============
 *** MODEL SUMMARY ***
     =============
     INPUT file: "{self.file_path}"
@@ -46,5 +46,4 @@ def TOP_LOG_LINES(self): return f"""
     FREQUENCIES: {len(self.frequencies)}  [{min(self.frequencies):.1f}Hz --> {max(self.frequencies):.1f}Hz]
     DAMPING: Input Loss Factor (LF) = {self.damping} | Solver uses Damping Ratio (DR), LF=2DR
     BCs ( {len(self.bc_data)} ): {self.bc_data}
-{'-' * 80}
 """

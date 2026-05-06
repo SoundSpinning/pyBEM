@@ -1,8 +1,84 @@
 # The heavy math (Numba-accelerated BEM kernels)
 
 import numpy as np
+import time
 from numba import njit, prange
-from utils import pre_high_order, pre_mid_order
+from utils import get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
+
+# A global container inside the worker process
+_worker_context = {}
+
+def init_worker(shared_data):
+    """Runs ONCE per worker process at startup."""
+    global _worker_context
+    _worker_context = shared_data
+
+# This is for parallel solve of Freqs, based on machine resources; i.e. automated.
+# @njit(cache=True) do NOT use here, overkill; keep inside functions with njit as they were
+# def frequency_worker(f, static_data, bc_map, sorted_bem_ids):
+def frequency_worker(f, bc_map, sorted_bem_ids):
+    """
+    Independent worker function. Runs for EVERY frequency.
+    static_data: dict of all BEM/Physics constants
+    """
+    import numpy as np
+    # Pull the data from the worker's local 'memory vault'
+    # No pickling or data transfer happens here!
+    static_data = _worker_context
+
+    # 1. Physics setup
+    omega = 2.0 * np.pi * f
+    k = omega / static_data['c']
+    if static_data['damping'] is not None:
+        k = k * (1 - (1j * static_data['damping'] * 0.5))
+    rho_omega = static_data['rho'] * omega
+
+    # 2. Assembly (The heavy lifting)
+    # Using main_assembly function inside the worker
+    t_asm_0 = time.time()
+    G_bem, H_bem = main_assembly(
+        static_data['gp_per_element'], static_data['GP_start_idx'],
+        static_data['R_map'], static_data['G_static_map'], 
+        static_data['H_static_map'], static_data['G_diag_static'], 
+        static_data['H_diag_static'], k, static_data['H_sign'], 
+        static_data['max_el_length'], static_data['order_length']
+    )
+    t_assembly = time.time() - t_asm_0
+    # 3. Solve
+    t_slv_0 = time.time()
+    p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega)
+    solve_RAM = get_ram()
+    t_slv_1 = time.time()
+    # 4. Post-Process (Mics + Averaging)
+    # MICS calcs
+    if static_data['sorted_mics_els']:
+        p_mics = calculate_mics(
+            static_data['pre_mics_G'], static_data['pre_mics_H'], static_data['pre_mics_R'], 
+            static_data['num_mics'], static_data['bem_areas'], 
+            p_surf, v_surf, k, rho_omega, static_data['H_sign']
+        )
+        mics_nodes = static_data['sorted_mics_nodes']
+    else:
+        mics_nodes = None
+        p_mics = None
+    t_slv_2 = time.time()
+    
+    # This ensures we return the final nodal_pressures array
+    t_avg_0 = time.time()
+    nodal_pressures = averaged_at_nodes(
+        static_data['sorted_nodes'], static_data['sorted_bem_els'], p_surf, 
+        static_data['bem_areas'], mics_nodes, p_mics) 
+    t_avg_1 = time.time()
+    
+    metadata = {
+        't_assembly': t_assembly,
+        't_solve_bem': t_slv_1 - t_slv_0,
+        't_solve_mics': t_slv_2 - t_slv_1,
+        't_avrg_nodes': t_avg_1 - t_avg_0,
+        'solve_RAM': solve_RAM
+    }
+    
+    return f, nodal_pressures, metadata
 
 @njit(parallel=True, cache=True)
 def pre_assembly(element_nodes, centers, areas, normals):
@@ -32,8 +108,7 @@ def pre_assembly(element_nodes, centers, areas, normals):
         gp_per_element[i] = num_gps
         total_gps += num_gps
 
-    print(f"""
- For ( {n_els} ) BEM elements, found a total of ( {total_gps} ) possible Integration / Gauss Points.""")
+    print(f""" For ( {n_els} ) BEM elements, found a total of ( {total_gps} ) possible Integration / Gauss Points.""")
     
     # --- STEP 2: Pre-allocate with Exact Size for speed ---
     # These are "Flat Lists" with all GPoints + dtype to save on RAM

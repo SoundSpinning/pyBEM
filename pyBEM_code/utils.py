@@ -11,8 +11,8 @@ def get_cpus():
     cores = psutil.cpu_count(logical=True)
     # RAM on machine
     available_ram_gb = psutil.virtual_memory().available / (1024**3)
-    safe_ram_gb = available_ram_gb * 0.9
-    return cpus, cores, safe_ram_gb
+    # safe_ram_gb = available_ram_gb * 0.9  # allocate 90% of RAM available
+    return cpus, cores, available_ram_gb
 
 def get_ram():
     process = psutil.Process(os.getpid())
@@ -433,13 +433,13 @@ def pre_high_order(element_nodes, element_area):
         
 #     return g_sum, h_sum
 
-def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=None):
+def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mics_nodes=None, P_mics=None):
     """
     Averages element-centered and GPoints results to nodes.
     nodes: dict {nid: [x, y, z]}
     elements: dict {eid: [n1, n2, ...]}
     P_bem: array of complex values (one per element)
-    mic_nodes: dict {nid: [x, y, z]}
+    mics_nodes: dict {nid: [x, y, z]}
     P_mics: array of complex values (one per node)
     nodal_pressures: output array of complex values (one per node)
     """
@@ -462,8 +462,8 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mic_nodes=None, P_mics=
             node_sums[nid] += val
             area_sums[nid] += area
     # We iterate through the nodes for Mics, if provided
-    if mic_nodes is not None:
-        for i, (nid, coords) in enumerate(mic_nodes.items()):
+    if mics_nodes is not None:
+        for i, (nid, coords) in enumerate(mics_nodes.items()):
             val = P_mics[i]
             node_sums[nid] += val
             area_sums[nid] = 1

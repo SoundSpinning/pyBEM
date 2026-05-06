@@ -377,7 +377,7 @@ class PMXParser:
                             if amp in bc:
                                 bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
 
-        log_bc_info += f" BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
+        log_bc_info += f"*** BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
         return bc_dict, log_bc_info
 
     def _get_param(self, line, key):
