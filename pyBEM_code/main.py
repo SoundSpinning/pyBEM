@@ -1,3 +1,4 @@
+import sys
 import os
 
 # PARALLEL env settings
@@ -23,6 +24,7 @@ os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
 
 # Controls the thread pool for Numba's parallel=True & prange loops.
+# However, see in main code we take control of this part via set_num_threads()
 # os.environ["NUMBA_NUM_THREADS"] = "1"
 # 
 import numpy as np
@@ -48,22 +50,51 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 np.set_printoptions(threshold=100)  
 
 def start_pybem_app():
-    # 0. Ask the user for the file name
     print(f"{__solver__}")
     
-    filename = input("\n Enter PrePoMax *.inp filename: ").strip()
+    # --- 1. COLLECT ARGUMENTS ---
+    args = sys.argv[1:] # Skip the script name itself
+    # print(args)
+    filename = None
+    user_ncpus = None # Default is None, so your auto-logic can take over
 
-    # Check if the file actually exists before starting
-    if not os.path.exists(filename):
-        print(f"ERROR: File '{filename}' not found in the current folder.")
+    for arg in args:
+        if "=" in arg:
+            key, val = arg.split("=", 1)
+            if key.lower() == "ncpus":
+                try:
+                    user_ncpus = int(val)
+                except ValueError:
+                    print(f" ( ! ) Warning: Invalid ncpus value '{val}'. Using auto-parallel.")
+        else:
+            # If it doesn't have an '=', assume it's the filename
+            filename = arg.strip()
+
+    # --- 2. FALLBACK TO INTERACTIVE ---
+    if not filename:
+        filename = input("\n Enter PrePoMax *.inp filename: ").strip()
+
+    if not filename or not os.path.exists(filename):
+        print(f"ERROR: File '{filename}' not found.")
         return
-    
+
+    # --- 3. APPLY SETTINGS ---
+    if user_ncpus is not None:
+        num_workers = user_ncpus
+        print(f" ( ! ) User Override: Setting parallel workers to ( {num_workers} )\n")
+    else:
+        # Leave existing auto-RAM/CPU logic for later; see num_workers AFTER PRE RAM logic
+        pass
+
     try:
         # 1. Setup Parser, Load Model and prepare sorted mesh IDs
         parser = PMXParser(filename)
         parser.load_model()
         rho = parser.density
         damping = parser.damping
+        if damping == {}:
+            damping['value'] = 0.0
+        amps = parser.amplitudes
 
         # Sort nodes & element dictionaries as read from the input parser
         # This ensures later on that index 0 is always Element 1, index 1 is 2, etc.
@@ -71,7 +102,6 @@ def start_pybem_app():
         sorted_node_ids = list(sorted_nodes.keys())
         sorted_bem_els = dict(sorted(parser.elements.items()))
         sorted_bem_ids = list(sorted_bem_els.keys())
-        # print(sorted_bem_els)
 
         sorted_mics_els = {}
         # If mics mesh exists in the model
@@ -292,7 +322,10 @@ def start_pybem_app():
         cost_per_worker_gb = pre_RAM_gb * 0.20  # +20% in solve estimate
         safe_RAM_limit_gb = RAM_gb - pre_RAM_gb
         n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
-        num_workers = max(1, min(n_CPUs, n_potential_workers))
+        if user_ncpus is not None:
+            num_workers = num_workers
+        else:
+            num_workers = max(1, min(n_CPUs, n_potential_workers))
         
         # testing n_cores vs I/O speed
         used_CPUs = 1  # avoid race conditions in parallel solve
@@ -302,7 +335,7 @@ def start_pybem_app():
         # -- 2. PACK STATIC DATA -- 
         # These dictionary's items are sent to every worker once
         static_data = {
-            'c': parser.speed_of_sound, 'rho': rho, 'damping': damping,
+            'c': parser.speed_of_sound, 'rho': rho, 'damping': damping, 'amplitudes': amps,
             'gp_per_element': gp_per_element, 'GP_start_idx': GP_start_idx,
             'R_map': R_map, 'G_static_map': G_static_map, 'H_static_map': H_static_map,
             'G_diag_static': G_diag_static, 'H_diag_static': H_diag_static,
@@ -397,23 +430,32 @@ def start_pybem_app():
             avg_BEM = global_BEM / num_freqs
             avg_mics = (t_pre_mics + global_mics) / num_freqs
             avg_export = avg_to_nodes + avg_vtu
+            # Calculate the "Work Load" (what it would have taken on 1 CPU)
+            total_work_load = global_assy + global_BEM + global_mics + all_t_avr + all_t_exp
+            theoretical_serial_time = total_work_load + t_pre_assy + t_pre_mics
+
+            # Speedup Factor
+            speedup = theoretical_serial_time / total_elapsed
 
             def SUMMARY(): return f"""
     ==================
 *** SIMULATION SUMMARY ***
     ==================
-    Simulation Finished at:  {time.ctime()}
-    Total Frequencies:       {num_freqs}
-    Total Elapsed Time:      {total_elapsed:.2f} seconds ( {total_elapsed/60:.2f} minutes )
-    Avg Time per Freq:       {avg_time:.3f} seconds: 
-                             Assy ( {avg_assy:.3f}s ) + BEM ( {avg_BEM:.3f}s ) + Mics ( {avg_mics:.3f}s ) + Export ( {avg_export:.3f}s )
-    
+    Simulation Finished at: {time.ctime()}
+    Total Frequencies:      {num_freqs}
+    Total Elapsed Time:     {total_elapsed:.2f} seconds ( {total_elapsed/60:.2f} minutes )
+    Avg Time per Freq:      {avg_time:.3f} seconds/Freq: 
+                            Assy ( {avg_assy:.3f}s ) + BEM ( {avg_BEM:.3f}s ) + Mics ( {avg_mics:.3f}s ) + Export ( {avg_export:.3f}s )
+
+    Parallel Speedup vs 1CPU:  {speedup:.2f}x (using {num_workers} workers)
+    Actual 1 Worker Time/Freq: {theoretical_serial_time/num_freqs:.3f} s/Freq
+
     Check '{log_f}' for more details.
     Open '{parser.model_name}_Results.pvd' in ParaView.
 {"=" * 98}
 """
             print(SUMMARY())
-            log.write(SUMMARY())
+            log.write("\n"+SUMMARY())
     except ValueError as e:
         print(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
         traceback.print_exc()

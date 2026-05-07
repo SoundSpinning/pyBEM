@@ -5,7 +5,7 @@ import time
 from numba import njit, prange
 from utils import get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
 
-# A global container inside the worker process
+# A global container inside the worker process for fast I/O
 _worker_context = {}
 
 def init_worker(shared_data):
@@ -13,9 +13,10 @@ def init_worker(shared_data):
     global _worker_context
     _worker_context = shared_data
 
-# This is for parallel solve of Freqs, based on machine resources; i.e. automated.
-# @njit(cache=True) do NOT use here, overkill; keep inside functions with njit as they were
-# def frequency_worker(f, static_data, bc_map, sorted_bem_ids):
+###
+### This is for parallel solve of Freqs, based on machine resources; i.e. automated.
+###
+# @njit(cache=True) do NOT use here, overkill; keep inside functions with njit as they are
 def frequency_worker(f, bc_map, sorted_bem_ids):
     """
     Independent worker function. Runs for EVERY frequency.
@@ -25,12 +26,56 @@ def frequency_worker(f, bc_map, sorted_bem_ids):
     # Pull the data from the worker's local 'memory vault'
     # No pickling or data transfer happens here!
     static_data = _worker_context
+    amps = static_data.get('amplitudes') # Use .get() to avoid KeyErrors
+    damping_f = static_data['damping']
+
+    # PRE-processing if any amplitude curves present
+    # A. Resolve Damping
+    if amps and 'AMP_damp' in damping_f:
+        curve = amps[damping_f['AMP_damp']]
+        damping_f = np.interp(f, curve[:, 0], curve[:, 1]) * damping_f['value']
+    else:
+        damping_f = damping_f['value']
+
+    # B. Resolve BCs (The "Clean & Scale" Pass)
+    resolved_bcs = {}
+    
+    for eid, info in bc_map.items():
+        # Create a local numeric-only dict for this element
+        resolved_bcs[eid] = res = {}
+        
+        # We only look for the three core types
+        for bc_type in ['PRES', 'VELO', 'IMPE']:
+            if bc_type in info:
+                # Get base value: e.g., (2e-11 + 1e-11j)
+                base_val = info[bc_type]
+                v_real = base_val.real
+                v_imag = base_val.imag
+
+                # --- Scale REAL channel ---
+                amp_r_key = f'{bc_type}_AMP_real'
+                if amps and amp_r_key in info:
+                    c_name = info[amp_r_key]
+                    if c_name in amps:
+                        scale_r = np.interp(f, amps[c_name][:, 0], amps[c_name][:, 1])
+                        v_real *= scale_r
+
+                # --- Scale IMAGINARY channel ---
+                amp_i_key = f'{bc_type}_AMP_imag'
+                if amps and amp_i_key in info:
+                    c_name = info[amp_i_key]
+                    if c_name in amps:
+                        scale_i = np.interp(f, amps[c_name][:, 0], amps[c_name][:, 1])
+                        v_imag *= scale_i
+
+                # Recombine into a complex number for the solver
+                res[bc_type] = complex(v_real, v_imag)
 
     # 1. Physics setup
     omega = 2.0 * np.pi * f
     k = omega / static_data['c']
-    if static_data['damping'] is not None:
-        k = k * (1 - (1j * static_data['damping'] * 0.5))
+    if damping_f != 0:
+        k = k * (1 - (1j * damping_f * 0.5))
     rho_omega = static_data['rho'] * omega
 
     # 2. Assembly (The heavy lifting)
@@ -46,7 +91,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids):
     t_assembly = time.time() - t_asm_0
     # 3. Solve
     t_slv_0 = time.time()
-    p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, bc_map, sorted_bem_ids, rho_omega)
+    p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, resolved_bcs, sorted_bem_ids, rho_omega)
     solve_RAM = get_ram()
     t_slv_1 = time.time()
     # 4. Post-Process (Mics + Averaging)

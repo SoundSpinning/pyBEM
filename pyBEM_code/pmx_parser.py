@@ -28,7 +28,7 @@ class PMXParser:
         
         # --- Step & BCs ---
         self.frequencies = []
-        self.damping = None
+        self.damping = {}
         self.bc_data = []    # List of dicts for PRES, VELO, IMPE
 
         # --- top LOG lines ---
@@ -211,12 +211,15 @@ class PMXParser:
         # In most acoustic BEM, we input the Loss Factor η, where η=2ζ.
         elif h_up.startswith('*MODAL DAMPING'):
             self.model_str += f'***\n{header}\n'
+            amp = self._get_param(header, 'AMPLITUDE')
             if data:
                 for line in data:
                     self.model_str += line+'\n'
                 p = self._split(data[0])
                 m_min, m_max, damp = float(p[0]), float(p[1]), float(p[2])
-                self.damping = damp
+                self.damping['value'] = damp
+                if amp != None:
+                    self.damping['AMP_damp'] = amp
 
         # --- 9) BCs (Boundary, Cload, Impedance) ---
         # Acoustic Pressure, DoF = 8

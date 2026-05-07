@@ -44,6 +44,7 @@ def TOP_LOG_LINES(self): return f"""
     AMPLITUDES ( {len(self.amplitudes)} ): {list(self.amplitudes.keys())}
     MATERIALS ( {len(self.materials)} ): {self.materials}
     FREQUENCIES: {len(self.frequencies)}  [{min(self.frequencies):.1f}Hz --> {max(self.frequencies):.1f}Hz]
-    DAMPING: Input Loss Factor (LF) = {self.damping} | Solver uses Damping Ratio (DR), LF=2DR
+    DAMPING: Input Loss Factor (LF) = {self.damping} 
+             Solver uses Damping Ratio (DR): DR = LF * 0.5
     BCs ( {len(self.bc_data)} ): {self.bc_data}
 """
