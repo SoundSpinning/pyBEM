@@ -425,7 +425,7 @@ def start_pybem_app():
                         pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
                         solve_RAM_2 = get_ram()
                         # Write to LOG
-                        log_line = (f" {f_done:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM_2:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
+                        log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {pre_RAM + solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
                         log.write(log_line)
                         log.flush() # Forces write to disk so we can tail the log in real-time
 
