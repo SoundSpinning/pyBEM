@@ -36,10 +36,10 @@ from tqdm import tqdm
 # Import custom modules
 from version import __solver__
 from pmx_parser import PMXParser
-from solver_core import pre_assembly, pre_mics, init_worker, frequency_worker, main_assembly, solve_bem_system, calculate_mics
+from solver_core import create_shared_array_directly, global_shm_cleanup, promote_to_shm, init_worker, frequency_worker, pre_assembly, pre_mics
 # from exporter import PVExporter
 from exporter_2 import PVExporter
-from utils import get_cpus, get_ram, prepare_geometry, get_geo_info, averaged_at_nodes
+from utils import get_cpus, get_ram, prepare_geometry, get_geo_info, get_total_gps
 from constants import DEBUG, P_REF
 
 # Paralel libraries
@@ -56,7 +56,7 @@ def start_pybem_app():
     args = sys.argv[1:] # Skip the script name itself
     # print(args)
     filename = None
-    user_ncpus = None # Default is None, so your auto-logic can take over
+    user_ncpus = None # Default is None, so auto-logic can take over
 
     for arg in args:
         if "=" in arg:
@@ -267,6 +267,7 @@ def start_pybem_app():
         # "@njit(parallel=True, cache=True" in 'solver_core.py')
         n_CPUs, n_threads, RAM_gb = get_cpus()
         used_CPUs = n_CPUs
+        # used_CPUs = 1   ### use for testing
         set_num_threads(used_CPUs)
         str_CPUs = (f"""
  Number of CPUs found on this machine: ( {n_CPUs} ) |  Number of threads: ( {n_threads} )
@@ -298,8 +299,25 @@ def start_pybem_app():
         # See `main_assembly()` for the logic behind it.
         # order_length = order_length * 100
 
-        # PRE assembly main calcs
-        gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static = pre_assembly(bem_nodal_coords, bem_centers, bem_areas, bem_normals)
+        # Quick PRE sizing of main map arrays for speed & RAM Shared Memory
+        total_gps = get_total_gps(bem_nodal_coords)
+        n_els = len(bem_centers)
+
+        # Create Shared Memory Blocks DIRECTLY
+        R_map, R_meta = create_shared_array_directly((n_els, total_gps), np.float32, "R_map")
+        G_static_map, G_meta = create_shared_array_directly((n_els, total_gps), np.float32, "G_static")
+        H_static_map, H_meta = create_shared_array_directly((n_els, total_gps), np.float32, "H_static")
+
+        # PRE assembly: main calcs
+        gp_per_element, GP_start_idx, G_diag_static, H_diag_static = pre_assembly(bem_nodal_coords, bem_centers, bem_areas, bem_normals, R_map, G_static_map, H_static_map, total_gps)
+
+        # # In start_pybem_app, AFTER pre_assembly but BEFORE starting the Pool:
+        # for arr in [G_static_map, H_static_map, R_map]:
+        #     # This forces the CPU to synchronize the cache with the actual RAM
+        #     _ = np.sum(arr[:100]) # A dummy read operation
+
+        # OLD PRE assembly: before Shared Memory capa ...
+        # gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static = pre_assembly(bem_nodal_coords, bem_centers, bem_areas, bem_normals)
 
         # Checks on assembly matrices when debugging
         # np.matrix.tofile(G_static_map[:], 'pre_H_matrix.txt', sep=' ', format='%s')
@@ -313,11 +331,25 @@ def start_pybem_app():
         ###
         ### Logic for PARALLEL FREQs solve
         ###
+        # -- 1. PACK STATIC DATA -- 
+        # These dictionary's items are sent to every worker once
+        static_data = {
+            'c': parser.speed_of_sound, 'rho': rho, 'damping': damping, 'amplitudes': amps,
+            'gp_per_element': gp_per_element, 'GP_start_idx': GP_start_idx,
+            'R_map': R_meta, 'G_static_map': G_meta, 'H_static_map': H_meta,
+            'G_diag_static': G_diag_static, 'H_diag_static': H_diag_static,
+            'H_sign': H_sign, 'max_el_length': max_el_length, 'order_length': order_length,
+            'bc_map': bc_map, 'sorted_mics_els': sorted_mics_els,
+            'pre_mics_G': pre_mics_G, 'pre_mics_H': pre_mics_H, 'pre_mics_R': pre_mics_R, 
+            'num_mics': num_mics, 'bem_areas': bem_areas, 'sorted_nodes': sorted_nodes, 
+            'sorted_bem_els': sorted_bem_els, 'sorted_mics_nodes': sorted_mics_nodes
+        }
+        
         # get RAM before solve
         pre_RAM = get_ram()
         pre_RAM_gb = pre_RAM / 1024
 
-        # -- 1. THE RESOURCE GOVERNOR -- 
+        # -- 2. THE RESOURCE GOVERNOR -- 
         # Start costing workers for parallel freq solve based on n_CPUS & RAM estimates at PRE
         cost_per_worker_gb = pre_RAM_gb * 0.20  # +20% in solve estimate
         safe_RAM_limit_gb = RAM_gb - pre_RAM_gb
@@ -326,25 +358,10 @@ def start_pybem_app():
             num_workers = num_workers
         else:
             num_workers = max(1, min(n_CPUs, n_potential_workers))
-        
-        # testing n_cores vs I/O speed
-        used_CPUs = 1  # avoid race conditions in parallel solve
+        used_CPUs = 1  # avoid race conditions in Numba parallel loops at solve
         set_num_threads(used_CPUs)
+        # testing n_cores vs I/O speed
         # num_workers = 6
-
-        # -- 2. PACK STATIC DATA -- 
-        # These dictionary's items are sent to every worker once
-        static_data = {
-            'c': parser.speed_of_sound, 'rho': rho, 'damping': damping, 'amplitudes': amps,
-            'gp_per_element': gp_per_element, 'GP_start_idx': GP_start_idx,
-            'R_map': R_map, 'G_static_map': G_static_map, 'H_static_map': H_static_map,
-            'G_diag_static': G_diag_static, 'H_diag_static': H_diag_static,
-            'H_sign': H_sign, 'max_el_length': max_el_length, 'order_length': order_length,
-            'bc_map': bc_map, 'sorted_mics_els': sorted_mics_els,
-            'pre_mics_G': pre_mics_G, 'pre_mics_H': pre_mics_H, 'pre_mics_R': pre_mics_R, 
-            'num_mics': num_mics, 'bem_areas': bem_areas, 'sorted_nodes': sorted_nodes, 
-            'sorted_bem_els': sorted_bem_els, 'sorted_mics_nodes': sorted_mics_nodes
-        }
 
         # PRE times & logs
         t_pre_mics = time.time() - t_pre_1
@@ -358,9 +375,13 @@ def start_pybem_app():
      ( i ) To avoid race conditions in parallel solver, Numba MAX CPUs is set back to ( {used_CPUs} )
 """)
         print(log_pre_stats)
-        
+        # Promote to Shared Memory
+        print("     ( i ) Promoting heavy arrays to Shared Memory...\n")
+        shm_static_data = promote_to_shm(static_data)
+
         with open(log_f, "a") as log:
             log.write(log_pre_stats)
+            log.write(f"     ( i ) Promoting heavy arrays to Shared Memory...\n")
             log.write(f"\n{'=' * 98}")
             log.write(f"""
  {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}""")
@@ -371,49 +392,57 @@ def start_pybem_app():
             # -- 3. THE PARALLEL SWEEP -- 
             print(f"{'=' * 80}")
             pbar = tqdm(total=len(parser.frequencies), desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e")
-
+            
             # WORKER function
-            with ProcessPoolExecutor(
-                max_workers = num_workers,
-                initializer = init_worker,
-                initargs = (static_data,)
-            ) as executor:
-                # Submit all frequencies
-                futures = {
-                    executor.submit(frequency_worker, f, bc_map, sorted_bem_ids): f 
-                    for f in parser.frequencies
-                }
+            try:
+                with ProcessPoolExecutor(
+                    max_workers = num_workers,
+                    initializer = init_worker,
+                    initargs = (shm_static_data,)
+                ) as executor:
+                    # Submit all frequencies
+                    futures = {
+                        executor.submit(frequency_worker, f, bc_map, sorted_bem_ids): f 
+                        for f in parser.frequencies
+                    }
 
-                for future in as_completed(futures):
-                    f_done, nodal_pressures, meta = future.result()
-                    # Update timing info
-                    t_assembly = meta['t_assembly']
-                    global_assy += t_assembly
-                    t_solve_bem = meta['t_solve_bem']
-                    global_BEM += t_solve_bem
-                    t_solve_mics = meta['t_solve_mics']
-                    t_solve = t_solve_bem + t_solve_mics
-                    global_mics += t_solve_mics
-                    all_t_avr += meta['t_avrg_nodes']
-                    solve_RAM = meta['solve_RAM']
-                    
-                    # Update exporter & pbar (keeps file ordering/RAM stable)
-                    exporter.add_frequency_step(f_done, nodal_pressures)
-                    pbar.update(1)
-                    pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
-                    solve_RAM_2 = get_ram()
-                    # Write to LOG
-                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM_2:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
-                    log.write(log_line)
-                    log.flush() # Forces write to disk so we can tail the log in real-time
+                    for future in as_completed(futures):
+                        f_done, nodal_pressures, meta = future.result()
+                        # Update timing info
+                        t_assembly = meta['t_assembly']
+                        global_assy += t_assembly
+                        t_solve_bem = meta['t_solve_bem']
+                        global_BEM += t_solve_bem
+                        t_solve_mics = meta['t_solve_mics']
+                        t_solve = t_solve_bem + t_solve_mics
+                        global_mics += t_solve_mics
+                        all_t_avr += meta['t_avrg_nodes']
+                        solve_RAM = meta['solve_RAM']
+
+                        # Update exporter & pbar (keeps file ordering/RAM stable)
+                        exporter.add_frequency_step(f_done, nodal_pressures)
+                        pbar.update(1)
+                        pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
+                        solve_RAM_2 = get_ram()
+                        # Write to LOG
+                        log_line = (f" {f_done:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM_2:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
+                        log.write(log_line)
+                        log.flush() # Forces write to disk so we can tail the log in real-time
+
+            finally:
+                # This runs even if the 'with' block crashes
+                global_shm_cleanup()
             
             pbar.close()  # Close terminal progress bar
             t_exp_0 = time.time()
             print(f"{'=' * 80}")
+            print("\n    ( i ) Shared Memory released.")
+            
             exporter.finalise()  # Write all results in RAM in PV format
             t_exp_1 = time.time()
             all_t_exp += t_exp_1 - t_exp_0
             
+            log.write(f"\n    ( i ) Shared Memory released.")
             log.write(f"\n{'-' * 80}")
             log.write(f"\n -- All Frequency Results saved -- ")
             # additional avg timings

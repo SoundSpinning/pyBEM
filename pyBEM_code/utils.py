@@ -138,6 +138,12 @@ def get_geo_info(elements, centers, areas, normals):
 
     return volume, total_area, CoG, conflicts, open_edges
 
+def get_total_gps(element_nodes):
+    total_gps = 0
+    for nodes in element_nodes:
+        total_gps += (11 if len(nodes) == 3 else 14)
+    return total_gps
+
 # ---------------------------------
 # ---------------------------------
 ###

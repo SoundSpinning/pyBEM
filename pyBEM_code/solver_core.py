@@ -2,16 +2,105 @@
 
 import numpy as np
 import time
+import os
+import atexit
+from multiprocessing import shared_memory
 from numba import njit, prange
 from utils import get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
+
+# This keeps track of all blocks created in this session
+_SHM_REGISTRY = {}
+
+def global_shm_cleanup():
+    """The 'Janitor' that runs when the script ends or crashes."""
+    for name, shm in list(_SHM_REGISTRY.items()):
+        try:
+            shm.close()
+            shm.unlink()
+            # print(f" ( i ) Cleaned up SHM: {name}") # Debug only
+        except Exception:
+            pass
+    _SHM_REGISTRY.clear()
+
+# Register the janitor with the OS
+atexit.register(global_shm_cleanup)
+
+def create_shared_array_directly(shape, dtype, name_tag):
+    """Allocates a block of shared memory and returns it as a numpy array."""
+    pid = os.getpid()
+    unique_name = f"pyBEM_{pid}_{name_tag}"
+    
+    # Calculate bytes
+    nbytes = int(np.prod(shape) * np.dtype(dtype).itemsize)
+    
+    # Allocate once in SHM
+    shm = shared_memory.SharedMemory(create=True, size=nbytes, name=unique_name)
+    _SHM_REGISTRY[unique_name] = shm
+    
+    # Create the numpy view
+    arr = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+    arr.fill(0) # or just leave it 'empty' for speed
+    
+    # We return the array AND the metadata for the workers
+    metadata = ('SHM_MARKER', unique_name, shape, dtype)
+    return arr, metadata
+
+def promote_to_shm(data_dict):
+    pid = os.getpid()
+    shm_mapped_dict = {}
+    
+    for key, value in data_dict.items():
+        # Promote large arrays (tweak 1MB threshold as you see fit)
+        if isinstance(value, np.ndarray) and value.nbytes > 1_000_000:
+            unique_name = f"pyBEM_{pid}_{key}"
+            
+            try:
+                shm = shared_memory.SharedMemory(create=True, size=value.nbytes, name=unique_name)
+                shared_array = np.ndarray(value.shape, dtype=value.dtype, buffer=shm.buf)
+                shared_array[:] = value[:] # The ONLY time we copy this data
+                
+                _SHM_REGISTRY[unique_name] = shm
+                shm_mapped_dict[key] = ('SHM_MARKER', unique_name, value.shape, value.dtype)
+            
+            except FileExistsError:
+                # Emergency recovery: attach, kill, and recreate
+                old_shm = shared_memory.SharedMemory(name=unique_name)
+                old_shm.close()
+                old_shm.unlink()
+                # Recurse once to create fresh
+                return promote_to_shm(data_dict)
+        else:
+            shm_mapped_dict[key] = value
+            
+    return shm_mapped_dict
+
+# Crucial: prevents garbage collection in workers
+_worker_shm_refs = [] 
+
+def rebuild_from_shm(shm_mapped_dict):
+    global _worker_shm_refs
+    rebuilt_dict = {}
+    
+    for key, value in shm_mapped_dict.items():
+        if isinstance(value, tuple) and value[0] == 'SHM_MARKER':
+            _, name, shape, dtype = value
+            shm = shared_memory.SharedMemory(name=name)
+            arr = np.ndarray(shape, dtype=dtype, buffer=shm.buf)
+            rebuilt_dict[key] = arr
+            _worker_shm_refs.append(shm) # Keep handle open
+        else:
+            rebuilt_dict[key] = value
+            
+    return rebuilt_dict
 
 # A global container inside the worker process for fast I/O
 _worker_context = {}
 
 def init_worker(shared_data):
     """Runs ONCE per worker process at startup."""
+    rebuilt_dict = rebuild_from_shm(shared_data)
     global _worker_context
-    _worker_context = shared_data
+    _worker_context = rebuilt_dict
 
 ###
 ### This is for parallel solve of Freqs, based on machine resources; i.e. automated.
@@ -126,8 +215,9 @@ def frequency_worker(f, bc_map, sorted_bem_ids):
     return f, nodal_pressures, metadata
 
 @njit(parallel=True, cache=True)
-def pre_assembly(element_nodes, centers, areas, normals):
+def pre_assembly(element_nodes, centers, areas, normals, R_map, G_static_map, H_static_map, total_gps):
     """
+    It takes pre-allocated Shared Memory large arrays to avoid (RAM) duplication crashes.
     Pre-Computes G and H (static, k=0) matrices using the input mesh:
     - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
     - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
@@ -146,10 +236,7 @@ def pre_assembly(element_nodes, centers, areas, normals):
     # Here we aim at all possible GPs for centroid, mid- and high-order integration options.
     for i in range(n_els):
         elem_n_nodes = len(element_nodes[i])
-        if elem_n_nodes == 3:
-            num_gps = 1+3+7
-        else:
-            num_gps = 1+4+9
+        num_gps = 11 if elem_n_nodes == 3 else 14
         gp_per_element[i] = num_gps
         total_gps += num_gps
 
@@ -162,12 +249,6 @@ def pre_assembly(element_nodes, centers, areas, normals):
     for j in range(n_els):
         GP_start_idx[j] = offset
         offset += gp_per_element[j]
-
-    # Static Influence Matrices
-    # Rows = Centroids (n_els), Cols = Every single GP in the system
-    G_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
-    H_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
-    R_map = np.zeros((n_els, total_gps), dtype=np.float32)
 
     cursor = 0
     for j in prange(n_els):      # Parallel Loop over SOURCE elements
@@ -249,7 +330,135 @@ def pre_assembly(element_nodes, centers, areas, normals):
         # The BEM Diagonal Balance
         H_diag_static[i] = -row_sum
 
-    return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
+    return gp_per_element, GP_start_idx, G_diag_static, H_diag_static
+    # return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
+
+# OLD before Shared Memory approach, without the need for a large pagefile.
+# @njit(parallel=True, cache=True)
+# def pre_assembly(element_nodes, centers, areas, normals):
+#     """
+#     Pre-Computes G and H (static, k=0) matrices using the input mesh:
+#     - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
+#     - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
+#     It also pre-computes fast arrays with all GPs info for fast assembly in the solve.
+#     element_nodes: BEM elem nodal coords
+#     centers: (N, 3) array
+#     areas: (N,) array
+#     normals: (N, 3) array
+#     """
+#     n_els = len(centers)    # number of BEM elements
+#     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+
+#     # --- STEP 1: Calculate Total GPs ---
+#     total_gps = 0
+#     gp_per_element = np.zeros(n_els, dtype=np.int64)  # Force i64 for numba to work
+#     # Here we aim at all possible GPs for centroid, mid- and high-order integration options.
+#     for i in range(n_els):
+#         elem_n_nodes = len(element_nodes[i])
+#         if elem_n_nodes == 3:
+#             num_gps = 1+3+7
+#         else:
+#             num_gps = 1+4+9
+#         gp_per_element[i] = num_gps
+#         total_gps += num_gps
+
+#     print(f""" For ( {n_els} ) BEM elements, found a total of ( {total_gps} ) possible Integration / Gauss Points.""")
+    
+#     # --- STEP 2: Pre-allocate with Exact Size for speed ---
+#     # These are "Flat Lists" with all GPoints + dtype to save on RAM
+#     GP_start_idx = np.zeros(n_els, dtype=np.int64)
+#     offset = 0
+#     for j in range(n_els):
+#         GP_start_idx[j] = offset
+#         offset += gp_per_element[j]
+
+#     # Static Influence Matrices
+#     # Rows = Centroids (n_els), Cols = Every single GP in the system
+#     G_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+#     H_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+#     R_map = np.zeros((n_els, total_gps), dtype=np.float32)
+
+#     cursor = 0
+#     for j in prange(n_els):      # Parallel Loop over SOURCE elements
+#         n_pts = gp_per_element[j]
+#         cursor = GP_start_idx[j]
+#         nj = normals[j]          # THIS element normal
+#         nodes = element_nodes[j] # Node coords for THIS element
+#         area = areas[j]          # Area for THIS element
+#         # temp arrays of Flat Lists
+#         pts_coords = np.zeros((n_pts, 3), dtype=np.float64)
+#         pts_weights = np.zeros(n_pts, dtype=np.float64)
+#         # Calculate ALL possible GPs(coords, weights) per SOURCE element
+#         if n_pts == 11: # TRIAs: 1 + 3 + 7 GPs levels
+#             mid_gp_idx = 3 + 1
+#         elif n_pts == 14: # QUADs: 1 + 4 + 9 GPs levels
+#             mid_gp_idx = 4 + 1
+        
+#         # Integration options overal mapping:
+#         # used later in solver as a function of distance receiver --> source elements:
+#         # CENTROID (1pnt):
+#         pts_coords[0] = centers[j]
+#         pts_weights[0] = 1 * area
+#         # MID-order (3pnts or 4pnts):
+#         pts, weights = pre_mid_order(nodes, area)
+#         pts_coords[1:mid_gp_idx] = pts
+#         pts_weights[1:mid_gp_idx] = weights
+#         # HIGH-order (7pnts or 9pnts):
+#         pts, weights = pre_high_order(nodes, area)
+#         pts_coords[mid_gp_idx:] = pts
+#         pts_weights[mid_gp_idx:] = weights
+
+#         # --- STEP 3: Fill the "Flat Lists" ---
+#         for i in range(n_els): # Loop over RECEIVER elements
+#             r_pt = centers[i]
+#             # Explicit loop is "The Numba Way" - no axis issues here
+#             for p in range(n_pts):
+#                 # 1. Calculate the vector from GP to Receiver Center
+#                 rx = r_pt[0] - pts_coords[p, 0]
+#                 ry = r_pt[1] - pts_coords[p, 1]
+#                 rz = r_pt[2] - pts_coords[p, 2]
+#                 # 2. Distance math
+#                 r2 = rx*rx + ry*ry + rz*rz
+#                 if r2 < 1e-18: # Safety for self-term
+#                     continue
+#                 r = np.sqrt(r2)
+#                 idx = cursor + p
+#                 R_map[i, idx] = r
+
+#                 # Fill Static Influence Matrices
+#                 # 3. Bake the G Static Map: G = weight / (4 * pi * r)
+#                 g_base = pts_weights[p] * inv_4pi / r
+#                 G_static_map[i, idx] = g_base
+
+#                 # 4. Bake the H Static Map: H = G_static * (dot / r^2)
+#                 dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
+#                 H_static_map[i, idx] = g_base * (dot / r2)
+
+#     # Calc the static [H] diagonal self terms
+#     H_diag_static = np.zeros(n_els, dtype=np.float64)
+#     G_diag_static = np.zeros(n_els, dtype=np.float64)
+#     for i in range(n_els):
+#         row_sum = 0.0
+#         G_diag_static[i] = np.sqrt(areas[i] / np.pi) * 2.0 * inv_4pi
+#         for j in range(n_els):
+#             if i == j: 
+#                 continue # Skip the pre-diagonals in ther sum
+            
+#             n_pts = gp_per_element[j]
+#             if n_pts == 11:   # TRIAs: 1 + 3 + 7
+#                 start = GP_start_idx[j] + 4
+#                 n_pts = 7
+#             elif n_pts == 14: # QUADs: 1 + 4 + 9
+#                 start = GP_start_idx[j] + 5
+#                 n_pts = 9
+#             # SUM ONLY HIGH ORDER from the static pre-baked H values for this source element
+#             for p in range(start, start + n_pts):
+#                 row_sum += H_static_map[i, p]
+
+#         # The BEM Diagonal Balance
+#         H_diag_static[i] = -row_sum
+
+#     return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
 
 @njit(parallel=True, cache=True)
 def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length):
