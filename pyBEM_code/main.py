@@ -1,32 +1,28 @@
 import sys
 import os
 
-# PARALLEL env settings
-# Force single-threading for the underlying math libraries
-# This must happen BEFORE numpy/scipy are imported
+# # PARALLEL env settings
+# # Force single-threading for the underlying math libraries
+# # This must happen BEFORE numpy/scipy are imported
+# tmp_cpus = "6"
+# # The "Master Switch." Controls the number of threads for any 
+# # library built with OpenMP (including parts of NumPy and SciPy).
+# os.environ["OMP_NUM_THREADS"] = tmp_cpus
 
-# The "Master Switch." Controls the number of threads for any 
-# library built with OpenMP (including parts of NumPy and SciPy).
-os.environ["OMP_NUM_THREADS"] = "1"
+# # If TRUE, MKL ignores other limits and uses as many threads as 
+# # it "thinks" are free. Setting to FALSE forces it to obey your specific limits.
+# os.environ["MKL_DYNAMIC"] = "FALSE"
+# # Specific to Intel's Math Kernel Library. 
+# # E.g. for an Intel i7, this is the most likely culprit for Ax=B thread-count.
+# os.environ["MKL_NUM_THREADS"] = tmp_cpus
 
-# If TRUE, MKL ignores other limits and uses as many threads as 
-# it "thinks" are free. Setting to FALSE forces it to obey your specific limits.
-os.environ["MKL_DYNAMIC"] = "FALSE"
-# Specific to Intel's Math Kernel Library. 
-# E.g. for an Intel i7, this is the most likely culprit for Ax=B thread-count.
-os.environ["MKL_NUM_THREADS"] = "1"
+# # Controls threading for the OpenBLAS library. 
+# # Often used as an alternative to MKL in various Python distributions.
+# os.environ["OPENBLAS_NUM_THREADS"] = tmp_cpus
 
-# Controls threading for the OpenBLAS library. 
-# Often used as an alternative to MKL in various Python distributions.
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
+# # Specific to macOS
+# os.environ["VECLIB_MAXIMUM_THREADS"] = tmp_cpus
 
-# Specific to macOS
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-
-# Controls the thread pool for Numba's parallel=True & prange loops.
-# However, see in main code we take control of this part via set_num_threads()
-# os.environ["NUMBA_NUM_THREADS"] = "1"
-# 
 import numpy as np
 from numba import set_num_threads
 import traceback
@@ -39,7 +35,7 @@ from pmx_parser import PMXParser
 from solver_core import create_shared_array_directly, global_shm_cleanup, promote_to_shm, init_worker, frequency_worker, pre_assembly, pre_mics
 # from exporter import PVExporter
 from exporter_2 import PVExporter
-from utils import get_cpus, get_ram, prepare_geometry, get_geo_info, get_total_gps
+from utils import get_cpus, get_ram, set_hardware_limits, prepare_geometry, get_geo_info, get_total_gps
 from constants import DEBUG, P_REF
 
 # Paralel libraries
@@ -61,11 +57,13 @@ def start_pybem_app():
     for arg in args:
         if "=" in arg:
             key, val = arg.split("=", 1)
-            if key.lower() == "ncpus":
+            if key.lower() == "cpus":
                 try:
                     user_ncpus = int(val)
                 except ValueError:
-                    print(f" ( ! ) Warning: Invalid ncpus value '{val}'. Using auto-parallel.")
+                    print(f" ( ! ) Warning: Invalid cpus value '{val}'. Using auto-parallel.")
+            else:
+                raise RuntimeError(f" ( ! ) ERROR: Invalid parameter '{key}'. Did you mean 'cpus'?")
         else:
             # If it doesn't have an '=', assume it's the filename
             filename = arg.strip()
@@ -349,7 +347,8 @@ def start_pybem_app():
         pre_RAM = get_ram()
         pre_RAM_gb = pre_RAM / 1024
 
-        # -- 2. THE RESOURCE GOVERNOR -- 
+        # -- 2. THE RESOURCE GOVERNOR --
+        # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
         # Start costing workers for parallel freq solve based on n_CPUS & RAM estimates at PRE
         cost_per_worker_gb = pre_RAM_gb * 0.20  # +20% in solve estimate
         safe_RAM_limit_gb = RAM_gb - pre_RAM_gb
@@ -358,9 +357,13 @@ def start_pybem_app():
             num_workers = num_workers
         else:
             num_workers = max(1, min(n_CPUs, n_potential_workers))
-        used_CPUs = 1  # avoid race conditions in Numba parallel loops at solve
-        set_num_threads(used_CPUs)
+        
+        # Determine threads per worker based on Physical Cores
+        threads_per_worker = max(1, n_CPUs // num_workers, int(n_CPUs - num_workers))
+        set_hardware_limits(threads_per_worker)
+        set_num_threads(threads_per_worker)
         # testing n_cores vs I/O speed
+        # threads_per_worker = xx
         # num_workers = 6
 
         # PRE times & logs
@@ -372,7 +375,7 @@ def start_pybem_app():
      
      Estimates for parallel FREQ solve based on RAM available ( {RAM_gb:.2f}GB ):
      Estimated +RAM per Freq: ( {cost_per_worker_gb:.2f}GB ) | Number of Freqs to solve in parallel: ( {num_workers} )
-     ( i ) To avoid race conditions in parallel solver, Numba MAX CPUs is set back to ( {used_CPUs} )
+     ( i ) To avoid race conditions in parallel solver, Numba MAX CPUs is set to ( {threads_per_worker} )
 """)
         print(log_pre_stats)
         # Promote to Shared Memory
@@ -425,7 +428,7 @@ def start_pybem_app():
                         pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
                         solve_RAM_2 = get_ram()
                         # Write to LOG
-                        log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {pre_RAM + solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
+                        log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
                         log.write(log_line)
                         log.flush() # Forces write to disk so we can tail the log in real-time
 

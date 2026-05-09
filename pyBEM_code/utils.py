@@ -20,6 +20,31 @@ def get_ram():
     # Convert to MB with an adjust to match Win10 task manager
     return (process.memory_info().rss / (1024**2)) * 1.14
 
+# PARALLEL env settings
+# Force single-threading for the underlying math libraries
+# This must happen BEFORE numpy/scipy are imported
+def set_hardware_limits(threads_per_worker):
+    t_str = str(threads_per_worker)
+    
+    # Generic OpenMP (Used by many libraries)
+    os.environ["OMP_NUM_THREADS"] = t_str
+    
+    # Intel MKL Specifics
+    os.environ["MKL_DYNAMIC"] = "FALSE"
+    os.environ["MKL_NUM_THREADS"] = t_str
+    
+    # OpenBLAS Specifics
+    os.environ["OPENBLAS_NUM_THREADS"] = t_str
+    
+    # macOS/Accelerate Specifics
+    os.environ["VECLIB_MAXIMUM_THREADS"] = t_str
+    
+    # Numexpr Specifics (often used in Pandas/Numpy)
+    os.environ["NUMEXPR_NUM_THREADS"] = t_str
+# Below Controls the thread pool for Numba's parallel=True & prange loops.
+# However, see in main code we take control of this part via set_num_threads()
+# os.environ["NUMBA_NUM_THREADS"] = t_str
+
 def calculate_element_properties(nodes, connectivity):
     """
     Calculates normals, the center (centroid) and surface area of a single element.
