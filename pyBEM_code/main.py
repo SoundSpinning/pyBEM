@@ -1,28 +1,5 @@
 import sys
 import os
-
-# # PARALLEL env settings
-# # Force single-threading for the underlying math libraries
-# # This must happen BEFORE numpy/scipy are imported
-# tmp_cpus = "6"
-# # The "Master Switch." Controls the number of threads for any 
-# # library built with OpenMP (including parts of NumPy and SciPy).
-# os.environ["OMP_NUM_THREADS"] = tmp_cpus
-
-# # If TRUE, MKL ignores other limits and uses as many threads as 
-# # it "thinks" are free. Setting to FALSE forces it to obey your specific limits.
-# os.environ["MKL_DYNAMIC"] = "FALSE"
-# # Specific to Intel's Math Kernel Library. 
-# # E.g. for an Intel i7, this is the most likely culprit for Ax=B thread-count.
-# os.environ["MKL_NUM_THREADS"] = tmp_cpus
-
-# # Controls threading for the OpenBLAS library. 
-# # Often used as an alternative to MKL in various Python distributions.
-# os.environ["OPENBLAS_NUM_THREADS"] = tmp_cpus
-
-# # Specific to macOS
-# os.environ["VECLIB_MAXIMUM_THREADS"] = tmp_cpus
-
 import numpy as np
 from numba import set_num_threads
 import traceback
@@ -100,6 +77,7 @@ def start_pybem_app():
         sorted_node_ids = list(sorted_nodes.keys())
         sorted_bem_els = dict(sorted(parser.elements.items()))
         sorted_bem_ids = list(sorted_bem_els.keys())
+        n_bem_els = len(sorted_bem_els)
 
         sorted_mics_els = {}
         # If mics mesh exists in the model
@@ -113,6 +91,7 @@ def start_pybem_app():
             sorted_mics_nodes = dict(sorted(mics_nodes.items()))
             sorted_mics_centers = np.array(list(sorted_mics_nodes.values()))
             parser.n_mics_nodes = len(sorted_mics_nodes)
+        n_mics_nodes = len(sorted_mics_nodes)
 
         # 2. LOG setup | print & LOG model info
         parser.print_model_summary()
@@ -299,7 +278,7 @@ def start_pybem_app():
 
         # Quick PRE sizing of main map arrays for speed & RAM Shared Memory
         total_gps = get_total_gps(bem_nodal_coords)
-        n_els = len(bem_centers)
+        n_els = n_bem_els
 
         # Create Shared Memory Blocks DIRECTLY
         R_map, R_meta = create_shared_array_directly((n_els, total_gps), np.float32, "R_map")
@@ -350,7 +329,10 @@ def start_pybem_app():
         # -- 2. THE RESOURCE GOVERNOR --
         # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
         # Start costing workers for parallel freq solve based on n_CPUS & RAM estimates at PRE
-        cost_per_worker_gb = pre_RAM_gb * 0.20  # +20% in solve estimate
+        # OLD method: cost_per_worker_gb = pre_RAM_gb * 0.20  # +20% in solve estimate
+        # We can actually calculate the +RAM at solve based on BEM n_els & MICS n_mics_nodes
+        # We add 10% on top for overheads in py & windows, etc as per testing
+        cost_per_worker_gb = (((n_bem_els**2 * 16 * 2.5) + (n_bem_els * n_mics_nodes * 32)) * 1.25 / 1024**3) + 0.5
         safe_RAM_limit_gb = RAM_gb - pre_RAM_gb
         n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
         if user_ncpus is not None:
