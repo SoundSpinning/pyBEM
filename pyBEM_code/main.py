@@ -16,11 +16,12 @@ from utils import get_cpus, get_ram, set_hardware_limits, prepare_geometry, get_
 from constants import DEBUG, P_REF
 
 # Paralel libraries
-import psutil
+import gc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # limit terminal prints when debugging
 np.set_printoptions(threshold=100)  
+gc.disable()  # Disable automatic garbage collection
 
 def start_pybem_app():
     print(f"{__solver__}")
@@ -244,7 +245,7 @@ def start_pybem_app():
         # "@njit(parallel=True, cache=True" in 'solver_core.py')
         n_CPUs, n_threads, RAM_gb = get_cpus()
         used_CPUs = n_CPUs
-        # used_CPUs = 1   ### use for testing
+        # used_CPUs = 2   ### use for testing
         set_num_threads(used_CPUs)
         str_CPUs = (f"""
  Number of CPUs found on this machine: ( {n_CPUs} ) |  Number of threads: ( {n_threads} )
@@ -340,12 +341,16 @@ def start_pybem_app():
         else:
             num_workers = max(1, min(n_CPUs, n_potential_workers))
         
-        # Determine threads per worker based on Physical Cores
-        threads_per_worker = max(1, n_CPUs // num_workers, int(n_CPUs - num_workers))
-        set_hardware_limits(threads_per_worker)
+        # Determine Numba threads per worker based on Physical Cores
+        # threads_per_worker = max(1, n_CPUs // num_workers, int(n_CPUs - num_workers))
+        threads_per_worker = max(1, n_CPUs // num_workers)
+        # set_hardware_limits(threads_per_worker)
+        # if threads_per_worker > 1:
+        # threads_per_worker = 1  ## force to 1CPU in solve
         set_num_threads(threads_per_worker)
+        
         # testing n_cores vs I/O speed
-        # threads_per_worker = xx
+        # threads_per_worker = 1
         # num_workers = 6
 
         # PRE times & logs
@@ -383,11 +388,11 @@ def start_pybem_app():
                 with ProcessPoolExecutor(
                     max_workers = num_workers,
                     initializer = init_worker,
-                    initargs = (shm_static_data,)
+                    initargs = (shm_static_data, threads_per_worker)
                 ) as executor:
                     # Submit all frequencies
                     futures = {
-                        executor.submit(frequency_worker, f, bc_map, sorted_bem_ids): f 
+                        executor.submit(frequency_worker, f, bc_map, sorted_bem_ids, threads_per_worker): f 
                         for f in parser.frequencies
                     }
 
@@ -439,7 +444,7 @@ def start_pybem_app():
             
             # -- Final Timing Summary -- 
             total_elapsed = time.time() - global_t0
-            avg_time = total_elapsed / num_freqs if num_freqs > 0 else 0
+            avg_time = total_elapsed / num_freqs  # if num_freqs > 0 else 0
             avg_assy = (t_pre_assy + global_assy) / num_freqs
             avg_BEM = global_BEM / num_freqs
             avg_mics = (t_pre_mics + global_mics) / num_freqs
@@ -478,6 +483,12 @@ def start_pybem_app():
         traceback.print_exc()
 
 if __name__ == "__main__":
+    from utils import set_hardware_limits
+    # This makes sure at the start that all solve libraries are set to 1CPU max
+    # This is to avoid race conditions on multi-threading.
+    set_hardware_limits(1)
+    # AFTER, in the code we do try better with Numba, as it has the function
+    # set_num_threads(), which the other libraries don't.
     start_pybem_app()
 
 ###

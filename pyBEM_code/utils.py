@@ -1,5 +1,3 @@
-import numpy as np
-from numba import njit
 from collections import defaultdict
 import psutil
 import os
@@ -41,9 +39,12 @@ def set_hardware_limits(threads_per_worker):
     
     # Numexpr Specifics (often used in Pandas/Numpy)
     os.environ["NUMEXPR_NUM_THREADS"] = t_str
-# Below Controls the thread pool for Numba's parallel=True & prange loops.
-# However, see in main code we take control of this part via set_num_threads()
-# os.environ["NUMBA_NUM_THREADS"] = t_str
+    # Below Controls the thread pool for Numba's parallel=True & prange loops.
+    # However, see in main code we take control of this part via set_num_threads()
+    # os.environ["NUMBA_NUM_THREADS"] = t_str
+
+import numpy as np
+from numba import njit
 
 def calculate_element_properties(nodes, connectivity):
     """

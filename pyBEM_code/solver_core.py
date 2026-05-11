@@ -5,8 +5,8 @@ import time
 import os
 import atexit
 from multiprocessing import shared_memory
-from numba import njit, prange
-from utils import get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
+from numba import njit, prange, set_num_threads
+from utils import get_ram, pre_high_order, pre_mid_order, set_hardware_limits, averaged_at_nodes
 
 # This keeps track of all blocks created in this session
 _SHM_REGISTRY = {}
@@ -96,22 +96,26 @@ def rebuild_from_shm(shm_mapped_dict):
 # A global container inside the worker process for fast I/O
 _worker_context = {}
 
-def init_worker(shared_data):
+def init_worker(shared_data, threads_per_worker):
     """Runs ONCE per worker process at startup."""
+    # from numba import set_num_threads
+    # set_num_threads(threads_per_worker)
+    # set_hardware_limits(threads_per_worker)
+    global _worker_context, np
+    import numpy as np
     rebuilt_dict = rebuild_from_shm(shared_data)
-    global _worker_context
     _worker_context = rebuilt_dict
 
 ###
 ### This is for parallel solve of Freqs, based on machine resources; i.e. automated.
 ###
 # @njit(cache=True) do NOT use here, overkill; keep inside functions with njit as they are
-def frequency_worker(f, bc_map, sorted_bem_ids):
+def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     """
     Independent worker function. Runs for EVERY frequency.
     static_data: dict of all BEM/Physics constants
     """
-    import numpy as np
+    # import numpy as np
     # Pull the data from the worker's local 'memory vault'
     # No pickling or data transfer happens here!
     static_data = _worker_context
@@ -170,6 +174,8 @@ def frequency_worker(f, bc_map, sorted_bem_ids):
     # 2. Assembly (The heavy lifting)
     # Using main_assembly function inside the worker
     t_asm_0 = time.time()
+    # set_hardware_limits(threads_per_worker)
+    # set_num_threads(threads_per_worker)
     G_bem, H_bem = main_assembly(
         static_data['gp_per_element'], static_data['GP_start_idx'],
         static_data['R_map'], static_data['G_static_map'], 
@@ -180,12 +186,16 @@ def frequency_worker(f, bc_map, sorted_bem_ids):
     t_assembly = time.time() - t_asm_0
     # 3. Solve
     t_slv_0 = time.time()
-    p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, resolved_bcs, sorted_bem_ids, rho_omega)
+    # p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, resolved_bcs, sorted_bem_ids, rho_omega)
+    bem_solution, cond = solve_bem_system(G_bem, H_bem, resolved_bcs, sorted_bem_ids, rho_omega)
+    # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
+    p_surf, v_surf = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
     solve_RAM = get_ram()
     t_slv_1 = time.time()
     # 4. Post-Process (Mics + Averaging)
     # MICS calcs
     if static_data['sorted_mics_els']:
+        # set_num_threads(threads_per_worker)
         p_mics = calculate_mics(
             static_data['pre_mics_G'], static_data['pre_mics_H'], static_data['pre_mics_R'], 
             static_data['num_mics'], static_data['bem_areas'], 
@@ -460,6 +470,7 @@ def pre_assembly(element_nodes, centers, areas, normals, R_map, G_static_map, H_
 
 #     return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
 
+# @njit(parallel=True, cache=True, nogil=True)
 @njit(parallel=True, cache=True)
 def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length):
     """
@@ -667,6 +678,7 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
 #     return G, H
 
 # @njit(parallel=True)   # it crashes Numba if dictionaries present
+# @njit(nogil=True)
 def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     """
     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
@@ -732,13 +744,15 @@ def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
     # Solve the linear system Ax = B for the unknown surface values (usually Pressure)
     bem_solution = np.linalg.solve(A, B)
     
-    # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
-    p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
+    # # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
+    # p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
 
     # del G, H, A, B, bem_solution
     
-    return (p_final, v_final, cond)
+    return (bem_solution, cond)
+    # return (p_final, v_final, cond)
 
+# @njit   # it crashes Numba if dictionaries present
 def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
     """
     Reconstructs the full pressure and velocity vectors for the surface.
