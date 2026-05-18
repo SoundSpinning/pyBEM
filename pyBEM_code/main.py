@@ -12,7 +12,7 @@ from pmx_parser import PMXParser
 from solver_core import create_shared_array_directly, global_shm_cleanup, promote_to_shm, init_worker, frequency_worker, pre_assembly, pre_mics
 # from exporter import PVExporter
 from exporter_2 import PVExporter
-from utils import get_cpus, get_ram, set_hardware_limits, prepare_geometry, get_geo_info, get_total_gps
+from utils import get_ram, prepare_geometry, get_geo_info, get_total_gps
 from constants import DEBUG, P_REF
 
 # Paralel libraries
@@ -243,8 +243,6 @@ def start_pybem_app():
 
         # Assign number of CPUs for the parallel PRE-solve with numba:
         # "@njit(parallel=True, cache=True" in 'solver_core.py')
-        n_CPUs, n_threads, RAM_gb = get_cpus()
-        used_CPUs = n_CPUs
         # used_CPUs = 2   ### use for testing
         set_num_threads(used_CPUs)
         str_CPUs = (f"""
@@ -339,14 +337,18 @@ def start_pybem_app():
         if user_ncpus is not None:
             num_workers = num_workers
         else:
-            num_workers = max(1, min(n_CPUs, n_potential_workers))
+            # we force 1 CPU (sequential) solve, it seems fast enough vs parallel freqs; 
+            # based on loads of testing to date on a single PC.
+            num_workers = 1
+            # OLD code for auto-parallel workers
+            # num_workers = max(1, min(n_CPUs, n_potential_workers))
         
         # Determine Numba threads per worker based on Physical Cores
         # threads_per_worker = max(1, n_CPUs // num_workers, int(n_CPUs - num_workers))
         threads_per_worker = max(1, n_CPUs // num_workers)
         # set_hardware_limits(threads_per_worker)
         # if threads_per_worker > 1:
-        # threads_per_worker = 1  ## force to 1CPU in solve
+        # threads_per_worker = 1  ## force to 1CPU for Numba in solve
         set_num_threads(threads_per_worker)
         
         # testing n_cores vs I/O speed
@@ -362,8 +364,13 @@ def start_pybem_app():
      
      Estimates for parallel FREQ solve based on RAM available ( {RAM_gb:.2f}GB ):
      Estimated +RAM per Freq: ( {cost_per_worker_gb:.2f}GB ) | Number of Freqs to solve in parallel: ( {num_workers} )
-     ( i ) To avoid race conditions in parallel solver, Numba MAX CPUs is set to ( {threads_per_worker} )
+     ( i ) To avoid race conditions in parallel tasks, Numba MAX CPUs is set to ( {threads_per_worker} )
+     ( i ) Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
+           which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
 """)
+        # Every computer has a relationship between CPU cores, RAM capacity, and Memory Bandwidth.
+        # If you need fine tunning for speed you can test number of CPUs e.g.: pyBEM cpus=3
+        
         print(log_pre_stats)
         # Promote to Shared Memory
         print("     ( i ) Promoting heavy arrays to Shared Memory...\n")
@@ -451,10 +458,12 @@ def start_pybem_app():
             avg_export = avg_to_nodes + avg_vtu
             # Calculate the "Work Load" (what it would have taken on 1 CPU)
             total_work_load = global_assy + global_BEM + global_mics + all_t_avr + all_t_exp
-            theoretical_serial_time = total_work_load + t_pre_assy + t_pre_mics
+            # theoretical_serial_time = total_work_load + t_pre_assy + t_pre_mics
 
-            # Speedup Factor
-            speedup = theoretical_serial_time / total_elapsed
+            # # Speedup Factor | not used, makes no sense.
+            # speedup = theoretical_serial_time / total_elapsed
+    # Parallel Speedup vs 1CPU:  {speedup:.2f}x (using {num_workers} workers)
+    # Actual 1 Worker Time/Freq: {theoretical_serial_time/num_freqs:.3f} s/Freq
 
             def SUMMARY(): return f"""
     ==================
@@ -465,9 +474,6 @@ def start_pybem_app():
     Total Elapsed Time:     {total_elapsed:.2f} seconds ( {total_elapsed/60:.2f} minutes )
     Avg Time per Freq:      {avg_time:.3f} seconds/Freq: 
                             Assy ( {avg_assy:.3f}s ) + BEM ( {avg_BEM:.3f}s ) + Mics ( {avg_mics:.3f}s ) + Export ( {avg_export:.3f}s )
-
-    Parallel Speedup vs 1CPU:  {speedup:.2f}x (using {num_workers} workers)
-    Actual 1 Worker Time/Freq: {theoretical_serial_time/num_freqs:.3f} s/Freq
 
     Check '{log_f}' for more details.
     Open '{parser.model_name}_Results.pvd' in ParaView.
@@ -483,10 +489,14 @@ def start_pybem_app():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    from utils import set_hardware_limits
-    # This makes sure at the start that all solve libraries are set to 1CPU max
-    # This is to avoid race conditions on multi-threading.
-    set_hardware_limits(1)
+    from utils import get_cpus, set_hardware_limits
+    # Get number of physical CPUs to pass onto Numpy libraries for the solve
+    # This is required before any import numpy
+    n_CPUs, n_threads, RAM_gb = get_cpus()
+    used_CPUs = n_CPUs
+    # This makes sure at the start that all solve libraries are set to a CPU max.
+    # This is to minimise race conditions on multi-threading.
+    set_hardware_limits(used_CPUs)
     # AFTER, in the code we do try better with Numba, as it has the function
     # set_num_threads(), which the other libraries don't.
     start_pybem_app()
