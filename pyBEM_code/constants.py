@@ -15,6 +15,7 @@ SUPPORTED_KEYWORDS = [
     '*DENSITY', 
     '*ACOUSTIC MEDIUM', 
     '*SHELL SECTION', 
+    '*TIE', 
     '*AMPLITUDE', 
     '*STEP', 
     '*STEADY STATE DYNAMICS', 
@@ -31,9 +32,9 @@ SUB_KEYWORDS = [
 ]
 
 def TOP_LOG_LINES(self): return f"""
-    =============
-*** MODEL SUMMARY ***
-    =============
+    =====================
+    *** MODEL SUMMARY ***
+    =====================
     INPUT file: "{self.file_path}"
     MODEL name: "{self.model_name}"
     NODES:    {len(self.nodes):>6} = BEM: {len(self.nodes)-self.n_mics_nodes:<6} + MICS: {self.n_mics_nodes:<6}
@@ -41,8 +42,10 @@ def TOP_LOG_LINES(self): return f"""
     NSETS ( {len(self.nsets)} ): {list(self.nsets.keys())}
     ELSETS  ( {len(self.elsets)} ): {list(self.elsets.keys())}
     SURFACES ( {len(self.surfaces)} ): {self.surfaces}
+    TIED PAIRS ( {len(self.ties)} ): {self.ties}
     AMPLITUDES ( {len(self.amplitudes)} ): {list(self.amplitudes.keys())}
     MATERIALS ( {len(self.materials)} ): {self.materials}
+    BEM ZONES ( {len(self.zone_to_elsets)} ): {self.zone_to_elsets}
     FREQUENCIES: {len(self.frequencies)}  [{min(self.frequencies):.1f}Hz --> {max(self.frequencies):.1f}Hz]
     DAMPING: Input Loss Factor (LF) = {self.damping} 
              Solver uses Damping Ratio (DR): DR = LF * 0.5

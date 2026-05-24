@@ -2,6 +2,19 @@ from collections import defaultdict
 import psutil
 import os
 
+def get_sorted_mesh_data(parser):
+    """
+    Sorts and guarantees element/node lookup indexing sequentially from the parser.
+    Works identically for single or multi-zone domains.
+    """
+    sorted_nodes = dict(sorted(parser.nodes.items()))
+    sorted_node_ids = list(sorted_nodes.keys())
+    
+    sorted_bem_els = dict(sorted(parser.elements.items()))
+    sorted_bem_ids = list(sorted_bem_els.keys())
+    
+    return sorted_nodes, sorted_node_ids, sorted_bem_els, sorted_bem_ids
+
 def get_cpus():
     # CPUs
     cpus = psutil.cpu_count(logical=False)
@@ -9,7 +22,6 @@ def get_cpus():
     cores = psutil.cpu_count(logical=True)
     # RAM on machine
     available_ram_gb = psutil.virtual_memory().available / (1024**3)
-    # safe_ram_gb = available_ram_gb * 0.9  # allocate 90% of RAM available
     return cpus, cores, available_ram_gb
 
 def get_ram():
@@ -45,6 +57,362 @@ def set_hardware_limits(threads_per_worker):
 
 import numpy as np
 from numba import njit
+
+def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top):
+    """
+    Diagnostic Mesh Checks & Logging for Water-Tight Sub-Domains.
+    Runs exact single-domain golden rule validations across every independent zone.
+    """
+    
+    log_info = ""
+    global_h_signs = {}
+    global_order_lengths = {}
+    
+    log_info += """
+    ==============================
+    *** INPUT MESH DIAGNOSTICS ***
+    =============================="""
+    
+    for zone_name, info in zone_mesh_data.items():
+        z_elements = info['elements']
+        mat_name = info.get('material_name', zone_name)
+        c_local = parser.materials[mat_name]['c']
+        
+        # 1. Local Geometry Preps (Centers, Areas, Normals)
+        nodal_coords, bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, z_elements)
+        
+        # Compute order characteristic distance length (95th percentile)
+        order_length = np.percentile(max_el_length, 95)
+        global_order_lengths[zone_name] = order_length
+        
+        # 2. Run Single-Domain checks (Volume, Free Edges, Conflicts) via Divergence Theorem
+        bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(z_elements, bem_centers, bem_areas, bem_normals)
+        
+        log_info += f"\n--> ZONE: [ {zone_name} ]"
+        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.4f} L**2 )"
+        log_info += f"\n    CoG of BEM zone:            [ {bem_CoG[0]:.2f}, {bem_CoG[1]:.2f}, {bem_CoG[2]:.2f} ] L"
+        log_info += f"\n    Max Element Aspect Ratio:   ( {np.max(elem_ratio):.2f} )"
+        log_info += f"\n    Element Size (approx):      ( {order_length:.2f} L )"
+        log_info += f"\n    Suggested Max Freq:         ( {c_local / (8 * order_length):.1f} Hz )"
+        
+        # --- STRICT GOLDEN RULES ENFORCEMENT ---
+        # Rule 1: Every single zone must be water-tight
+        if free_edges > 0:
+            log_info += f"\n\n    [!] FATAL MESH ERROR in Zone '{zone_name}': {free_edges} open/unshared edges detected. Mesh is not water-tight!\n"
+            _write_and_fail(log_f, log_top, log_info)
+            
+        # Rule 2: Normals must be aligned consistently
+        if conflicts > 0:
+            log_info += f"\n\n    [!] FATAL MESH ERROR in Zone '{zone_name}': {conflicts} unaligned normal contradictions encountered.\n"
+            _write_and_fail(log_f, log_top, log_info)
+            
+        # Rule 3: Detect Interior vs Exterior via Signed Volume orientation
+        if bem_total_vol > 1e-9:
+            global_h_signs[zone_name] = -1.0
+            log_info += f"""
+    Closed (+) Volume detected: ( {bem_total_vol:.4f} L**3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+"""
+        elif bem_total_vol < -1e-9:
+            global_h_signs[zone_name] = 1.0
+            log_info += f"""
+    Closed (-) Volume detected: ( {bem_total_vol:.4f} L**3 )
+    -> Normals point INWARDS ==> Assuming EXTERIOR Analysis
+"""
+        else:
+            # If volume is zero and it's supposed to be a closed zone, it's a flat/corrupted shell
+            log_info += f"\n\n    [!] FATAL MESH ERROR in Zone '{zone_name}': Invalid topology. Zero volume found in closed sub-domain.\n"
+            _write_and_fail(log_f, log_top, log_info)
+                
+    return log_info, global_h_signs, global_order_lengths
+
+def _write_and_fail(log_f, log_top, log_info):
+    with open(log_f, "w") as log:
+        log.write(log_top + log_info)
+    raise RuntimeError(f"\n [pyBEM] PRE-PROCESSING GEOMETRY VALIDATION FAILED. See log layout at '{log_f}' for structural details.")
+
+def extract_zone_geometries(parser, sorted_nodes):
+    """
+    Groups BEM elements and maps matching MICS nodes/centers by material zone names.
+    Backward compatible: If no multi-zones exist, bundles everything into a single domain.
+    Robustly handles cases where some or all zones have no MICS elements defined.
+    """
+    zone_data = {}
+    
+    # Fallback to single zone mode if zone_to_elsets wasn't populated
+    zones_to_process = parser.zone_to_elsets if getattr(parser, 'zone_to_elsets', None) else {"Single_Domain": None}
+
+    # MICS check: does the input model have any microphones?
+    has_global_mics = bool(getattr(parser, 'mics_elements', None))
+    
+    for zone_name, elset_names in zones_to_process.items():
+        zone_data[zone_name] = {
+            'elements': {},
+            'mics_elements': {},
+            'mics_centers': None,
+            'n_mics': 0
+        }
+        
+        # 1. Extract BEM elements belonging to this zone
+        if elset_names is None: # Single Domain Fallback
+            zone_data[zone_name]['elements'] = dict(sorted(parser.elements.items()))
+        else:
+            # Multi-zone: Collect elements only matching this zone's elsets
+            for elset in elset_names:
+                if elset in parser.elsets:
+                    for eid in parser.elsets[elset]:
+                        if eid in parser.elements:
+                            zone_data[zone_name]['elements'][eid] = parser.elements[eid]
+            zone_data[zone_name]['elements'] = dict(sorted(zone_data[zone_name]['elements'].items()))
+            
+        # 2. Extract MICS elements assigned to this material zone
+        #    (ONLY if global mics exist)
+        if has_global_mics:
+            if getattr(parser, 'element_to_zone', None):
+                # Multi-zone mapping
+                for eid, conn in parser.mics_elements.items():
+                    if parser.element_to_zone.get(eid) == zone_name:
+                        zone_data[zone_name]['mics_elements'][eid] = conn
+            else:
+                # Single domain fallback
+                zone_data[zone_name]['mics_elements'] = dict(sorted(parser.mics_elements.items()))
+        
+        # 3. Resolve localized Microphone Node Coordinates (Unique, Unsorted Sequence)
+        if zone_data[zone_name]['mics_elements']:
+            mics_nodes_track = {}
+            
+            # Loop through elements sequentially as parsed to preserve the mesh flow layout
+            for conn in zone_data[zone_name]['mics_elements'].values():
+                for nid in conn:
+                    if nid in sorted_nodes:
+                        # Dict tracking naturally keeps unique keys in order of insertion
+                        mics_nodes_track[nid] = sorted_nodes[nid]
+            
+            # Extract coordinates directly from our ordered dictionary as float32
+            zone_data[zone_name]['mics_centers'] = np.array(list(mics_nodes_track.values()), dtype=np.float32)
+            zone_data[zone_name]['n_mics'] = len(mics_nodes_track)
+            
+            # Keep the dictionary matching the array rows 1:1 for the post-processor
+            zone_data[zone_name]['mics_nodes_dict'] = mics_nodes_track
+        else:
+            # Explicit safe empty defaults if this zone has no mics
+            zone_data[zone_name]['mics_centers'] = np.empty((0, 3), dtype=np.float32)
+            zone_data[zone_name]['n_mics'] = 0
+            zone_data[zone_name]['mics_nodes_dict'] = {}
+            
+    return zone_data
+
+from scipy.spatial import cKDTree
+def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3):
+    """
+    Normal-Projection Gap Resolver for Constant BEM.
+    Maps matching Element IDs between sub-zones by projecting the distance vector
+    onto the slave element face normal to determine the true physical GAP.
+    """
+    tie_registry = {}
+    if not getattr(parser, 'ties', None):
+        return tie_registry
+
+    for tie_dict in parser.ties:
+        tie_name = tie_dict.get('name', 'Unnamed_Tie')
+        slave_surf_name = tie_dict['slave']
+        master_surf_name = tie_dict['master']
+        tolerance = tie_dict.get('tolerance', default_tolerance)
+        
+        # Grab PrePoMax Surface to Element Set links safely
+        slave_surface = parser.surfaces.get(slave_surf_name)
+        master_surface = parser.surfaces.get(master_surf_name)
+        
+        if not slave_surface or not master_surface:
+            print(f" [ ! ] Warning: Tie '{tie_name}' references missing surfaces.")
+            continue
+            
+        slave_elset = slave_surface.get('elset', slave_surf_name)
+        master_elset = master_surface.get('elset', master_surf_name)
+        
+        slave_eids = parser.elsets.get(slave_elset, [])
+        master_eids = parser.elsets.get(master_elset, [])
+
+        # Identify Zone Ownership, Centroids, and Normals
+        slave_zone, master_zone = None, None
+        slave_data = {}   # stores {eid: (centroid, normal)}
+        master_data = {}  # stores {eid: centroid}
+
+        for zone_name, z_mesh in zones_mesh.items():
+            # Use your existing framework to pull geometry properties
+            _, z_centers, _, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
+            
+            # Build lookups for the elements in this zone
+            local_elements = list(z_mesh['elements'].keys())
+            for idx, eid in enumerate(local_elements):
+                if eid in slave_eids:
+                    slave_zone = zone_name
+                    slave_data[eid] = (z_centers[idx], z_normals[idx])
+                if eid in master_eids:
+                    master_zone = zone_name
+                    master_data[eid] = z_centers[idx]
+
+        if not slave_zone or not master_zone:
+            print(f" [ ! ] Warning: Skipping Tie '{tie_name}' - Zone ownership unresolved.")
+            continue
+
+        # Spatial Gap Matching Pass
+        element_pairs = []
+        for seid, (s_center, s_normal) in slave_data.items():
+            best_meid = None
+            min_lateral_dist = float('inf')
+            best_gap = float('inf')
+
+            # Phase 1: Project gap along the normal, filter by tolerance,
+            # and map to the closest spatial neighbour to catch dissimilar overlap.
+            for meid, m_center in master_data.items():
+                # 1. Vector from slave centroid to master centroid
+                vec = m_center - s_center
+                
+                # 2. Calculate true physical GAP via dot product with slave normal
+                gap = abs(np.dot(vec, s_normal))
+                
+                # 3. Check if the element face falls within the gap tolerance
+                if gap <= tolerance:
+                    # Calculate lateral/sideways distance component to find the overlapping face
+                    lateral_vec = vec - np.dot(vec, s_normal) * s_normal
+                    lateral_dist = np.linalg.norm(lateral_vec)
+                    
+                    if lateral_dist < min_lateral_dist:
+                        min_lateral_dist = lateral_dist
+                        best_meid = meid
+                        best_gap = gap
+
+            if best_meid is not None:
+                element_pairs.append((best_meid, seid))  # (Master Element ID, Slave Element ID)
+
+        if len(element_pairs) > 0:
+            tie_registry[tie_name] = {
+                'slave_zone': slave_zone,
+                'master_zone': master_zone,
+                'element_pairs': element_pairs,
+                'tolerance_used': tolerance
+            }
+            # print(f" [ i ] Resolved Tie '{tie_name}': Matched {len(element_pairs)} element faces using normal-projected gap filter (Tolerance: {tolerance} L)")
+
+    if len(tie_registry) == 0:
+        raise RuntimeError(" 0 tie connections matched. Verify surface normal orientations.")
+    return tie_registry
+
+def compute_tie_projection_matrix(tie_registry, zones_mesh, sorted_nodes):
+    """
+    PRE-processing phase geometric projection calculator.
+    Builds the structural mapping matrix [W] for dissimilar interface meshes.
+    Returns:
+      W_mapping: dict mapping slave_eid -> {master_eid: weight, ...}
+      master_eids_set: unique set of all master elements active in the tie
+      slave_eids_set: unique set of all slave elements active in the tie
+    """
+    W_mapping = {}
+    master_eids_set = set()
+    slave_eids_set = set()
+    
+    for tie_name, tie_info in tie_registry.items():
+        s_zone = tie_info['slave_zone']
+        m_zone = tie_info['master_zone']
+        tolerance = tie_info['tolerance_used']
+        
+        # Pull geometric parameters for both interface zones safely
+        _, s_centers, _, s_normals, _, _ = prepare_geometry(sorted_nodes, zones_mesh[s_zone]['elements'])
+        _, m_centers, _, _, _, _ = prepare_geometry(sorted_nodes, zones_mesh[m_zone]['elements'])
+        
+        s_eids_local = list(zones_mesh[s_zone]['elements'].keys())
+        m_eids_local = list(zones_mesh[m_zone]['elements'].keys())
+        
+        # Isolate targeted element IDs specified by the tie surface cards
+        target_s_eids = {pair[1] for pair in tie_info['element_pairs']}
+        target_m_eids = {pair[0] for pair in tie_info['element_pairs']}
+        
+        for s_idx, seid in enumerate(s_eids_local):
+            if seid not in target_s_eids:
+                continue
+                
+            s_center = s_centers[s_idx]
+            s_normal = s_normals[s_idx]
+            
+            overlapping_masters = []
+            weights_raw = []
+            
+            for m_idx, meid in enumerate(m_eids_local):
+                if meid not in target_m_eids:
+                    continue
+                    
+                vec = m_centers[m_idx] - s_center
+                gap = abs(np.dot(vec, s_normal))
+                
+                # Check if master element falls within normal proximity tolerance bubble
+                if gap <= tolerance:
+                    lateral_vec = vec - np.dot(vec, s_normal) * s_normal
+                    lateral_dist = np.linalg.norm(lateral_vec)
+                    
+                    # Prevent division by zero if centroids align perfectly
+                    if lateral_dist < 1e-10:
+                        lateral_dist = 1e-10
+                        
+                    overlapping_masters.append(meid)
+                    weights_raw.append(1.0 / (lateral_dist ** 2))
+            
+            if overlapping_masters:
+                slave_eids_set.add(seid)
+                sum_weights = sum(weights_raw)
+                W_mapping[seid] = {}
+                
+                # Normalize weights to ensure partition of unity (sum of weights = 1.0)
+                for m_eid, w_raw in zip(overlapping_masters, weights_raw):
+                    norm_w = w_raw / sum_weights
+                    W_mapping[seid][m_eid] = norm_w
+                    master_eids_set.add(m_eid)
+                    
+    return W_mapping, list(master_eids_set), list(slave_eids_set)
+
+def compute_global_offsets(zones_mesh, tie_registry):
+    """
+    Computes global row and column matrix offsets for multi-zone Constant BEM allocation.
+    Maps localized 0-indexed element offsets per zone, and registers the additional
+    equation rows required for *Tie boundary element face constraints.
+    
+    Returns:
+        dict: zone_offsets containing {'start_idx': int, 'n_elements': int, 'eid_to_local': dict}
+        int: total_matrix_size
+    """
+    zone_offsets = {}
+    current_offset = 0
+    
+    # 1. Map offsets for standard BEM element variables (Zone by Zone)
+    for zone_name, info in zones_mesh.items():
+        # Get the true, sorted list of Element IDs local to this zone mesh
+        zone_elements = sorted(list(info['elements'].keys()))
+        n_elements = len(zone_elements)
+        
+        # Map input file Element ID -> Local 0-based index inside this zone slice
+        eid_to_local = {eid: idx for idx, eid in enumerate(zone_elements)}
+        
+        zone_offsets[zone_name] = {
+            'start_idx': current_offset,
+            'n_elements': n_elements,      
+            'eid_to_local': eid_to_local,  
+            'local_to_eid': zone_elements  
+        }
+        
+        # In Constant BEM, each zone demands (n_elements) degrees of freedom 
+        # for its linear equations block (collocation at element centroids).
+        current_offset += n_elements
+
+    # 2. Add extra rows for the *Tie element-face constraints
+    total_tie_equations = 0
+    for tie_name, info in tie_registry.items():
+        # Each matched element pair generates 2 additional coupling equations:
+        # 1 for Pressure Continuity, 1 for Flux/Velocity Equilibrium
+        total_tie_equations += len(info['element_pairs']) * 2
+        
+    total_matrix_size = current_offset + total_tie_equations
+    
+    return zone_offsets, total_matrix_size
 
 def calculate_element_properties(nodes, connectivity):
     """
@@ -169,6 +537,7 @@ def get_total_gps(element_nodes):
     for nodes in element_nodes:
         total_gps += (11 if len(nodes) == 3 else 14)
     return total_gps
+
 
 # ---------------------------------
 # ---------------------------------
@@ -382,128 +751,48 @@ def pre_high_order(element_nodes, element_area):
     
     return pts, wts * element_area / sum_w
 
-### NOT used anymore
-# OLD methods where we did the main calcs in solve instead of in PRE.
-# This gave the correct results, but was much, much slower.
-# @njit
-# def compute_mid_order_contribution(receiver_pt, element_vertices, element_normal, element_area, k, H_sign, inv_4pi):
-#     """Integrates G and H kernels over one element using 'TRIA_3p & QUAD_4p' quadrature."""
-#     n_nodes = len(element_vertices)
-    
-#     # Initialize sums
-#     g_sum = 0.0 + 0j
-#     h_sum = 0.0 + 0j
-#     sum_w = 0.0
-    
-#     # 1. Get Integration Points & Weights
-#     if n_nodes == 3: # TRIA3
-#         pts, wts = get_tri_points(element_vertices[0], element_vertices[1], element_vertices[2])
-#         n_pts = 3
-#     else: # QUAD4
-#         pts, wts = get_quad_points(element_vertices[0], element_vertices[1], element_vertices[2], element_vertices[3])
-#         n_pts = 4
-#     # print("\n", receiver_pt)
-#     # print(pts, wts)
-#     sum_w = np.sum(wts)
-
-#     # 2. Sum Contributions
-#     for p_idx in range(n_pts):
-#         r_vec = receiver_pt - pts[p_idx]
-#         r = np.linalg.norm(r_vec)
-        
-#         # Kernel math & Integration weights
-#         # G Kernel
-#         exp_jkr = np.exp(1j * k * r)
-#         g_val = exp_jkr * inv_4pi / r
-        
-#         w_eff = (wts[p_idx] / sum_w) * element_area
-#         g_sum += g_val * w_eff
-        
-#         # H Kernel
-#         dot_prod = np.dot(r_vec, element_normal) / r
-#         h_sum += H_sign * g_val * (1j * k - 1.0/r) * dot_prod * w_eff
-        
-#     return g_sum, h_sum
-
-# @njit
-# def compute_high_order_contribution(receiver_pt, vertices, normal, area, k, H_sign, inv_4pi):
-#     """Integrates G and H kernels over one element using 'TRIA_7p & QUAD_9p' quadrature."""
-#     n_nodes = len(vertices)
-    
-#     # Initialize sums
-#     g_sum = 0.0 + 0j
-#     h_sum = 0.0 + 0j
-#     sum_w = 0.0
-    
-#     # 1. Get Integration Points & Weights
-#     if n_nodes == 3:
-#         pts, wts = get_tri_points_7p(vertices[0], vertices[1], vertices[2])
-#         n_pts = 7
-#     else:
-#         pts, wts = get_quad_points_3x3(vertices[0], vertices[1], vertices[2], vertices[3])
-#         n_pts = 9
-#     # print("\n", receiver_pt)
-#     # print(pts, wts)
-#     sum_w = np.sum(wts)
-
-#     # 2. Sum Contributions
-#     for p in range(n_pts):
-#         r_vec = receiver_pt - pts[p]
-#         r = np.linalg.norm(r_vec)
-#         # Integration weight
-#         w_eff = (wts[p] / sum_w) * area
-        
-#         # G Kernel
-#         exp_jkr = np.exp(1j * k * r)
-#         g_val = exp_jkr * inv_4pi / r
-#         # H Kernel derivative
-#         dot_prod = np.dot(r_vec, normal) / r
-#         h_val = H_sign * g_val * (1j * k - 1.0/r) * dot_prod
-            
-#         g_sum += g_val * w_eff
-#         h_sum += h_val * w_eff
-        
-#     return g_sum, h_sum
-
-def averaged_at_nodes(nodes, elements, P_bem, bem_areas, mics_nodes=None, P_mics=None):
+# NEW for multi-zone capa
+def averaged_at_nodes(nodes, elements, P_bem, bem_areas, ordered_mic_ids=None, P_mics=None):
     """
     Averages element-centered and GPoints results to nodes.
     nodes: dict {nid: [x, y, z]}
     elements: dict {eid: [n1, n2, ...]}
     P_bem: array of complex values (one per element)
-    mics_nodes: dict {nid: [x, y, z]}
-    P_mics: array of complex values (one per node)
-    nodal_pressures: output array of complex values (one per node)
+    bem_areas: array of real area weights (one per element)
+    ordered_mic_ids: list of unique microphone node IDs matching P_mics rows
+    P_mics: array of complex values (one per microphone node)
+    nodal_pressures: output array of complex values (indexed directly by node_id)
     """
     # 1. Determine the size needed for the array
-    # We use max_id + 1 so we can index directly by node_id; i.e fast.
     max_node_id = max(nodes.keys())
     
     # Initialize buffers
-    # node_sums: stores the accumulated elemental pressure
     node_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
-    area_sums = np.zeros(max_node_id + 1, dtype=np.complex128)
+    area_sums = np.zeros(max_node_id + 1, dtype=np.float64)  
     nodal_pressures = np.zeros(max_node_id + 1, dtype=np.complex128)
 
     # 2. Map element results to their constituent nodes
-    # We iterate through the elements provided for BEM
     for i, (eid, conn) in enumerate(elements.items()):
+        if i >= len(bem_areas) or i >= len(P_bem):
+            continue
+            
         area = bem_areas[i]
         val = P_bem[i] * area
         for nid in conn:
-            node_sums[nid] += val
-            area_sums[nid] += area
-    # We iterate through the nodes for Mics, if provided
-    if mics_nodes is not None:
-        for i, (nid, coords) in enumerate(mics_nodes.items()):
-            val = P_mics[i]
-            node_sums[nid] += val
-            area_sums[nid] = 1
+            if nid <= max_node_id:
+                node_sums[nid] += val
+                area_sums[nid] += area
 
-    # 3. Perform the average
-    # We only divide where area > 0 to avoid DivisionByZero
-    # This also gets the nodal results in the right index order for PV output
-    mask = area_sums > 0
+    # 4. Perform the weighted area average for structural surface elements
+    mask = area_sums > 1e-14
     nodal_pressures[mask] = node_sums[mask] / area_sums[mask]
+
+    # 3. FIX: Map microphone results using strict index-to-ID alignment
+    if ordered_mic_ids is not None and P_mics is not None:
+        for i, nid in enumerate(ordered_mic_ids):
+            if i < len(P_mics):
+                if nid <= max_node_id:
+                    # Direct scalar overwrite: prevents any area blending artifacts
+                    nodal_pressures[nid] = P_mics[i]
 
     return nodal_pressures

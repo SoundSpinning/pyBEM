@@ -1,12 +1,11 @@
 # The heavy math (Numba-accelerated BEM kernels)
-
 import numpy as np
 import time
 import os
 import atexit
 from multiprocessing import shared_memory
-from numba import njit, prange, set_num_threads
-from utils import get_ram, pre_high_order, pre_mid_order, set_hardware_limits, averaged_at_nodes
+from numba import njit, prange
+from utils import get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
 
 # This keeps track of all blocks created in this session
 _SHM_REGISTRY = {}
@@ -98,29 +97,30 @@ _worker_context = {}
 
 def init_worker(shared_data, threads_per_worker):
     """Runs ONCE per worker process at startup."""
-    # from numba import set_num_threads
-    # set_num_threads(threads_per_worker)
-    # set_hardware_limits(threads_per_worker)
     global _worker_context, np
     import numpy as np
     rebuilt_dict = rebuild_from_shm(shared_data)
     _worker_context = rebuilt_dict
 
-###
-### This is for parallel solve of Freqs, based on machine resources; i.e. automated.
-###
-# @njit(cache=True) do NOT use here, overkill; keep inside functions with njit as they are
+# NEW worker to handle multi-zone BEM
 def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     """
-    Independent worker function. Runs for EVERY frequency.
-    static_data: dict of all BEM/Physics constants
+    Independent multi-zone worker function. Runs for EVERY frequency.
+    TIED pair constraints:
+    Implements a strict Dual-Lagrange multiplier approach where trailing columns
+    hold interface pressure potentials and trailing rows enforce volume velocity conservation.
     """
-    # import numpy as np
-    # Pull the data from the worker's local 'memory vault'
-    # No pickling or data transfer happens here!
+    # 1. Pull data from Shared Context
     static_data = _worker_context
     amps = static_data.get('amplitudes') # Use .get() to avoid KeyErrors
     damping_f = static_data['damping']
+    # ZONES method
+    zones_mesh = static_data['zones_mesh']
+    
+    W_mapping = static_data['W_mapping']              # dict: seid -> {meid: weight}
+    master_elements = static_data['master_elements']  # list of unique master eids
+    slave_elements = static_data['slave_elements']    # list of unique slave eids
+    zone_offsets = static_data['zone_offsets']        # dict: zone_name -> {'start_idx', 'n_elements'}
 
     # PRE-processing if any amplitude curves present
     # A. Resolve Damping
@@ -132,86 +132,312 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
 
     # B. Resolve BCs (The "Clean & Scale" Pass)
     resolved_bcs = {}
-    
     for eid, info in bc_map.items():
-        # Create a local numeric-only dict for this element
         resolved_bcs[eid] = res = {}
-        
-        # We only look for the three core types
+        # We only look for the three BC types
         for bc_type in ['PRES', 'VELO', 'IMPE']:
             if bc_type in info:
-                # Get base value: e.g., (2e-11 + 1e-11j)
                 base_val = info[bc_type]
                 v_real = base_val.real
                 v_imag = base_val.imag
 
-                # --- Scale REAL channel ---
+                # --- Scale REAL part ---
                 amp_r_key = f'{bc_type}_AMP_real'
                 if amps and amp_r_key in info:
                     c_name = info[amp_r_key]
                     if c_name in amps:
-                        scale_r = np.interp(f, amps[c_name][:, 0], amps[c_name][:, 1])
-                        v_real *= scale_r
+                        v_real *= np.interp(f, amps[c_name][:, 0], amps[c_name][:, 1])
 
-                # --- Scale IMAGINARY channel ---
+                # --- Scale IMAGINARY part ---
                 amp_i_key = f'{bc_type}_AMP_imag'
                 if amps and amp_i_key in info:
                     c_name = info[amp_i_key]
                     if c_name in amps:
-                        scale_i = np.interp(f, amps[c_name][:, 0], amps[c_name][:, 1])
-                        v_imag *= scale_i
+                        v_imag *= np.interp(f, amps[c_name][:, 0], amps[c_name][:, 1])
 
                 # Recombine into a complex number for the solver
                 res[bc_type] = complex(v_real, v_imag)
 
-    # 1. Physics setup
+    # w = 2PI*freq
     omega = 2.0 * np.pi * f
-    k = omega / static_data['c']
-    if damping_f != 0:
-        k = k * (1 - (1j * damping_f * 0.5))
-    rho_omega = static_data['rho'] * omega
-
-    # 2. Assembly (The heavy lifting)
-    # Using main_assembly function inside the worker
     t_asm_0 = time.time()
-    # set_hardware_limits(threads_per_worker)
-    # set_num_threads(threads_per_worker)
-    G_bem, H_bem = main_assembly(
-        static_data['gp_per_element'], static_data['GP_start_idx'],
-        static_data['R_map'], static_data['G_static_map'], 
-        static_data['H_static_map'], static_data['G_diag_static'], 
-        static_data['H_diag_static'], k, static_data['H_sign'], 
-        static_data['max_el_length'], static_data['order_length']
-    )
+
+    # ==================================================================
+    # DUAL-LAGRANGE RIGID MATRIX LAYOUT
+    # ==================================================================
+    N_all = sum(info['n_elements'] for info in zone_offsets.values())
+    N_master = len(master_elements)
+    total_matrix_size = N_all + N_master
+
+    A_global = np.zeros((total_matrix_size, total_matrix_size), dtype=np.complex128)
+    B_global = np.zeros((total_matrix_size,), dtype=np.complex128)
+
+    eid_global_p_col = {}
+    eid_area_map = {}
+    
+    for zone_name, z_mesh in zones_mesh.items():
+        alloc = zone_offsets[zone_name]
+        z_areas = static_data['pre_bem_data'][zone_name]['areas']
+        for local_j, eid in enumerate(z_mesh['elements'].keys()):
+            eid_global_p_col[eid] = alloc['start_idx'] + local_j
+            eid_area_map[eid] = z_areas[local_j]
+
+    # Trailing columns (N_all ... End) house the Master Interface Pressure Multipliers (lambda)
+    master_lambda_col_mapping = {m_eid: N_all + idx for idx, m_eid in enumerate(master_elements)}
+
+    # Pre-compute direct master-to-slave inverse lookup map
+    master_to_slave_inverse = {m_eid: [] for m_eid in master_elements}
+    for s_eid, master_dict in W_mapping.items():
+        for m_eid, weight in master_dict.items():
+            if m_eid in master_to_slave_inverse:
+                master_to_slave_inverse[m_eid].append((s_eid, weight))
+
+    # ==================================================================
+    # PHASE 1: LOOP PER ZONE - ASSEMBLE COLOCATION COEFFICIENTS
+    # ==================================================================
+    for zone_name, z_mesh in zones_mesh.items():
+        z_bem = static_data['pre_bem_data'][zone_name]
+        alloc = zone_offsets[zone_name]
+        
+        start_row = alloc['start_idx']
+        n_elements = alloc['n_elements']
+        
+        H_sign = static_data['global_h_signs'][zone_name]
+        order_length = static_data['global_order_lengths'][zone_name]
+        max_el_length = order_length
+
+        c_zone = static_data['global_c'][zone_name]
+        rho_zone = static_data['global_rho'][zone_name]
+        k_zone = omega / c_zone
+        if damping_f != 0:
+            k_zone = k_zone * (1.0 - (1j * damping_f * 0.5))
+            
+        rho_omega = rho_zone * omega
+
+        G_local, H_local = main_assembly(
+            z_bem['gp_per_element'], z_bem['GP_start_idx'],
+            z_bem['R_map'], z_bem['G_static_map'], z_bem['H_static_map'],
+            z_bem['G_diag_static'], z_bem['H_diag_static'],
+            k_zone, H_sign, max_el_length, order_length
+        )
+        
+        for local_j, eid in enumerate(z_mesh['elements'].keys()):
+            v_col = eid_global_p_col[eid]  # Native column placeholder
+            bc = resolved_bcs.get(eid, {})
+            
+            # --- Scenario A: Tied Interface Master Element ---
+            if eid in master_elements:
+                # Native column maps to unknown Normal Velocity (V_m), integrated against +i*rho*omega*G
+                A_global[start_row : start_row + n_elements, v_col] += G_local[:, local_j] * (1j * rho_omega)
+                
+                # Master Interface Pressure Multiplier (lambda_m = P_m) maps to the trailing column
+                l_col = master_lambda_col_mapping[eid]
+                A_global[start_row : start_row + n_elements, l_col] += H_local[:, local_j]
+                
+            # --- Scenario B: Tied Interface Slave Element ---
+            elif eid in slave_elements:
+                # Native column maps to unknown Normal Velocity (V_s), integrated against +i*rho*omega*G
+                A_global[start_row : start_row + n_elements, v_col] += G_local[:, local_j] * (1j * rho_omega)
+                
+                if eid in W_mapping:
+                    # Distribute the interpolated slave pressure (P_s = sum(W * P_m))
+                    # across the master Lagrange multiplier columns (lambda) using H_local
+                    for m_eid, weight in W_mapping[eid].items():
+                        if m_eid in master_lambda_col_mapping:
+                            l_col = master_lambda_col_mapping[m_eid]
+
+                            # Scale the pressure interaction by the work-conjugate area ratio
+                            A_global[start_row : start_row + n_elements, l_col] += H_local[:, local_j] * weight
+            
+            # --- Scenario C: Standard Non-Tied Domain Elements ---
+            else:
+                p_col = v_col
+                # Case 1: Velocity is known (Vibrating Wall - Neumann BC)
+                if 'VELO' in bc:
+                    A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j]
+                    B_global[start_row : start_row + n_elements] -= G_local[:, local_j] * bc['VELO'] * (1j * rho_omega)
+                    # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
+                    if 'IMPE' in bc:
+                        # Admittance logic: v = p / Z. 
+                        # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
+                        # Safety check for division by zero
+                        z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                        # Units must match: H is unitless, G is [L], so we need [1/L]
+                        # (i * omega * rho) / Z  has units of [1/L]
+                        A_global[start_row : start_row + n_elements, p_col] += G_local[:, local_j] * (1j * rho_omega / z_val)
+                # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
+                elif 'PRES' in bc:
+                    A_global[start_row : start_row + n_elements, p_col] -= G_local[:, local_j] * (1j * rho_omega)
+                    B_global[start_row : start_row + n_elements] -= H_local[:, local_j] * bc['PRES']
+                # Case 3: Impedance (Absorbent material)
+                elif 'IMPE' in bc and 'VELO' not in bc:
+                    z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                    A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j] + (G_local[:, local_j] * (1j * rho_omega / z_val))
+                # Case 4: Rigid Wall, v=0 (Default)
+                else:
+                    A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j]
+
     t_assembly = time.time() - t_asm_0
-    # 3. Solve
     t_slv_0 = time.time()
-    # p_surf, v_surf, cond = solve_bem_system(G_bem, H_bem, resolved_bcs, sorted_bem_ids, rho_omega)
-    bem_solution, cond = solve_bem_system(G_bem, H_bem, resolved_bcs, sorted_bem_ids, rho_omega)
-    # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
-    p_surf, v_surf = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
+
+    # ==================================================================
+    # PHASE 2: WEAVE TRAILING VOLUME VELOCITY CONTINUITY ON TIED ROWS
+    # ==================================================================
+    for m_idx, m_eid in enumerate(master_elements):
+        tie_row = N_all + m_idx
+        m_v_col = eid_global_p_col[m_eid]
+        slaves_found = master_to_slave_inverse[m_eid]
+        
+        if len(slaves_found) > 0:
+            # Enforce clean acoustic volume conservation: 
+            # 1.0 * V_master - sum(W * (A_slave/A_master) * V_slave) = 0
+            A_global[tie_row, m_v_col] = 1.0
+            a_master = eid_area_map[m_eid]
+            
+            for s_eid, weight in slaves_found:
+                s_v_col = eid_global_p_col[s_eid]
+                a_slave = eid_area_map[s_eid]
+                
+                area_scale = a_slave / a_master
+                A_global[tie_row, s_v_col] += weight * area_scale
+        else:
+            # Fallback for unmapped rows to maintain safe square matrix inversion stability
+            A_global[tie_row, m_v_col] = 1.0
+            
+        B_global[tie_row] = 0.0
+
+    # Solve the system matrix
+    global_solution = np.linalg.solve(A_global, B_global)
+    
+    p_surf = np.zeros(len(sorted_bem_ids), dtype=np.complex128)
+    v_surf = np.zeros(len(sorted_bem_ids), dtype=np.complex128)
+    global_areas = np.zeros(len(sorted_bem_ids))
+    
+    # ==================================================================
+    # PHASE 3: DISTRIBUTE SOLVED SYSTEM RESULTS BACK TO SURFACES
+    # ==================================================================
+    for zone_name, offset_info in zone_offsets.items():
+        start_row = offset_info['start_idx']
+        n_elements = offset_info['n_elements']
+        
+        zone_solved = global_solution[start_row : start_row + n_elements]
+        z_mesh = zones_mesh[zone_name]
+        z_areas = static_data['pre_bem_data'][zone_name]['areas']
+        
+        for local_j, eid in enumerate(z_mesh['elements'].keys()):
+            solved_val = zone_solved[local_j]
+            bc = resolved_bcs.get(eid, {})
+            
+            if eid in master_elements:
+                v_val = solved_val  # Master native variable is velocity
+                l_col = master_lambda_col_mapping[eid]
+                p_val = global_solution[l_col]  # Pressure is extracted from Lagrange multiplier
+                
+            elif eid in slave_elements:
+                v_val = solved_val  # Slave native variable is velocity
+                p_val = 0.0 + 0.0j
+                if eid in W_mapping:
+                    # Interpolate pressure directly from master multipliers
+                    for m_eid, weight in W_mapping[eid].items():
+                        l_col = master_lambda_col_mapping[m_eid]
+                        p_val += global_solution[l_col] * weight
+                        
+            else:
+                if 'VELO' in bc:
+                    # We knew Velocity, solved_val gave us Pressure
+                    p_val = solved_val
+                    v_val = bc['VELO']
+                    if 'IMPE' in bc:
+                        # We solved for Pressure, Velocity is p/Z
+                        z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                        v_val += solved_val / z_val
+                elif 'PRES' in bc:
+                    # We knew Pressure, solved_val gave us Velocity
+                    p_val = bc['PRES']
+                    v_val = solved_val
+                elif 'IMPE' in bc and 'VELO' not in bc:
+                    # We solved for Pressure, Velocity is p/Z
+                    p_val = solved_val
+                    z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                    v_val = solved_val / z_val
+                else:
+                    # Rigid wall: v=0, solved_val gave us Pressure
+                    p_val = solved_val
+                    v_val = 0.0 + 0.0j
+                    
+            if eid in sorted_bem_ids:
+                global_idx = sorted_bem_ids.index(eid)
+                p_surf[global_idx] = p_val
+                v_surf[global_idx] = v_val
+                global_areas[global_idx] = z_areas[local_j]
+                
     solve_RAM = get_ram()
     t_slv_1 = time.time()
-    # 4. Post-Process (Mics + Averaging)
-    # MICS calcs
-    if static_data['sorted_mics_els']:
-        # set_num_threads(threads_per_worker)
-        p_mics = calculate_mics(
-            static_data['pre_mics_G'], static_data['pre_mics_H'], static_data['pre_mics_R'], 
-            static_data['num_mics'], static_data['bem_areas'], 
-            p_surf, v_surf, k, rho_omega, static_data['H_sign']
-        )
-        mics_nodes = static_data['sorted_mics_nodes']
-    else:
-        mics_nodes = None
-        p_mics = None
-    t_slv_2 = time.time()
+
+    # ==================================================================
+    # PHASE 4: POST-PROCESS MICS + AVERAGE AT NODES ALL RESULTS
+    # ==================================================================
+    # --- MULTI-ZONE FIX: Initialize global containers for ALL microphones ---
+    all_p_mics_list = []
+    global_mics_nodes = {}
     
-    # This ensures we return the final nodal_pressures array
+    if 'pre_mics_data' in static_data and static_data['pre_mics_data']:
+        for zone_name, z_mesh in zones_mesh.items():
+            if zone_name in static_data['pre_mics_data']:
+                z_mic = static_data['pre_mics_data'][zone_name]
+                z_bem = static_data['pre_bem_data'][zone_name]
+                
+                if z_mic and z_mic.get('num_mics', 0) > 0:
+                    c_zone = static_data['global_c'][zone_name]
+                    rho_zone = static_data['global_rho'][zone_name]
+                    k_zone = omega / c_zone
+                    if damping_f != 0:
+                        k_zone = k_zone * (1.0 - (1j * damping_f * 0.5))
+                    rho_omega_zone = rho_zone * omega
+                    H_sign_zone = static_data['global_h_signs'][zone_name]
+                    
+                    # --- Extract local zone surface vectors using global column mapping ---
+                    zone_el_ids = list(z_mesh['elements'].keys()) 
+                    num_surf_local = len(zone_el_ids)
+                    
+                    p_surf_local = np.zeros(num_surf_local, dtype=np.complex128)
+                    v_surf_local = np.zeros(num_surf_local, dtype=np.complex128)
+                    
+                    for local_idx, eid in enumerate(zone_el_ids):
+                        global_col = eid_global_p_col[eid]
+                        p_surf_local[local_idx] = p_surf[global_col]
+                        v_surf_local[local_idx] = v_surf[global_col]
+
+                    # Compute local pressures for this zone's microphones
+                    p_mics_zone = calculate_mics(
+                        z_mic['pre_mics_G'], z_mic['pre_mics_H'], z_mic['pre_mics_R'], 
+                        z_mic['num_mics'], z_bem['areas'], 
+                        p_surf_local, v_surf_local, k_zone, rho_omega_zone, H_sign_zone
+                    )
+                    
+                    # --- Accumulate values into global pools ---
+                    all_p_mics_list.append(p_mics_zone)
+                    # Ensure we pull the pristine, sequentially ordered dictionary we just built!
+                    if 'mics_nodes_dict' in z_mic and z_mic['mics_nodes_dict']:
+                        global_mics_nodes.update(z_mic['mics_nodes_dict'])
+                    elif z_mic.get('mics_nodes'): # Fallback just in case
+                        global_mics_nodes.update(z_mic['mics_nodes'])
+
+    # Concatenate all zone arrays into one master numpy array if microphones exist
+    p_mics = np.concatenate(all_p_mics_list) if all_p_mics_list else None
+    mics_nodes = global_mics_nodes if global_mics_nodes else None
+            
+    t_slv_2 = time.time()
     t_avg_0 = time.time()
+
+    # --- Use the clean, ordered list of the consolidated microphone node IDs ---
+    ordered_mic_ids = list(mics_nodes.keys()) if mics_nodes is not None else None
+    
     nodal_pressures = averaged_at_nodes(
         static_data['sorted_nodes'], static_data['sorted_bem_els'], p_surf, 
-        static_data['bem_areas'], mics_nodes, p_mics) 
+        global_areas, ordered_mic_ids, p_mics
+    )
+
     t_avg_1 = time.time()
     
     metadata = {
@@ -224,11 +450,12 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     
     return f, nodal_pressures, metadata
 
+# @njit(parallel=False, boundscheck=True)  # <-- Change this temporarily to DEBUG
 @njit(parallel=True, cache=True)
-def pre_assembly(element_nodes, centers, areas, normals, R_map, G_static_map, H_static_map, total_gps):
+def pre_assembly(element_nodes, centers, areas, normals):
     """
     It takes pre-allocated Shared Memory large arrays to avoid (RAM) duplication crashes.
-    Pre-Computes G and H (static, k=0) matrices using the input mesh:
+    Pre-Computes G and H (static, k=0) matrices using the input mesh ZONES:
     - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
     - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
     It also pre-computes fast arrays with all GPs info for fast assembly in the solve.
@@ -238,21 +465,17 @@ def pre_assembly(element_nodes, centers, areas, normals, R_map, G_static_map, H_
     normals: (N, 3) array
     """
     n_els = len(centers)    # number of BEM elements
-    inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
+    inv_4pi = 1.0 / (4.0 * np.pi) # 4*pi is a constant in the Green's function denominator
 
-    # --- STEP 1: Calculate Total GPs ---
-    total_gps = 0
-    gp_per_element = np.zeros(n_els, dtype=np.int64)  # Force i64 for numba to work
-    # Here we aim at all possible GPs for centroid, mid- and high-order integration options.
+    # STEP 1: Calculate Total GPs per ZONES
+    gp_per_element = np.zeros(n_els, dtype=np.int64)
     for i in range(n_els):
         elem_n_nodes = len(element_nodes[i])
-        num_gps = 11 if elem_n_nodes == 3 else 14
-        gp_per_element[i] = num_gps
-        total_gps += num_gps
+        gp_per_element[i] = 11 if elem_n_nodes == 3 else 14
 
-    print(f""" For ( {n_els} ) BEM elements, found a total of ( {total_gps} ) possible Integration / Gauss Points.""")
+    total_gps = int(np.sum(gp_per_element))
     
-    # --- STEP 2: Pre-allocate with Exact Size for speed ---
+    # STEP 2: Pre-allocate local static arrays with Exact Size for speed
     # These are "Flat Lists" with all GPoints + dtype to save on RAM
     GP_start_idx = np.zeros(n_els, dtype=np.int64)
     offset = 0
@@ -260,540 +483,88 @@ def pre_assembly(element_nodes, centers, areas, normals, R_map, G_static_map, H_
         GP_start_idx[j] = offset
         offset += gp_per_element[j]
 
-    cursor = 0
-    for j in prange(n_els):      # Parallel Loop over SOURCE elements
+    R_map = np.zeros((n_els, total_gps), dtype=np.float64)
+    G_static_map = np.zeros((n_els, total_gps), dtype=np.float64)
+    H_static_map = np.zeros((n_els, total_gps), dtype=np.float64)
+
+    # STEP 3: Compute distances, integration orders and basic green function static terms
+    for j in prange(n_els):
+        nodes = element_nodes[j]
+        area = areas[j]
         n_pts = gp_per_element[j]
-        cursor = GP_start_idx[j]
-        nj = normals[j]          # THIS element normal
-        nodes = element_nodes[j] # Node coords for THIS element
-        area = areas[j]          # Area for THIS element
-        # temp arrays of Flat Lists
+        start = GP_start_idx[j]
+
         pts_coords = np.zeros((n_pts, 3), dtype=np.float64)
         pts_weights = np.zeros(n_pts, dtype=np.float64)
         # Calculate ALL possible GPs(coords, weights) per SOURCE element
         if n_pts == 11: # TRIAs: 1 + 3 + 7 GPs levels
-            mid_gp_idx = 3 + 1
+            mid_gp_idx = 4
         elif n_pts == 14: # QUADs: 1 + 4 + 9 GPs levels
-            mid_gp_idx = 4 + 1
-        
-        # Integration options overal mapping:
+            mid_gp_idx = 5
+
+        # Integration options mapping:
         # used later in solver as a function of distance receiver --> source elements:
         # CENTROID (1pnt):
         pts_coords[0] = centers[j]
-        pts_weights[0] = 1 * area
+        pts_weights[0] = 1.0 * area
         # MID-order (3pnts or 4pnts):
         pts, weights = pre_mid_order(nodes, area)
         pts_coords[1:mid_gp_idx] = pts
         pts_weights[1:mid_gp_idx] = weights
         # HIGH-order (7pnts or 9pnts):
         pts, weights = pre_high_order(nodes, area)
-        pts_coords[mid_gp_idx:] = pts
-        pts_weights[mid_gp_idx:] = weights
-
-        # --- STEP 3: Fill the "Flat Lists" ---
+        pts_coords[mid_gp_idx:n_pts] = pts
+        pts_weights[mid_gp_idx:n_pts] = weights
+        # --- Fill the "Flat Lists" ---
         for i in range(n_els): # Loop over RECEIVER elements
-            r_pt = centers[i]
+            recv_center = centers[i]
             # Explicit loop is "The Numba Way" - no axis issues here
             for p in range(n_pts):
+                idx = start + p
                 # 1. Calculate the vector from GP to Receiver Center
-                rx = r_pt[0] - pts_coords[p, 0]
-                ry = r_pt[1] - pts_coords[p, 1]
-                rz = r_pt[2] - pts_coords[p, 2]
+                r_vec = recv_center - pts_coords[p]
                 # 2. Distance math
-                r2 = rx*rx + ry*ry + rz*rz
-                if r2 < 1e-18: # Safety for self-term
-                    continue
-                r = np.sqrt(r2)
-                idx = cursor + p
+                r = np.linalg.norm(r_vec)
+                if r < 1e-18: # Safety for self-term
+                    r = 1e-18
+                r2 = r * r
+                
                 R_map[i, idx] = r
-
                 # Fill Static Influence Matrices
                 # 3. Bake the G Static Map: G = weight / (4 * pi * r)
                 g_base = pts_weights[p] * inv_4pi / r
                 G_static_map[i, idx] = g_base
-
                 # 4. Bake the H Static Map: H = G_static * (dot / r^2)
-                dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
+                dot = np.dot(r_vec, normals[j])
                 H_static_map[i, idx] = g_base * (dot / r2)
 
-    # Calc the static [H] diagonal self terms
-    H_diag_static = np.zeros(n_els, dtype=np.float64)
+    # STEP 4: Calc the static [G] & [H] diagonal self terms
     G_diag_static = np.zeros(n_els, dtype=np.float64)
+    H_diag_static = np.zeros(n_els, dtype=np.float64)
     for i in range(n_els):
         row_sum = 0.0
         G_diag_static[i] = np.sqrt(areas[i] / np.pi) * 2.0 * inv_4pi
+        
         for j in range(n_els):
-            if i == j: 
-                continue # Skip the pre-diagonals in ther sum
-            
+            if i == j:
+                continue # Skip the pre-diagonals in their sum
             n_pts = gp_per_element[j]
             if n_pts == 11:   # TRIAs: 1 + 3 + 7
-                start = GP_start_idx[j] + 4
-                n_pts = 7
+                local_start = GP_start_idx[j] + 4
+                n_high_pts = 7
             elif n_pts == 14: # QUADs: 1 + 4 + 9
-                start = GP_start_idx[j] + 5
-                n_pts = 9
+                local_start = GP_start_idx[j] + 5
+                n_high_pts = 9
+                
             # SUM ONLY HIGH ORDER from the static pre-baked H values for this source element
-            for p in range(start, start + n_pts):
-                row_sum += H_static_map[i, p]
+            for p in range(n_high_pts):
+                p_local = local_start + p
+                row_sum += H_static_map[i, p_local]
 
-        # The BEM Diagonal Balance
+        # The BEM [H] Diagonal Balance
         H_diag_static[i] = -row_sum
 
-    return gp_per_element, GP_start_idx, G_diag_static, H_diag_static
-    # return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
-
-# OLD before Shared Memory approach, without the need for a large pagefile.
-# @njit(parallel=True, cache=True)
-# def pre_assembly(element_nodes, centers, areas, normals):
-#     """
-#     Pre-Computes G and H (static, k=0) matrices using the input mesh:
-#     - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
-#     - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
-#     It also pre-computes fast arrays with all GPs info for fast assembly in the solve.
-#     element_nodes: BEM elem nodal coords
-#     centers: (N, 3) array
-#     areas: (N,) array
-#     normals: (N, 3) array
-#     """
-#     n_els = len(centers)    # number of BEM elements
-#     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
-
-#     # --- STEP 1: Calculate Total GPs ---
-#     total_gps = 0
-#     gp_per_element = np.zeros(n_els, dtype=np.int64)  # Force i64 for numba to work
-#     # Here we aim at all possible GPs for centroid, mid- and high-order integration options.
-#     for i in range(n_els):
-#         elem_n_nodes = len(element_nodes[i])
-#         if elem_n_nodes == 3:
-#             num_gps = 1+3+7
-#         else:
-#             num_gps = 1+4+9
-#         gp_per_element[i] = num_gps
-#         total_gps += num_gps
-
-#     print(f""" For ( {n_els} ) BEM elements, found a total of ( {total_gps} ) possible Integration / Gauss Points.""")
-    
-#     # --- STEP 2: Pre-allocate with Exact Size for speed ---
-#     # These are "Flat Lists" with all GPoints + dtype to save on RAM
-#     GP_start_idx = np.zeros(n_els, dtype=np.int64)
-#     offset = 0
-#     for j in range(n_els):
-#         GP_start_idx[j] = offset
-#         offset += gp_per_element[j]
-
-#     # Static Influence Matrices
-#     # Rows = Centroids (n_els), Cols = Every single GP in the system
-#     G_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
-#     H_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
-#     R_map = np.zeros((n_els, total_gps), dtype=np.float32)
-
-#     cursor = 0
-#     for j in prange(n_els):      # Parallel Loop over SOURCE elements
-#         n_pts = gp_per_element[j]
-#         cursor = GP_start_idx[j]
-#         nj = normals[j]          # THIS element normal
-#         nodes = element_nodes[j] # Node coords for THIS element
-#         area = areas[j]          # Area for THIS element
-#         # temp arrays of Flat Lists
-#         pts_coords = np.zeros((n_pts, 3), dtype=np.float64)
-#         pts_weights = np.zeros(n_pts, dtype=np.float64)
-#         # Calculate ALL possible GPs(coords, weights) per SOURCE element
-#         if n_pts == 11: # TRIAs: 1 + 3 + 7 GPs levels
-#             mid_gp_idx = 3 + 1
-#         elif n_pts == 14: # QUADs: 1 + 4 + 9 GPs levels
-#             mid_gp_idx = 4 + 1
-        
-#         # Integration options overal mapping:
-#         # used later in solver as a function of distance receiver --> source elements:
-#         # CENTROID (1pnt):
-#         pts_coords[0] = centers[j]
-#         pts_weights[0] = 1 * area
-#         # MID-order (3pnts or 4pnts):
-#         pts, weights = pre_mid_order(nodes, area)
-#         pts_coords[1:mid_gp_idx] = pts
-#         pts_weights[1:mid_gp_idx] = weights
-#         # HIGH-order (7pnts or 9pnts):
-#         pts, weights = pre_high_order(nodes, area)
-#         pts_coords[mid_gp_idx:] = pts
-#         pts_weights[mid_gp_idx:] = weights
-
-#         # --- STEP 3: Fill the "Flat Lists" ---
-#         for i in range(n_els): # Loop over RECEIVER elements
-#             r_pt = centers[i]
-#             # Explicit loop is "The Numba Way" - no axis issues here
-#             for p in range(n_pts):
-#                 # 1. Calculate the vector from GP to Receiver Center
-#                 rx = r_pt[0] - pts_coords[p, 0]
-#                 ry = r_pt[1] - pts_coords[p, 1]
-#                 rz = r_pt[2] - pts_coords[p, 2]
-#                 # 2. Distance math
-#                 r2 = rx*rx + ry*ry + rz*rz
-#                 if r2 < 1e-18: # Safety for self-term
-#                     continue
-#                 r = np.sqrt(r2)
-#                 idx = cursor + p
-#                 R_map[i, idx] = r
-
-#                 # Fill Static Influence Matrices
-#                 # 3. Bake the G Static Map: G = weight / (4 * pi * r)
-#                 g_base = pts_weights[p] * inv_4pi / r
-#                 G_static_map[i, idx] = g_base
-
-#                 # 4. Bake the H Static Map: H = G_static * (dot / r^2)
-#                 dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
-#                 H_static_map[i, idx] = g_base * (dot / r2)
-
-#     # Calc the static [H] diagonal self terms
-#     H_diag_static = np.zeros(n_els, dtype=np.float64)
-#     G_diag_static = np.zeros(n_els, dtype=np.float64)
-#     for i in range(n_els):
-#         row_sum = 0.0
-#         G_diag_static[i] = np.sqrt(areas[i] / np.pi) * 2.0 * inv_4pi
-#         for j in range(n_els):
-#             if i == j: 
-#                 continue # Skip the pre-diagonals in ther sum
-            
-#             n_pts = gp_per_element[j]
-#             if n_pts == 11:   # TRIAs: 1 + 3 + 7
-#                 start = GP_start_idx[j] + 4
-#                 n_pts = 7
-#             elif n_pts == 14: # QUADs: 1 + 4 + 9
-#                 start = GP_start_idx[j] + 5
-#                 n_pts = 9
-#             # SUM ONLY HIGH ORDER from the static pre-baked H values for this source element
-#             for p in range(start, start + n_pts):
-#                 row_sum += H_static_map[i, p]
-
-#         # The BEM Diagonal Balance
-#         H_diag_static[i] = -row_sum
-
-#     return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
-
-# @njit(parallel=True, cache=True, nogil=True)
-@njit(parallel=True, cache=True)
-def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length):
-    """
-    Computes G and H matrices PRE static ones + dynamic terms:
-    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) * G_static
-    - Derivative Kernel (H-matrix): Hij = H_sign * exp(jk*r) * (jk*r - 1) * H_static
-    k: wave number (complex or float)
-    Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
-    max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
-    """
-    n_els = len(H_diag_static)    # number of BEM elements
-
-    # Build 2D complex matrices
-    G = np.zeros((n_els, n_els), dtype=np.complex128)
-    H = np.zeros((n_els, n_els), dtype=np.complex128)
-
-    for i in prange(n_els):
-        for j in range(n_els):  # from source j to receiver i
-            start = GP_start_idx[j]
-            # We use the centroid (the first point in the block) for the distance check
-            r_centroid = R_map[i, start]
-
-            # Identify element types by total_GPs count from PRE
-            # Used to set limits between different integration orders.
-            total_gps = gp_per_element[j]
-            is_tria = (total_gps == 11) # TRIA: 1 (Cent) + 3 (Mid) + 7 (High)
-            # This is where the High-Order slice starts
-            high_start_idx = 4 if is_tria else 5   # QUAD: 1 (Cent) + 4 (Mid) + 9 (High)
-
-            # Thresholds for mid- or high-order GPs based on distance logic
-            # Local thresholds to avoid parallel race conditions
-            limit_high = order_length * 3
-            limit_mid = order_length * 5
-
-            if i == j:
-                G[i, j] = G_diag_static[j]
-                H[i, j] = H_diag_static[j]
-            
-            else:
-                # Set the integration slice
-                if r_centroid < limit_high:
-                    p_start, p_end = high_start_idx, total_gps
-                elif r_centroid < limit_mid:
-                    p_start, p_end = 1, high_start_idx
-                else:
-                    p_start, p_end = 0, 1
-
-                g_temp = 0.0 + 0.0j
-                h_temp = 0.0 + 0.0j
-            
-                for p_offset in range(p_start, p_end):
-                    p_global = start + p_offset
-
-                    r_p = R_map[i, p_global]
-                    exp_jkr = np.exp(1j * k * r_p)
-
-                    # Fetch pre-baked static terms using global index
-                    gs = G_static_map[i, p_global]
-                    hs = H_static_map[i, p_global]
-
-                    g_temp += exp_jkr * gs
-                    # Using (1 - jkr) convention to match standard exterior/interior derivatives
-                    h_temp += H_sign * exp_jkr * (1j * k * r_p - 1.0) * hs
-
-                G[i, j] = g_temp
-                H[i, j] = h_temp
-    return G, H
-
-### OLD 1st solve, do NOT use, it worked, but very slow vs above ones.
-# @njit(parallel=True, cache=True)
-# def assemble_static(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length):
-#     """
-#     Computes G and H matrices using element normals:
-#     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
-#     - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
-#       Hij = (Gij / r) * (jk*r - 1) * r_dot_n
-#     centers: (N, 3) array
-#     areas: (N,) array
-#     normals: (N, 3) array
-#     k: wave number (complex or float)
-#     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
-#     max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
-#     """
-#     n_els = len(centers)    # number of BEM elements
-#     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
-#     # Build 2D complex matrices
-#     G = np.zeros((n_els, n_els), dtype=np.complex128)
-#     H = np.zeros((n_els, n_els), dtype=np.complex128)
-
-#     for i in prange(n_els):
-#         r_pt = centers[i]
-#         for j in range(n_els):
-#             # Vector from source j to receiver i
-#             r_vec = r_pt - centers[j]
-#             r = np.linalg.norm(r_vec)
-#             if max_el_length[j] > order_length:
-#                 order_length = max_el_length[j]
-            
-#             if i == j: # Analytical self-term approximations skipped
-#                 continue
-#             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-#             elif r < order_length * 3:
-#                 # high-order
-#                 g_val, h_val = compute_high_order_contribution(
-#                     r_pt, 
-#                     element_nodes[j], # Array of actual nodal coordinates
-#                     normals[j], 
-#                     areas[j], 
-#                     k, H_sign, inv_4pi
-#                 )
-#                 G[i, j] = g_val
-#                 H[i, j] = h_val
-#             elif r < order_length * 5:
-#                 # mid-order
-#                 g_val, h_val = compute_mid_order_contribution(
-#                     r_pt, 
-#                     element_nodes[j], # Array of actual nodal coordinates
-#                     normals[j], 
-#                     areas[j], 
-#                     k, H_sign, inv_4pi
-#                 )
-#                 G[i, j] = g_val
-#                 H[i, j] = h_val
-#             else:
-#                 # for k = 0 all exp == 1, so remove?
-#                 exp_jkr = np.exp(1j * k * r)
-#                 # (G-matrix): Free-space 3D Helmholtz Green's function
-#                 g_val = exp_jkr * inv_4pi / r
-#                 G[i, j] = g_val * areas[j]
-                
-#                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-#                 r_dot_n = np.dot(r_vec, normals[j]) / r
-#                 H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
-    
-#     # In Numpy axis=0 ==> cols | axis=1 ==> rows
-#     H_static = np.real(-np.sum(H, axis=1, dtype=np.complex128))
-#     return H_static
-
-# @njit(parallel=True, cache=True)
-# def assemble_system(element_nodes, centers, areas, normals, k, H_sign, max_el_length, order_length, H_static):
-#     """
-#     Computes G and H matrices using element normals:
-#     - Green's Function Kernel (G-matrix): Gij = exp(jk*r) / 4PI*r
-#     - Derivative Kernel (H-matrix): Hij = (exp(jk*r) / 4PI*r^2) * (jk*r - 1) * r_dot_n
-#       Hij = (Gij / r) * (jk*r - 1) * r_dot_n
-#     centers: (N, 3) array
-#     areas: (N,) array
-#     normals: (N, 3) array
-#     k: wave number (complex or float)
-#     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
-#     max_el_length: (N,) array with MAX edge size per BEM element. Used for local size high-order integration.
-#     """
-#     n_els = len(centers)    # number of BEM elements
-#     inv_4pi = 1 / (4*np.pi) # 4*pi is a constant in the Green's function denominator
-#     # Build 2D complex matrices
-#     G = np.zeros((n_els, n_els), dtype=np.complex128)
-#     H = np.zeros((n_els, n_els), dtype=np.complex128)
-
-#     for i in prange(n_els):
-#         r_pt = centers[i]
-#         for j in range(n_els):
-#             # Vector from source j to receiver i
-#             r_vec = r_pt - centers[j]
-#             r = np.linalg.norm(r_vec)
-#             if max_el_length[j] > order_length:
-#                 order_length = max_el_length[j]
-            
-#             if i == j: # Analytical self-term approximations for diagonal terms
-#                 G[i, j] = np.sqrt(areas[j] / np.pi) * 2.0 * inv_4pi
-#                 # H[i, j] = 0.5  # Jump term for smooth surfaces
-#                 H[i, j] = H_static[j]
-#             # All off-diagonal terms benefit from quadrature, especially near-field neighbours.
-#             elif r < order_length * 3:
-#                 # high-order
-#                 g_val, h_val = compute_high_order_contribution(
-#                     r_pt, 
-#                     element_nodes[j], # Array of actual nodal coordinates
-#                     normals[j], 
-#                     areas[j], 
-#                     k, H_sign, inv_4pi
-#                 )
-#                 G[i, j] = g_val
-#                 H[i, j] = h_val
-#             elif r < order_length * 5:
-#                 # mid-order
-#                 g_val, h_val = compute_mid_order_contribution(
-#                     r_pt, 
-#                     element_nodes[j], # Array of actual nodal coordinates
-#                     normals[j], 
-#                     areas[j], 
-#                     k, H_sign, inv_4pi
-#                 )
-#                 G[i, j] = g_val
-#                 H[i, j] = h_val
-#             else:
-#                 exp_jkr = np.exp(1j * k * r)
-#                 # (G-matrix): Free-space 3D Helmholtz Green's function
-#                 g_val = exp_jkr * inv_4pi / r
-#                 G[i, j] = g_val * areas[j]
-                
-#                 # (H-matrix) Double Layer: Derivative of G with respect to normal n_j
-#                 r_dot_n = np.dot(r_vec, normals[j]) / r
-#                 H[i, j] = H_sign * (G[i, j]) * ((1j * k) - 1.0 / r) * r_dot_n
-    
-#     return G, H
-
-# @njit(parallel=True)   # it crashes Numba if dictionaries present
-# @njit(nogil=True)
-def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
-    """
-    Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
-    Solves Ax=B.
-    Returns the complex pressure for every element.
-    sorted_bem_ids: sorted list of element IDs to ensure index alignment
-    """
-    num_elements = len(sorted_bem_ids)
-    A = np.zeros((num_elements, num_elements), dtype=np.complex128)
-    B = np.zeros(num_elements, dtype=np.complex128)
-
-    # We MUST use the same index 'j' that corresponds to the matrix columns (0, 1, 2...)
-    # eid is the ACTUAL ID from the .inp (1, 101, 500...)
-    for j, eid in enumerate(sorted_bem_ids):
-        bc = bc_map.get(eid, {})
-
-        # Case 1: Velocity is known (Vibrating Wall - Neumann BC)
-        if 'VELO' in bc:
-            # Velocity is known (v), Pressure (p) is unknown
-            A[:, j] += H[:, j]
-            B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
-            # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
-            if 'IMPE' in bc:
-                # Admittance logic: v = p / Z. 
-                # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
-                # Safety check for division by zero
-                z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-                # Units must match: H is unitless, G is [L], so we need [1/L]
-                # (i * omega * rho) / Z  has units of [1/L]
-                A[:, j] += G[:, j] * (1j * rho_omega / z_val)
-        
-        # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
-        elif 'PRES' in bc:
-            # Pressure is known (p), Velocity (v) is unknown
-            A[:, j] -= G[:, j] * (1j * rho_omega)
-            B -= H[:, j] * bc['PRES']
-        
-        # Case 3: Impedance (Absorbent material)
-        elif 'IMPE' in bc and 'VELO' not in bc:
-            # Admittance logic: v = p / Z. 
-            # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
-            # Safety check for division by zero
-            z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-            # Units must match: H is unitless, G is [L], so we need [1/L]
-            # (i * omega * rho) / Z  has units of [1/L]
-            A[:, j] += H[:, j] + (G[:, j] * (1j * rho_omega / z_val))
-        
-        # Case 4: Rigid Wall, v=0 (Default)
-        else:
-            A[:, j] += H[:, j]
-
-    # --- Solver Feedback ---
-    # Check Matrix Condition Number (good UX)
-    # If this number is too high, the mesh might be bad
-    # if log:
-    #     # Matrix Condition Number tells us if the mesh is 'broken' or math is unstable
-    #     # Note: This can be slow for huge matrices, use sparingly!
-    #     cond = np.linalg.cond(A)
-    #     if cond > 1e12:
-    #         log.write("      WARNING: Matrix is ill-conditioned. Check for overlapping elements!\n")
-    cond = 'N/A'   # turned off as expensive.
-    
-    # Solve the linear system Ax = B for the unknown surface values (usually Pressure)
-    bem_solution = np.linalg.solve(A, B)
-    
-    # # Build both PRESS & VELO array results, before Mics calcs & averaged_at_nodes for PV
-    # p_final, v_final = derive_surface_vectors(bem_solution, bc_map, sorted_bem_ids, rho_omega)
-
-    # del G, H, A, B, bem_solution
-    
-    return (bem_solution, cond)
-    # return (p_final, v_final, cond)
-
-# @njit   # it crashes Numba if dictionaries present
-def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
-    """
-    Reconstructs the full pressure and velocity vectors for the surface.
-    p_sol: The unknown values returned by the solver.
-    bc_map: The dictionary of boundary conditions.
-    bem_ids: The sorted list of element IDs used in the matrix.
-    """
-    num_elements = len(sorted_bem_ids)
-    p_final = np.zeros(num_elements, dtype=np.complex128)
-    v_final = np.zeros(num_elements, dtype=np.complex128)
-
-    for j, eid in enumerate(sorted_bem_ids):
-        bc = bc_map.get(eid, {})
-        
-        if 'VELO' in bc:
-            # We knew Velocity, p_sol gave us Pressure
-            p_final[j] = p_sol[j]
-            v_final[j] = bc['VELO']
-            # * (1j * rho_omega)   # Do NOT use it here, it's in solve_bem_system.
-            if 'IMPE' in bc:
-                # We solved for Pressure, Velocity is p/Z
-                z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-                v_final[j] += p_sol[j] / z_val
-            
-        elif 'PRES' in bc:
-            # We knew Pressure, p_sol gave us Velocity
-            p_final[j] = bc['PRES']
-            v_final[j] = p_sol[j]
-            
-        elif 'IMPE' in bc and 'VELO' not in bc:
-            # We solved for Pressure, Velocity is p/Z
-            p_final[j] = p_sol[j]
-            z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-            v_final[j] = p_sol[j] / z_val
-            
-        else:
-            # Rigid wall: v=0, p_sol gave us Pressure
-            p_final[j] = p_sol[j]
-            v_final[j] = 0.0 + 0.0j
-            
-    return p_final, v_final
+    return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
 
 @njit(parallel=True, cache=True)
 def pre_mics(mic_centers, bem_centers, bem_normals):
@@ -824,6 +595,115 @@ def pre_mics(mic_centers, bem_centers, bem_normals):
 
     return pre_mics_G, pre_mics_H, pre_mics_R, num_mics
 
+# NEW main_assembly to handle multi-zone BEM
+# @njit(parallel=False, boundscheck=True)  # <-- Change this temporarily!
+@njit(parallel=True, cache=True)
+def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, 
+                  G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length):
+    """
+    Computes G and H matrices PRE static ones + dynamic terms per ZONE:
+    - Green's Function Kernel (G-matrix): Gij = exp(jk*r) * G_static
+    - Derivative Kernel (H-matrix): Hij = H_sign * exp(jk*r) * (jk*r - 1) * H_static
+    k: wave number (complex or float)
+    Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
+    order_length: pre-calculated MAX (approx.) edge size per BEM ZONE. 
+    Used for local size search for mid-order, high-order & cfentroid integration.
+    """
+    n_els = len(G_diag_static)    # number of BEM elements in ZONE
+    G = np.zeros((n_els, n_els), dtype=np.complex128)
+    H = np.zeros((n_els, n_els), dtype=np.complex128)
+
+    # Thresholds for mid- or high-order GPs based on distance logic
+    # Local thresholds to avoid parallel race conditions
+    limit_high = order_length * 3
+    limit_mid = order_length * 5
+
+    for i in prange(n_els):
+        for j in range(n_els):  # from source j to receiver i
+            n_pts = gp_per_element[j]
+            start = GP_start_idx[j]
+            # Identify element types by total_GPs count from PRE
+            # Used to set limits between different integration orders.
+            if n_pts == 11:   # TRIA: 1 (Cent) + 3 (Mid) + 7 (High)
+                high_start_idx = 4
+            elif n_pts == 14: # QUAD: 1 (Cent) + 4 (Mid) + 9 (High)
+                high_start_idx = 5
+            # We use the centroid (the first point in the array) for the distance check
+            r_centroid = R_map[i, start]
+
+            if i == j:
+                G[i, j] = G_diag_static[j]
+                H[i, j] = H_diag_static[j]
+            else:
+                if r_centroid < limit_high:
+                    p_start, p_end = high_start_idx, n_pts
+                elif r_centroid < limit_mid:
+                    p_start, p_end = 1, high_start_idx
+                else:
+                    p_start, p_end = 0, 1
+
+                g_temp = 0.0 + 0.0j
+                h_temp = 0.0 + 0.0j
+                
+                for p_offset in range(p_start, p_end):
+                    p_idx = start + p_offset
+                    r_p = R_map[i, p_idx]
+                    exp_jkr = np.exp(1j * k * r_p)
+
+                    # Fetch pre-baked static terms using index
+                    gs = G_static_map[i, p_idx]
+                    hs = H_static_map[i, p_idx]
+
+                    g_temp += exp_jkr * gs
+                    h_temp += H_sign * exp_jkr * (1j * k * r_p - 1.0) * hs
+
+                G[i, j] = g_temp
+                H[i, j] = h_temp
+
+    return G, H
+
+# @njit   # it crashes Numba if dictionaries present
+def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
+    """
+    Reconstructs the full pressure and velocity vectors for the surface.
+    p_sol: The unknown values returned by the solver.
+    bc_map: The dictionary of boundary conditions.
+    bem_ids: The sorted list of element IDs used in the matrix.
+    """
+    num_elements = len(sorted_bem_ids)
+    p_final = np.zeros(num_elements, dtype=np.complex128)
+    v_final = np.zeros(num_elements, dtype=np.complex128)
+
+    for j, eid in enumerate(sorted_bem_ids):
+        bc = bc_map.get(eid, {})
+        
+        if 'VELO' in bc:
+            # We knew Velocity, p_sol gave us Pressure
+            p_final[j] = p_sol[j]
+            v_final[j] = bc['VELO']
+            if 'IMPE' in bc:
+                # We solved for Pressure, Velocity is p/Z
+                z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                v_final[j] += p_sol[j] / z_val
+            
+        elif 'PRES' in bc:
+            # We knew Pressure, p_sol gave us Velocity
+            p_final[j] = bc['PRES']
+            v_final[j] = p_sol[j]
+            
+        elif 'IMPE' in bc and 'VELO' not in bc:
+            # We solved for Pressure, Velocity is p/Z
+            p_final[j] = p_sol[j]
+            z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+            v_final[j] = p_sol[j] / z_val
+            
+        else:
+            # Rigid wall: v=0, p_sol gave us Pressure
+            p_final[j] = p_sol[j]
+            v_final[j] = 0.0 + 0.0j
+            
+    return p_final, v_final
+
 @njit(parallel=True, cache=True)
 def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_surf, v_surf, k, rho_omega, H_sign):
     """
@@ -831,26 +711,17 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_su
     mic_centers: mics nodal coords.
     bem_centers: BEM elements CoG coords.
     """
-    # num_mics = len(mic_centers)
     num_surf = len(bem_areas)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
-    # inv_4pi = 1.0 / (4.0 * np.pi)
-    # TODO: when input VELO present, we have 1 too many '* (1j * rho_omega)' on those els.
-    #       to be reviewed in the future.
     v_surf = v_surf * (1j * rho_omega)
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
         for j in range(num_surf):
-            # r_vec = mic_centers[i] - bem_centers[j]
-            # r = np.linalg.norm(r_vec)
-
             # Green's Function (G)
             g_val = np.exp(1j * k * pre_mics_R[i, j]) * pre_mics_G[i, j]
 
             # Derivative of Green's Function (H)
-            # Dot product of (r_vec) and the surface normal / r
-            # r_dot_n = np.dot(r_vec, bem_normals[j]) / r
             h_val = H_sign * g_val * (1j * k - 1.0 / pre_mics_R[i, j]) * pre_mics_H[i, j]
             
             # p_mic = G*v + H*p (integrated over area)
@@ -859,3 +730,60 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_su
         p_mics[i] = sum_p
 
     return p_mics
+
+# @njit(parallel=True)   # it crashes Numba if dictionaries present
+# def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
+#     """
+#     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
+#     Solves Ax=B.
+#     Returns the complex pressure for every element.
+#     sorted_bem_ids: sorted list of element IDs to ensure index alignment
+#     """
+#     num_elements = len(sorted_bem_ids)
+#     A = np.zeros((num_elements, num_elements), dtype=np.complex128)
+#     B = np.zeros(num_elements, dtype=np.complex128)
+
+#     # We MUST use the same index 'j' that corresponds to the matrix columns (0, 1, 2...)
+#     # eid is the ACTUAL ID from the .inp (1, 101, 500...)
+#     for j, eid in enumerate(sorted_bem_ids):
+#         bc = bc_map.get(eid, {})
+
+#         # Case 1: Velocity is known (Vibrating Wall - Neumann BC)
+#         if 'VELO' in bc:
+#             # Velocity is known (v), Pressure (p) is unknown
+#             A[:, j] += H[:, j]
+#             B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
+#             # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
+#             if 'IMPE' in bc:
+#                 # Admittance logic: v = p / Z. 
+#                 # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
+#                 # Safety check for division by zero
+#                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+#                 # Units must match: H is unitless, G is [L], so we need [1/L]
+#                 # (i * omega * rho) / Z  has units of [1/L]
+#                 A[:, j] += G[:, j] * (1j * rho_omega / z_val)
+        
+#         # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
+#         elif 'PRES' in bc:
+#             # Pressure is known (p), Velocity (v) is unknown
+#             A[:, j] -= G[:, j] * (1j * rho_omega)
+#             B -= H[:, j] * bc['PRES']
+        
+#         # Case 3: Impedance (Absorbent material)
+#         elif 'IMPE' in bc and 'VELO' not in bc:
+#             # Admittance logic: v = p / Z. 
+#             # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
+#             # Safety check for division by zero
+#             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+#             # Units must match: H is unitless, G is [L], so we need [1/L]
+#             # (i * omega * rho) / Z  has units of [1/L]
+#             A[:, j] += H[:, j] + (G[:, j] * (1j * rho_omega / z_val))
+        
+#         # Case 4: Rigid Wall, v=0 (Default)
+#         else:
+#             A[:, j] += H[:, j]
+    
+#     # Solve the linear system Ax = B for the unknown surface values (usually Pressure)
+#     bem_solution = np.linalg.solve(A, B)
+    
+#     return (bem_solution)

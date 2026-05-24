@@ -12,7 +12,7 @@ class PMXParser:
         self.header_comments = ''
         self.nodes = {}
         self.n_mics_nodes = 0
-        self.elements = {}        
+        self.elements = {}        # BEM elements
         self.mics_elements = {}        
         self.nsets = {}          
         self.elsets = {}          
@@ -24,7 +24,12 @@ class PMXParser:
         self.sections = []        
         self.amplitudes = {} # { 'Name': np.array([[freq, val], ...]) }
         self.speed_of_sound = None 
-        self.density = None        
+        self.density = None
+
+        # --- Multi-Zone Mapping Structures ---
+        self.zone_to_elsets = {}     # { 'Material_Zone_A': ['Elset_1', 'Elset_2'], ... }
+        self.element_to_zone = {}    # { element_id: 'Material_Zone_A', ... }
+        self.ties = []               # List to hold parsed *Tie data lines
         
         # --- Step & BCs ---
         self.frequencies = []
@@ -79,12 +84,12 @@ class PMXParser:
 
         # --- 0) Heading ---
         if h_up.startswith('*HEADING'):
-            head_str = f'***\n{header}\n'
+            head_str = f'{header}\n'
             for line in data:
                 if line.startswith('**') or not line: 
                     continue # SKIP COMMENTS
                 head_str += line+'\n'
-            head_str += '***'
+            head_str += ''
             self.header_comments = head_str
         
         # --- 1) Nodes ---
@@ -122,7 +127,7 @@ class PMXParser:
             self.model_str += f'***\n{header}\n'
             is_elset = h_up.startswith('*ELSET')
             name = self._get_param(header, 'ELSET' if is_elset else 'NSET')
-            name = name.split('Internal-1_')[-1]
+            name = self._clean_name(name)
             target = self.elsets if is_elset else self.nsets
             
             if name not in target: target[name] = []
@@ -136,7 +141,7 @@ class PMXParser:
         elif h_up.startswith('*SURFACE'):
             self.model_str += f'***\n{header}\n'
             name = self._get_param(header, 'NAME')
-            name = name.split('Internal-1_')[-1]
+            name = self._clean_name(name)
             
             for line in data:
                 if line.startswith('**') or not line: 
@@ -144,7 +149,7 @@ class PMXParser:
                 self.model_str += line+'\n'
                 p = self._split(line)
                 if len(p) >= 2:
-                    self.surfaces[name] = {'elset': p[0].split('Internal-1_')[-1]}
+                    self.surfaces[name] = {'elset': self._clean_name(p[0])}
 
         # --- 4) Materials ---
         elif h_up.startswith('*MATERIAL'):
@@ -171,11 +176,18 @@ class PMXParser:
             self.model_str += f'***\n{header}\n'
             for line in data:
                 self.model_str += line+'\n'
-            self.sections.append({
-                'elset': self._get_param(header, 'ELSET'),
-                'material': self._get_param(header, 'MATERIAL')
-            })
 
+            mat_name = self._get_param(header, 'MATERIAL')
+            elset_name = self._get_param(header, 'ELSET')
+
+            # Store section details
+            self.sections.append({'elset': elset_name, 'material': mat_name})
+
+            # Populate zone lookup maps
+            if mat_name not in self.zone_to_elsets:
+                self.zone_to_elsets[mat_name] = []
+            self.zone_to_elsets[mat_name].append(elset_name)
+            
         # --- 6) Amplitudes ---
         elif h_up.startswith('*AMPLITUDE'):
             self.model_str += f'***\n{header}\n'
@@ -191,11 +203,11 @@ class PMXParser:
                     if i+1 < len(vals): pts.append([vals[i], vals[i+1]])
             self.amplitudes[name] = np.array(pts)
 
-        # ---  ) Step ---
+        # --- 7) Step ---
         elif h_up.startswith('*STEP'):
             self.model_str += f'***\n{header}\n'
         
-        # --- 7) Step Type & Frequencies ---
+        # --- 7A) Step Type & Frequencies ---
         elif h_up.startswith('*STEADY STATE DYNAMICS'):
             self.model_str += f'***\n{header}\n'
             if data:
@@ -245,7 +257,31 @@ class PMXParser:
                     else:
                         self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3])*1j)})
 
-        # Acoustic Velocity, DoF = 8
+        # --- 9B) Tied Contacts across acoustic ZONES ---
+        elif h_up.startswith('*TIE'):
+            self.model_str += f'***\n{header}\n'
+            tie_name = self._get_param(header, 'NAME')
+            tolerance = self._get_param(header, 'POSITION TOLERANCE')
+            tol_val = float(tolerance) if tolerance else 0.05
+
+            for line in data:
+                if line.startswith('**') or not line: 
+                    continue
+                self.model_str += line+'\n'
+                p = self._split(line)
+                if len(p) >= 2:
+                    # Clean up potential PrePoMax namespace strings
+                    slave_surf = self._clean_name(p[0])
+                    master_surf = self._clean_name(p[1])
+
+                    self.ties.append({
+                        'name': tie_name,
+                        'slave': slave_surf,
+                        'master': master_surf,
+                        'tolerance': tol_val
+                    })
+
+        # --- 9C) Acoustic Velocity, DoF = 8
         elif h_up.startswith('*CLOAD'):
             self.model_str += f'***\n{header}\n'
             if 'OP=NEW' in h_up: return
@@ -268,7 +304,7 @@ class PMXParser:
                     else:
                         self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2])*1j)})
 
-        # Acoustic Impedance
+        # --- 9D) Acoustic Impedance
         elif h_up.startswith('*IMPEDANCE'):
             self.model_str += f'***\n{header}\n'
             if 'OP=NEW' in h_up: return
@@ -291,24 +327,33 @@ class PMXParser:
                     else:
                         self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1])*1j)})
 
-        # ---  ) End Step ---
+        # --- 10) End Step ---
         elif h_up.startswith('*END STEP'):
             self.model_str += f'***\n{header}\n'
 
     def _validate_physics(self):
-        """Ensures the assigned material has density and bulk modulus."""
+        """
+        Validates properties for every independent material zone.
+        Ensures the assigned material has density and bulk modulus.
+        """
         if not self.sections:
             raise ValueError("No *SHELL SECTION found. Check your .inp file.")
         
-        # For now, we use the first valid acoustic material found in sections
-        for sec in self.sections:
-            m = self.materials.get(sec['material'])
-            if m and m['density'] and m['bulk']:
-                self.density = m['density']
-                self.speed_of_sound = np.sqrt(m['bulk'] / m['density'])
-                m['c'] = float(f"{self.speed_of_sound:.2f}")
-                return
-        raise ValueError("No valid Acoustic Material properties found for assigned elements.")
+        # Loop over every declared material zone to compute speed of sound
+        for mat_name, mat_props in self.materials.items():
+            if mat_props['density'] and mat_props['bulk']:
+                # Calculate local speed of sound for this zone
+                c_local = np.sqrt(mat_props['bulk'] / mat_props['density'])
+                mat_props['c'] = float(f"{c_local:.2f}")
+            else:
+                raise ValueError(f"Material zone '{mat_name}' lacks valid density or bulk modulus.")
+            
+        # Map element IDs to specific zones for downstream matrix routing
+        for mat_name, elsets in self.zone_to_elsets.items():
+            for elset in elsets:
+                if elset in self.elsets:
+                    for eid in self.elsets[elset]:
+                        self.element_to_zone[eid] = mat_name
 
     def get_bcs(self):
         """
@@ -380,7 +425,7 @@ class PMXParser:
                             if amp in bc:
                                 bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
 
-        log_bc_info += f"*** BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
+        log_bc_info += f"--> BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
         return bc_dict, log_bc_info
 
     def _get_param(self, line, key):
@@ -393,6 +438,14 @@ class PMXParser:
     def _split(self, line):
         return [x.strip() for x in line.split(',') if x.strip()]
 
+    def _clean_name(self, name):
+        """Clean up long PrePoMax names."""
+        tmp_list = ['Selection-1_', 'Internal-1_']
+        for item in tmp_list:
+            if item in name:
+                name = name.split(item)[-1]
+        return name
+
     def write_debug_inp(self):
         """The 'Parsed' input file for debugging and checks."""
         with open(f"bem_{self.model_name}.inp", 'w') as f:
@@ -404,5 +457,5 @@ class PMXParser:
     def print_model_summary(self):
         self.top_log = TOP_LOG_LINES(self)
         self.write_debug_inp()
-        print(self.header_comments)
-        print(self.top_log)
+        model_summary = self.header_comments + self.top_log
+        return model_summary
