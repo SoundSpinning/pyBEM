@@ -152,6 +152,7 @@ def start_pybem_app():
         has_global_ties = bool(getattr(parser, 'ties', None))
         
         if has_global_ties:
+            log_tie_info += f"    Found a total of ( {len(parser.ties)} ) TIED pair constraints as follows:\n\n"
             # 1. First run the basic search to check for isolation/errors and pull basic tie data
             # Locate matching node identities along touching zone boundaries
             tie_registry = resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3)
@@ -161,12 +162,13 @@ def start_pybem_app():
             
             for tie_name, info in tie_registry.items():
                 n_el_pairs = len(info['element_pairs'])
+                n_zone_input_slave = tie_registry[tie_name]['n_input_slave_els']
+                n_zone_input_master = tie_registry[tie_name]['n_input_master_els']
                 
                 log_tie_info += f"--> TIE: [ {tie_name} ]\n"
-                log_tie_info += f"    Master Domain: {info['master_zone']} <---> Slave Domain: {info['slave_zone']}\n"
-                log_tie_info += f"    Master Elements Active: {len(master_elements)} | Slave Elements Active: {len(slave_elements)}\n"
-                log_tie_info += f"    Search Tolerance: {info['tolerance_used']} L\n"
-                log_tie_info += f"    Connected Zones Interface Elements: ( {n_el_pairs} matched pairs )\n"
+                log_tie_info += f"    Input Master Elements: ( {n_zone_input_master} ) | Input Slave Elements: ( {n_zone_input_slave} )\n"
+                log_tie_info += f"    Mapping Search Tolerance: ( {info['tolerance_used']} L )\n"
+                log_tie_info += f"    Interface Elements on Tied Zones : ( {n_el_pairs} ) mapped pairs\n"
                 
                 # Double safety: 
                 # handle the case where e.g. Tie_1 matched pairs but Tie_2 found 0 nodal pairs
@@ -379,12 +381,12 @@ def start_pybem_app():
        which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
 """)
         print(log_pre_stats)
-        print("           Promoting heavy arrays to Shared Memory...\n")
+        print("       [ i ] Promoting heavy arrays to Shared Memory...\n")
         shm_static_data = promote_to_shm(static_data)
 
         with open(log_f, "a") as log:
             log.write(log_pre_stats)
-            log.write(f"           Promoting heavy arrays to Shared Memory...\n")
+            log.write(f"       [ i ] Promoting heavy arrays to Shared Memory...\n")
             log.write(f"\n{'=' * 98}")
             log.write(f"\n {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}")
             log.write(f"\n{'=' * 98}\n")

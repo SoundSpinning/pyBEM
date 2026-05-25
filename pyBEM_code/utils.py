@@ -68,10 +68,12 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
     global_h_signs = {}
     global_order_lengths = {}
     
-    log_info += """
+    log_info += f"""
     ==============================
     *** INPUT MESH DIAGNOSTICS ***
-    =============================="""
+    ==============================
+    Found a total of ( {len(parser.zone_to_elsets)} ) Acoustic ZONES as follows:
+    """
     
     for zone_name, info in zone_mesh_data.items():
         z_elements = info['elements']
@@ -232,6 +234,8 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         
         slave_eids = parser.elsets.get(slave_elset, [])
         master_eids = parser.elsets.get(master_elset, [])
+        n_input_slave_els = len(slave_eids)
+        n_input_master_els = len(master_eids)
 
         # Identify Zone Ownership, Centroids, and Normals
         slave_zone, master_zone = None, None
@@ -239,7 +243,7 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         master_data = {}  # stores {eid: centroid}
 
         for zone_name, z_mesh in zones_mesh.items():
-            # Use your existing framework to pull geometry properties
+            # Use existing framework to pull geometry properties
             _, z_centers, _, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
             
             # Build lookups for the elements in this zone
@@ -291,7 +295,9 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
                 'slave_zone': slave_zone,
                 'master_zone': master_zone,
                 'element_pairs': element_pairs,
-                'tolerance_used': tolerance
+                'tolerance_used': tolerance,
+                'n_input_slave_els': n_input_slave_els,
+                'n_input_master_els': n_input_master_els
             }
             # print(f" [ i ] Resolved Tie '{tie_name}': Matched {len(element_pairs)} element faces using normal-projected gap filter (Tolerance: {tolerance} L)")
 
