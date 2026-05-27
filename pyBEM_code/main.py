@@ -372,9 +372,9 @@ def start_pybem_app():
         
         log_pre_stats = (f"""
  PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
-     BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f}MB )
+     BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f}GB )
      
- Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f}MB ):
+ Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f}GB ):
  Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB ) | Parallel Frequency Workers: ( {num_workers} )
  [ i ] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( {threads_per_worker} )
        Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 

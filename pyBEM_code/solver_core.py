@@ -468,7 +468,7 @@ def pre_assembly(element_nodes, centers, areas, normals):
     inv_4pi = 1.0 / (4.0 * np.pi) # 4*pi is a constant in the Green's function denominator
 
     # STEP 1: Calculate Total GPs per ZONES
-    gp_per_element = np.zeros(n_els, dtype=np.int64)
+    gp_per_element = np.zeros(n_els, dtype=np.int64)  # Force i64 for numba to work
     for i in range(n_els):
         elem_n_nodes = len(element_nodes[i])
         gp_per_element[i] = 11 if elem_n_nodes == 3 else 14
@@ -483,14 +483,15 @@ def pre_assembly(element_nodes, centers, areas, normals):
         GP_start_idx[j] = offset
         offset += gp_per_element[j]
 
-    R_map = np.zeros((n_els, total_gps), dtype=np.float64)
-    G_static_map = np.zeros((n_els, total_gps), dtype=np.float64)
-    H_static_map = np.zeros((n_els, total_gps), dtype=np.float64)
+    R_map = np.zeros((n_els, total_gps), dtype=np.float32)
+    G_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+    H_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
 
     # STEP 3: Compute distances, integration orders and basic green function static terms
     for j in prange(n_els):
         nodes = element_nodes[j]
         area = areas[j]
+        nj = normals[j]
         n_pts = gp_per_element[j]
         start = GP_start_idx[j]
 
@@ -522,12 +523,17 @@ def pre_assembly(element_nodes, centers, areas, normals):
             for p in range(n_pts):
                 idx = start + p
                 # 1. Calculate the vector from GP to Receiver Center
-                r_vec = recv_center - pts_coords[p]
+                rx = recv_center[0] - pts_coords[p, 0]
+                ry = recv_center[1] - pts_coords[p, 1]
+                rz = recv_center[2] - pts_coords[p, 2]
+                # r_vec = recv_center - pts_coords[p]
                 # 2. Distance math
-                r = np.linalg.norm(r_vec)
-                if r < 1e-18: # Safety for self-term
-                    r = 1e-18
-                r2 = r * r
+                r2 = rx*rx + ry*ry + rz*rz
+                # r = np.linalg.norm(r_vec)
+                # r2 = r * r
+                if r2 < 1e-18: # Safety for self-term
+                    r2 = 1e-18
+                r = np.sqrt(r2)
                 
                 R_map[i, idx] = r
                 # Fill Static Influence Matrices
@@ -535,7 +541,8 @@ def pre_assembly(element_nodes, centers, areas, normals):
                 g_base = pts_weights[p] * inv_4pi / r
                 G_static_map[i, idx] = g_base
                 # 4. Bake the H Static Map: H = G_static * (dot / r^2)
-                dot = np.dot(r_vec, normals[j])
+                # dot = np.dot(r_vec, normals[j])
+                dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
                 H_static_map[i, idx] = g_base * (dot / r2)
 
     # STEP 4: Calc the static [G] & [H] diagonal self terms
@@ -575,8 +582,8 @@ def pre_mics(mic_centers, bem_centers, bem_normals):
     """
     num_mics = len(mic_centers)
     num_surf = len(bem_centers)
-    pre_mics_G = np.zeros((num_mics, num_surf), dtype=np.float64)
-    pre_mics_H = np.zeros((num_mics, num_surf), dtype=np.float64)
+    pre_mics_G = np.zeros((num_mics, num_surf), dtype=np.float32)
+    pre_mics_H = np.zeros((num_mics, num_surf), dtype=np.float32)
     pre_mics_R = np.zeros((num_mics, num_surf), dtype=np.float32)
     inv_4pi = 1.0 / (4.0 * np.pi)
 
@@ -596,7 +603,7 @@ def pre_mics(mic_centers, bem_centers, bem_normals):
     return pre_mics_G, pre_mics_H, pre_mics_R, num_mics
 
 # NEW main_assembly to handle multi-zone BEM
-# @njit(parallel=False, boundscheck=True)  # <-- Change this temporarily!
+# @njit(parallel=False, boundscheck=True)  # <-- Uncomment / use this to DEBUG
 @njit(parallel=True, cache=True)
 def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, 
                   G_diag_static, H_diag_static, k, H_sign, max_el_length, order_length):
@@ -663,53 +670,51 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
     return G, H
 
 # @njit   # it crashes Numba if dictionaries present
-def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
-    """
-    Reconstructs the full pressure and velocity vectors for the surface.
-    p_sol: The unknown values returned by the solver.
-    bc_map: The dictionary of boundary conditions.
-    bem_ids: The sorted list of element IDs used in the matrix.
-    """
-    num_elements = len(sorted_bem_ids)
-    p_final = np.zeros(num_elements, dtype=np.complex128)
-    v_final = np.zeros(num_elements, dtype=np.complex128)
+# def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
+#     """
+#     Reconstructs the full pressure and velocity vectors for the surface.
+#     p_sol: The unknown values returned by the solver.
+#     bc_map: The dictionary of boundary conditions.
+#     bem_ids: The sorted list of element IDs used in the matrix.
+#     """
+#     num_elements = len(sorted_bem_ids)
+#     p_final = np.zeros(num_elements, dtype=np.complex128)
+#     v_final = np.zeros(num_elements, dtype=np.complex128)
 
-    for j, eid in enumerate(sorted_bem_ids):
-        bc = bc_map.get(eid, {})
+#     for j, eid in enumerate(sorted_bem_ids):
+#         bc = bc_map.get(eid, {})
         
-        if 'VELO' in bc:
-            # We knew Velocity, p_sol gave us Pressure
-            p_final[j] = p_sol[j]
-            v_final[j] = bc['VELO']
-            if 'IMPE' in bc:
-                # We solved for Pressure, Velocity is p/Z
-                z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-                v_final[j] += p_sol[j] / z_val
+#         if 'VELO' in bc:
+#             # We knew Velocity, p_sol gave us Pressure
+#             p_final[j] = p_sol[j]
+#             v_final[j] = bc['VELO']
+#             if 'IMPE' in bc:
+#                 # We solved for Pressure, Velocity is p/Z
+#                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+#                 v_final[j] += p_sol[j] / z_val
             
-        elif 'PRES' in bc:
-            # We knew Pressure, p_sol gave us Velocity
-            p_final[j] = bc['PRES']
-            v_final[j] = p_sol[j]
+#         elif 'PRES' in bc:
+#             # We knew Pressure, p_sol gave us Velocity
+#             p_final[j] = bc['PRES']
+#             v_final[j] = p_sol[j]
             
-        elif 'IMPE' in bc and 'VELO' not in bc:
-            # We solved for Pressure, Velocity is p/Z
-            p_final[j] = p_sol[j]
-            z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-            v_final[j] = p_sol[j] / z_val
+#         elif 'IMPE' in bc and 'VELO' not in bc:
+#             # We solved for Pressure, Velocity is p/Z
+#             p_final[j] = p_sol[j]
+#             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+#             v_final[j] = p_sol[j] / z_val
             
-        else:
-            # Rigid wall: v=0, p_sol gave us Pressure
-            p_final[j] = p_sol[j]
-            v_final[j] = 0.0 + 0.0j
+#         else:
+#             # Rigid wall: v=0, p_sol gave us Pressure
+#             p_final[j] = p_sol[j]
+#             v_final[j] = 0.0 + 0.0j
             
-    return p_final, v_final
+#     return p_final, v_final
 
 @njit(parallel=True, cache=True)
 def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_surf, v_surf, k, rho_omega, H_sign):
     """
-    Pass 2: Projects solved surface (BEM) results onto Microphone points.
-    mic_centers: mics nodal coords.
-    bem_centers: BEM elements CoG coords.
+    Projects solved Element (BEM) results onto Microphone nodes.
     """
     num_surf = len(bem_areas)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
