@@ -41,34 +41,25 @@ class PVExporter:
             shutil.rmtree(self.pv_dir)
         os.makedirs(self.pv_dir)
 
-    def add_frequency_step(self, freq, sparse_nodal_pressures):
+    def add_frequency_step(self, freq, nodal_pressures):
         """
-        sparse_nodal_pressures: The [max_node_id + 1] array from averaged_at_nodes
+        nodal_pressures: Already sorted via nodal_id_map
         """
         # 1. Create a copy of the geometry for this frequency
         snapshot = self.mesh.copy()
         num_mesh_pts = snapshot.n_points
 
-        # 2. DENSE MAPPING (The Critical Step)
-        # We extract ONLY the values for the nodes actually in the mesh,
-        # in the EXACT order of self.sorted_node_ids.
-        try:
-            ordered_pressures = sparse_nodal_pressures[self.sorted_node_ids]
-        except IndexError:
-            # Fallback if sorted_node_ids contains IDs higher than the array size
-            ordered_pressures = np.array([sparse_nodal_pressures[nid] for nid in self.sorted_node_ids])
-
-        # 3. Calculate SPL
-        p_mag = np.maximum(np.abs(ordered_pressures), 2e-30)
+        # 2. Calculate SPL
+        p_mag = np.maximum(np.abs(nodal_pressures), 2e-30)
         spl = 20 * np.log10(p_mag / self.P_REF)
 
-        # 4. Build the Pressure Vector (Real, Imag, 0.0)
+        # 3. Build the Pressure Vector (Real, Imag, 0.0)
         # Ensure we use float32 for ParaView compatibility/speed
         pressure_vec = np.zeros((num_mesh_pts, 3), dtype=np.float32)
-        pressure_vec[:, 0] = ordered_pressures.real.astype(np.float32)
-        pressure_vec[:, 1] = ordered_pressures.imag.astype(np.float32)
+        pressure_vec[:, 0] = nodal_pressures.real.astype(np.float32)
+        pressure_vec[:, 1] = nodal_pressures.imag.astype(np.float32)
         
-        # 5. Attach Data
+        # 4. Attach Data
         # PyVista will now see (N) points and (N) data rows. Perfect match.
         snapshot.point_data["Pressure"] = pressure_vec
         snapshot.point_data["SPL_dB"] = spl.astype(np.float32)
@@ -110,15 +101,3 @@ class PVExporter:
             f.write(xml_str)
             
         print(f" -- Export Complete: {pvd_path} --")
-
-    # def finalise(self):
-    #     """Writes the .pvd and the binary .vtu files in one hit."""
-    #     pvd_path = os.path.join(self.pv_dir, f"{self.model_name}_Results.pvd")
-        
-    #     # PVDWriter handles the XML creation and binary file dumping
-    #     with pv.PVDWriter(pvd_path) as writer:
-    #         for freq in sorted(self.block_collection.keys()):
-    #             writer.add_block(self.block_collection[freq], time=float(freq))
-    #         writer.write()
-            
-    #     print(f" --- Export Complete: {pvd_path} ---")

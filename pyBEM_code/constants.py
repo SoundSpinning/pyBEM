@@ -1,6 +1,3 @@
-# If True ==> writes debug info to model_name.log file
-DEBUG = False
-
 P_REF = 2e-11   # dB reference for MPa, mm models for air @20C
 
 # List of all supported Abaqus/PrePoMax keywords for pyBEM

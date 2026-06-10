@@ -116,11 +116,11 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     damping_f = static_data['damping']
     # ZONES method
     zones_mesh = static_data['zones_mesh']
-    
+    zone_offsets = static_data['zone_offsets']        # dict: zone_name -> {'start_idx', 'n_elements'}
+    # TIED pairs
     W_mapping = static_data['W_mapping']              # dict: seid -> {meid: weight}
     master_elements = static_data['master_elements']  # list of unique master eids
     slave_elements = static_data['slave_elements']    # list of unique slave eids
-    zone_offsets = static_data['zone_offsets']        # dict: zone_name -> {'start_idx', 'n_elements'}
 
     # PRE-processing if any amplitude curves present
     # A. Resolve Damping
@@ -130,7 +130,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     else:
         damping_f = damping_f['value']
 
-    # B. Resolve BCs (The "Clean & Scale" Pass)
+    # B. Resolve BCs
     resolved_bcs = {}
     for eid, info in bc_map.items():
         resolved_bcs[eid] = res = {}
@@ -163,7 +163,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     t_asm_0 = time.time()
 
     # ==================================================================
-    # DUAL-LAGRANGE RIGID MATRIX LAYOUT
+    # DUAL-LAGRANGE MATRIX LAYOUT
     # ==================================================================
     N_all = sum(info['n_elements'] for info in zone_offsets.values())
     N_master = len(master_elements)
@@ -193,7 +193,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                 master_to_slave_inverse[m_eid].append((s_eid, weight))
 
     # ==================================================================
-    # PHASE 1: LOOP PER ZONE - ASSEMBLE COLOCATION COEFFICIENTS
+    # PHASE 1: LOOP PER ZONE - ASSEMBLE COLLOCATION COEFFICIENTS
     # ==================================================================
     for zone_name, z_mesh in zones_mesh.items():
         z_bem = static_data['pre_bem_data'][zone_name]
@@ -225,7 +225,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
             v_col = eid_global_p_col[eid]  # Native column placeholder
             bc = resolved_bcs.get(eid, {})
             
-            # --- Scenario A: Tied Interface Master Element ---
+            # --- Scenario A: Tied Interface MASTER Element ---
             if eid in master_elements:
                 # Native column maps to unknown Normal Velocity (V_m), integrated against +i*rho*omega*G
                 A_global[start_row : start_row + n_elements, v_col] += G_local[:, local_j] * (1j * rho_omega)
@@ -234,7 +234,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                 l_col = master_lambda_col_mapping[eid]
                 A_global[start_row : start_row + n_elements, l_col] += H_local[:, local_j]
                 
-            # --- Scenario B: Tied Interface Slave Element ---
+            # --- Scenario B: Tied Interface SLAVE Element ---
             elif eid in slave_elements:
                 # Native column maps to unknown Normal Velocity (V_s), integrated against +i*rho*omega*G
                 A_global[start_row : start_row + n_elements, v_col] += G_local[:, local_j] * (1j * rho_omega)
@@ -281,7 +281,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     t_slv_0 = time.time()
 
     # ==================================================================
-    # PHASE 2: WEAVE TRAILING VOLUME VELOCITY CONTINUITY ON TIED ROWS
+    # PHASE 2: VOLUME VELOCITY CONTINUITY ON TIED PAIRS
     # ==================================================================
     for m_idx, m_eid in enumerate(master_elements):
         tie_row = N_all + m_idx
@@ -306,7 +306,9 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
             
         B_global[tie_row] = 0.0
 
-    # Solve the system matrix
+    # ==================================================================
+    # PHASE 3.1: SOLVE the BEM system MATRIX --> Ax = B
+    # ==================================================================
     global_solution = np.linalg.solve(A_global, B_global)
     
     p_surf = np.zeros(len(sorted_bem_ids), dtype=np.complex128)
@@ -314,7 +316,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     global_areas = np.zeros(len(sorted_bem_ids))
     
     # ==================================================================
-    # PHASE 3: DISTRIBUTE SOLVED SYSTEM RESULTS BACK TO SURFACES
+    # PHASE 3.2: DISTRIBUTE SOLVED SYSTEM RESULTS BACK TO BEM ELEMENTS
     # ==================================================================
     for zone_name, offset_info in zone_offsets.items():
         start_row = offset_info['start_idx']
@@ -366,7 +368,8 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     v_val = 0.0 + 0.0j
                     
             if eid in sorted_bem_ids:
-                global_idx = sorted_bem_ids.index(eid)
+                # global_idx = sorted_bem_ids.index(eid)
+                global_idx = eid_global_p_col[eid]
                 p_surf[global_idx] = p_val
                 v_surf[global_idx] = v_val
                 global_areas[global_idx] = z_areas[local_j]
@@ -377,13 +380,13 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     # ==================================================================
     # PHASE 4: POST-PROCESS MICS + AVERAGE AT NODES ALL RESULTS
     # ==================================================================
-    # --- MULTI-ZONE FIX: Initialize global containers for ALL microphones ---
     all_p_mics_list = []
-    global_mics_nodes = {}
+    ordered_mic_tracking = []  
     
     if 'pre_mics_data' in static_data and static_data['pre_mics_data']:
-        for zone_name, z_mesh in zones_mesh.items():
-            if zone_name in static_data['pre_mics_data']:
+        for zone_name in static_data['pre_mics_data'].keys():
+            if zone_name in zones_mesh:
+                z_mesh = zones_mesh[zone_name]
                 z_mic = static_data['pre_mics_data'][zone_name]
                 z_bem = static_data['pre_bem_data'][zone_name]
                 
@@ -396,46 +399,66 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     rho_omega_zone = rho_zone * omega
                     H_sign_zone = static_data['global_h_signs'][zone_name]
                     
-                    # --- Extract local zone surface vectors using global column mapping ---
+                    # --- Extract local zone BEM results ---
                     zone_el_ids = list(z_mesh['elements'].keys()) 
                     num_surf_local = len(zone_el_ids)
                     
                     p_surf_local = np.zeros(num_surf_local, dtype=np.complex128)
                     v_surf_local = np.zeros(num_surf_local, dtype=np.complex128)
-                    
-                    for local_idx, eid in enumerate(zone_el_ids):
-                        global_col = eid_global_p_col[eid]
-                        p_surf_local[local_idx] = p_surf[global_col]
-                        v_surf_local[local_idx] = v_surf[global_col]
 
-                    # Compute local pressures for this zone's microphones
+                    alloc = zone_offsets[zone_name]
+                    start_row = alloc['start_idx']
+                    n_elements = alloc['n_elements']
+                    p_surf_local = p_surf[start_row:start_row+n_elements]
+                    v_surf_local = v_surf[start_row:start_row+n_elements]
+                    
+                    # Compute zone MICS pressures
                     p_mics_zone = calculate_mics(
                         z_mic['pre_mics_G'], z_mic['pre_mics_H'], z_mic['pre_mics_R'], 
                         z_mic['num_mics'], z_bem['areas'], 
                         p_surf_local, v_surf_local, k_zone, rho_omega_zone, H_sign_zone
                     )
-                    
-                    # --- Accumulate values into global pools ---
-                    all_p_mics_list.append(p_mics_zone)
-                    # Ensure we pull the pristine, sequentially ordered dictionary we just built!
-                    if 'mics_nodes_dict' in z_mic and z_mic['mics_nodes_dict']:
-                        global_mics_nodes.update(z_mic['mics_nodes_dict'])
-                    elif z_mic.get('mics_nodes'): # Fallback just in case
-                        global_mics_nodes.update(z_mic['mics_nodes'])
 
-    # Concatenate all zone arrays into one master numpy array if microphones exist
+                    # # DEBUG
+                    # print("\n\n", zone_name, alloc)
+                    # print(f"\n{p_surf_local}")
+                    # print(f"\n{p_mics_zone}")
+                    # # DEBUG_end
+                    
+                    # Accumulate arrays
+                    all_p_mics_list.append(p_mics_zone)
+                    
+                    local_mics_dict = z_mic.get('mics_nodes_dict') if z_mic.get('mics_nodes_dict') else z_mic.get('mics_nodes', {})
+                    
+                    # Store both the zone name and node ID to ensure absolute row tracking integrity
+                    for nid in local_mics_dict.keys():
+                        ordered_mic_tracking.append((zone_name, nid))
+
     p_mics = np.concatenate(all_p_mics_list) if all_p_mics_list else None
-    mics_nodes = global_mics_nodes if global_mics_nodes else None
+    # # DEBUG
+    # print(f"\n{p_surf}")
+    # print(f"\n{p_mics}")
+    # # DEBUG_end
             
     t_slv_2 = time.time()
     t_avg_0 = time.time()
 
-    # --- Use the clean, ordered list of the consolidated microphone node IDs ---
-    ordered_mic_ids = list(mics_nodes.keys()) if mics_nodes is not None else None
+    # --- CRITICAL TRACKING ---
+    # Extract the raw, sequential node IDs from our row-by-row tracking list
+    ordered_mic_ids = [nid for (zone, nid) in ordered_mic_tracking] if ordered_mic_tracking else None
+
+    # # DEBUG
+    # print("\n=== DIAGNOSTIC 4: FREQUENCY WORKER CONCATENATION ===")
+    # print(f"Number of arrays inside all_p_mics_list: {len(all_p_mics_list)}")
+    # for idx, arr in enumerate(all_p_mics_list):
+    #     if arr is not None:
+    #         print(f"  -> Array index {idx} shape: {arr.shape} | Contains non-zeros: {np.any(arr != 0)}")
+    # print(f"Final ordered_mic_ids tracking list length: {len(ordered_mic_ids) if ordered_mic_ids else 0}\n")
+    # # DEBUG_end
     
     nodal_pressures = averaged_at_nodes(
         static_data['sorted_nodes'], static_data['sorted_bem_els'], p_surf, 
-        global_areas, ordered_mic_ids, p_mics
+        global_areas, eid_global_p_col, ordered_mic_ids, p_mics, static_data['nodal_id_map']
     )
 
     t_avg_1 = time.time()
@@ -454,7 +477,6 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
 @njit(parallel=True, cache=True)
 def pre_assembly(element_nodes, centers, areas, normals):
     """
-    It takes pre-allocated Shared Memory large arrays to avoid (RAM) duplication crashes.
     Pre-Computes G and H (static, k=0) matrices using the input mesh ZONES:
     - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
     - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
@@ -545,7 +567,7 @@ def pre_assembly(element_nodes, centers, areas, normals):
                 dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
                 H_static_map[i, idx] = g_base * (dot / r2)
 
-    # STEP 4: Calc the static [G] & [H] diagonal self terms
+    # STEP 4: Calc the static [G] & [H] diagonal self-terms
     G_diag_static = np.zeros(n_els, dtype=np.float64)
     H_diag_static = np.zeros(n_els, dtype=np.float64)
     for i in range(n_els):
@@ -574,13 +596,13 @@ def pre_assembly(element_nodes, centers, areas, normals):
     return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
 
 @njit(parallel=True, cache=True)
-def pre_mics(mic_centers, bem_centers, bem_normals):
+def pre_mics(mics_nodes, bem_centers, bem_normals):
     """
-    Pass 2: Projects solved surface (BEM) results onto Microphone points.
-    mic_centers: mics nodal coords.
+    Calculates influence mesh surface (BEM) properties onto Microphone nodes.
+    mics_nodes: mics nodal coords.
     bem_centers: BEM elements CoG coords.
     """
-    num_mics = len(mic_centers)
+    num_mics = len(mics_nodes)
     num_surf = len(bem_centers)
     pre_mics_G = np.zeros((num_mics, num_surf), dtype=np.float32)
     pre_mics_H = np.zeros((num_mics, num_surf), dtype=np.float32)
@@ -589,7 +611,7 @@ def pre_mics(mic_centers, bem_centers, bem_normals):
 
     for i in prange(num_mics):
         for j in range(num_surf):
-            r_vec = mic_centers[i] - bem_centers[j]
+            r_vec = mics_nodes[i] - bem_centers[j]
             r = np.linalg.norm(r_vec)
             pre_mics_R[i, j] = r
 
@@ -614,14 +636,13 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
     k: wave number (complex or float)
     Accounts for INTERIOR (H_sign=-1) or EXTERIOR (H_sign=1)
     order_length: pre-calculated MAX (approx.) edge size per BEM ZONE. 
-    Used for local size search for mid-order, high-order & cfentroid integration.
+    Used for local distance search for mid-order, high-order & centroid integration.
     """
     n_els = len(G_diag_static)    # number of BEM elements in ZONE
     G = np.zeros((n_els, n_els), dtype=np.complex128)
     H = np.zeros((n_els, n_els), dtype=np.complex128)
 
     # Thresholds for mid- or high-order GPs based on distance logic
-    # Local thresholds to avoid parallel race conditions
     limit_high = order_length * 3
     limit_mid = order_length * 5
 
@@ -669,48 +690,6 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
 
     return G, H
 
-# @njit   # it crashes Numba if dictionaries present
-# def derive_surface_vectors(p_sol, bc_map, sorted_bem_ids, rho_omega):
-#     """
-#     Reconstructs the full pressure and velocity vectors for the surface.
-#     p_sol: The unknown values returned by the solver.
-#     bc_map: The dictionary of boundary conditions.
-#     bem_ids: The sorted list of element IDs used in the matrix.
-#     """
-#     num_elements = len(sorted_bem_ids)
-#     p_final = np.zeros(num_elements, dtype=np.complex128)
-#     v_final = np.zeros(num_elements, dtype=np.complex128)
-
-#     for j, eid in enumerate(sorted_bem_ids):
-#         bc = bc_map.get(eid, {})
-        
-#         if 'VELO' in bc:
-#             # We knew Velocity, p_sol gave us Pressure
-#             p_final[j] = p_sol[j]
-#             v_final[j] = bc['VELO']
-#             if 'IMPE' in bc:
-#                 # We solved for Pressure, Velocity is p/Z
-#                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-#                 v_final[j] += p_sol[j] / z_val
-            
-#         elif 'PRES' in bc:
-#             # We knew Pressure, p_sol gave us Velocity
-#             p_final[j] = bc['PRES']
-#             v_final[j] = p_sol[j]
-            
-#         elif 'IMPE' in bc and 'VELO' not in bc:
-#             # We solved for Pressure, Velocity is p/Z
-#             p_final[j] = p_sol[j]
-#             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-#             v_final[j] = p_sol[j] / z_val
-            
-#         else:
-#             # Rigid wall: v=0, p_sol gave us Pressure
-#             p_final[j] = p_sol[j]
-#             v_final[j] = 0.0 + 0.0j
-            
-#     return p_final, v_final
-
 @njit(parallel=True, cache=True)
 def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_surf, v_surf, k, rho_omega, H_sign):
     """
@@ -735,60 +714,3 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_su
         p_mics[i] = sum_p
 
     return p_mics
-
-# @njit(parallel=True)   # it crashes Numba if dictionaries present
-# def solve_bem_system(G, H, bc_map, sorted_bem_ids, rho_omega, log=None):
-#     """
-#     Re-arranges the BEM system (H*p = G*v) based on Boundary Conditions.
-#     Solves Ax=B.
-#     Returns the complex pressure for every element.
-#     sorted_bem_ids: sorted list of element IDs to ensure index alignment
-#     """
-#     num_elements = len(sorted_bem_ids)
-#     A = np.zeros((num_elements, num_elements), dtype=np.complex128)
-#     B = np.zeros(num_elements, dtype=np.complex128)
-
-#     # We MUST use the same index 'j' that corresponds to the matrix columns (0, 1, 2...)
-#     # eid is the ACTUAL ID from the .inp (1, 101, 500...)
-#     for j, eid in enumerate(sorted_bem_ids):
-#         bc = bc_map.get(eid, {})
-
-#         # Case 1: Velocity is known (Vibrating Wall - Neumann BC)
-#         if 'VELO' in bc:
-#             # Velocity is known (v), Pressure (p) is unknown
-#             A[:, j] += H[:, j]
-#             B -= G[:, j] * bc['VELO'] * (1j * rho_omega)
-#             # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
-#             if 'IMPE' in bc:
-#                 # Admittance logic: v = p / Z. 
-#                 # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
-#                 # Safety check for division by zero
-#                 z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-#                 # Units must match: H is unitless, G is [L], so we need [1/L]
-#                 # (i * omega * rho) / Z  has units of [1/L]
-#                 A[:, j] += G[:, j] * (1j * rho_omega / z_val)
-        
-#         # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
-#         elif 'PRES' in bc:
-#             # Pressure is known (p), Velocity (v) is unknown
-#             A[:, j] -= G[:, j] * (1j * rho_omega)
-#             B -= H[:, j] * bc['PRES']
-        
-#         # Case 3: Impedance (Absorbent material)
-#         elif 'IMPE' in bc and 'VELO' not in bc:
-#             # Admittance logic: v = p / Z. 
-#             # Term: (H - G/Z)*p = 0 -> A_col = H - G/Z, B = 0
-#             # Safety check for division by zero
-#             z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
-#             # Units must match: H is unitless, G is [L], so we need [1/L]
-#             # (i * omega * rho) / Z  has units of [1/L]
-#             A[:, j] += H[:, j] + (G[:, j] * (1j * rho_omega / z_val))
-        
-#         # Case 4: Rigid Wall, v=0 (Default)
-#         else:
-#             A[:, j] += H[:, j]
-    
-#     # Solve the linear system Ax = B for the unknown surface values (usually Pressure)
-#     bem_solution = np.linalg.solve(A, B)
-    
-#     return (bem_solution)

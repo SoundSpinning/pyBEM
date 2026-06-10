@@ -12,14 +12,13 @@ from pmx_parser import PMXParser
 from solver_core import global_shm_cleanup, promote_to_shm, init_worker, frequency_worker, pre_assembly, pre_mics
 # from exporter import PVExporter
 from exporter_2 import PVExporter
-from utils import get_ram, prepare_geometry, get_sorted_mesh_data, extract_zone_geometries, validate_and_log_zones, resolve_tie_interfaces, compute_tie_projection_matrix, compute_global_offsets
-from constants import DEBUG
+from utils import get_ram, prepare_geometry, get_zone_data, validate_and_log_zones, resolve_tie_interfaces, compute_tie_projection_matrix, get_global_offsets
 
 # Paralel libraries
 import gc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# limit terminal prints when debugging
+# limit terminal prints size
 np.set_printoptions(threshold=100)  
 gc.disable()  # Disable automatic garbage collection
 
@@ -69,22 +68,41 @@ def start_pybem_app():
         damping = parser.damping if parser.damping else {'value': 0.0}
         amps = parser.amplitudes
 
-        # --- 5. REFACTORED MULTI-ZONE GEOMETRY EXTRACTION ---
+        # # DEBUG
+        # print("\n=== DIAGNOSTIC 1: PARSER RAW MICS ===")
+        # print(f"Total entries in parser.mics_elements: {len(parser.mics_elements)}")
+        # if parser.mics_elements:
+        #     sample_eids = list(parser.mics_elements.keys())[:5]
+        #     print(f"Sample MICS element IDs from parser: {sample_eids}")
+
+        # # Check if element_to_zone holds the microphone elements
+        # mic_eids_in_zone_map = [eid for eid in parser.mics_elements if eid in parser.element_to_zone]
+        # print(f"Number of MICS elements successfully registered in element_to_zone: {len(mic_eids_in_zone_map)}\n\n")
+        # # DEBUG_end
+
+        # --- 5. MULTI-ZONE GEOMETRY EXTRACTION ---
         # 5.1 Global Sort (Ensures index maps and arrays match input sequentially)
-        sorted_nodes, sorted_node_ids, sorted_bem_els, sorted_bem_ids = get_sorted_mesh_data(parser)
+        sorted_nodes = dict(sorted(parser.nodes.items()))
+        sorted_node_ids = list(sorted_nodes.keys())
+        sorted_bem_els = dict(sorted(parser.elements.items()))
+        sorted_bem_ids = list(sorted_bem_els.keys())
         n_bem_els = len(sorted_bem_els)
         
-        # 5.2 Extract separated geometries partitioned cleanly by material zones
-        zones_mesh = extract_zone_geometries(parser, sorted_nodes)
+        # 5.2 Extract separated BEM, MICS data by material zones
+        zones_mesh = get_zone_data(parser, sorted_nodes)
+
+        # # DEBUG
+        # # print(parser.zone_to_elsets)
+        # print(zones_mesh)
+        # # DEBUG_end
         
         # 5.3 Count entire microphones across all zones for the memory allocator governor.
         # If there are no mics anywhere, this safely sums up to 0. 
-        # The RAM estimator equation will seamlessly calculate the exact solver footprint 
-        # without counting phantom microphone arrays.
         n_mics_nodes = sum(zone['n_mics'] for zone in zones_mesh.values())
         parser.n_mics_nodes = n_mics_nodes 
 
-        # --- 6. INITIALIZE STRIPPED LOG FILTERS ---
+        # --- 6. INITIALISE LOG & ZONES DATA ---
+        # 6.1 Log file & prints setup
         log_f = f"{parser.model_name}.log"
         model_summary = parser.print_model_summary()
         print(model_summary)
@@ -92,13 +110,12 @@ def start_pybem_app():
             log.write(__solver__)
             log.write(model_summary)
             log.flush()
-        # log_top = f"""{__solver__}{str(parser.header_comments)}{str(parser.top_log)}"""
         log_top = ''
 
-        # 6.2 Execute Strict Water-Tight Checks & Log Summaries Per Zone
+        # 6.2 Execute Strict Water-Tight Checks & Log Summaries Per BEM Zone
         # This replaces the old single-domain geometry checks and establishes:
         #   - global_h_signs: Dict containing individual zone orientations (Interior -1.0 vs Exterior 1.0)
-        #   - global_order_lengths: Dict tracking element scales for Numba numerical integration bounds
+        #   - global_order_lengths: Dict tracking element lengths for Numba numerical integration bounds
         log_info, global_h_signs, global_order_lengths = validate_and_log_zones(
             zones_mesh, sorted_nodes, parser, log_f, log_top
         )
@@ -106,6 +123,9 @@ def start_pybem_app():
         # --- 7. SETUP GLOBAL EXPORTER PACKAGE (ParaView) ---
         # 7.1 Map nodal identifiers to a clean 0-indexed flat VTK table array
         nodal_id_map = {inp_id: i for i, inp_id in enumerate(sorted_node_ids)}
+        # # DEBUG
+        # print(nodal_id_map)
+        # # DEBUG_end
         
         # 7.2 Accumulate all localized microphone arrays across zones into a unified export dictionary
         sorted_mics_els = {}
@@ -122,7 +142,8 @@ def start_pybem_app():
             for conn in sorted_mics_els.values():
                 for node_id in conn:
                     group_ids[node_id] = 2
-                    
+        
+        # 7.4 Setup EXPORTER for PV results
         exporter = PVExporter(
             parser.model_name, sorted_nodes, sorted_node_ids, 
             nodal_id_map, sorted_all_els, sorted_all_el_ids, group_ids
@@ -135,9 +156,6 @@ def start_pybem_app():
         with open(log_f, "a") as log:
             log.write(log_info + '\n')
             log.flush()
-        
-        if DEBUG:
-            print(f"\n DEBUG: see '{parser.model_name}.log' for input BC CHECKs (ELEMENTAL & NODAL) after the solve.")
         
         # ==================================================================
         # --- 9. RESOLVE MULTI-ZONE TIE COUPLINGS ---
@@ -152,7 +170,10 @@ def start_pybem_app():
         has_global_ties = bool(getattr(parser, 'ties', None))
         
         if has_global_ties:
-            log_tie_info += f"    Found a total of ( {len(parser.ties)} ) TIED pair constraints as follows:\n\n"
+            log_tie_info += f"""    Found a total of ( {len(parser.ties)} ) TIED pair constraints.
+    [ i ] It is recommended that the slave side has a finer mesh vs the master one.
+          If the number of 'mapped pairs' found is less than number of slave elements, 
+          you may need to increase the 'Position tolerance' value in the *Tie command.\n\n"""
             # 1. First run the basic search to check for isolation/errors and pull basic tie data
             # Locate matching node identities along touching zone boundaries
             tie_registry = resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3)
@@ -180,17 +201,17 @@ def start_pybem_app():
             if not tie_registry:
                 # Fatal Error: The parser had *Tie definitions, but completely failed to pair any nodes
                 log_tie_info += "\n" + "!"*60 + "\n"
-                log_tie_info += " FATAL ERROR: MODEL TOPOLOGY ISOLATION DETECTED\n"
+                log_tie_info += " FATAL ERROR: MODEL TIE PAIR PROBLEM(s) DETECTED\n"
                 log_tie_info += "!"*60 + "\n"
                 log_tie_info += " [!] CRITICAL: *Tie definitions exist, but 0 node pairs were matched.\n"
                 log_tie_info += "     REASON: The acoustic zones are physically disconnected.\n"
                 log_tie_info += "     SOLUTION: Increase the 'POSITION TOLERANCE' on your *Tie card in PrePoMax,\n"
-                log_tie_info += "               or check for mesh misalignment along your contact surfaces.\n"
+                log_tie_info += "               or check for mesh misalignments on TIED pair surfaces.\n"
                 log_tie_info += "!"*60 + "\n"
                 
                 with open(log_f, "a") as log:
                     log.write(log_tie_info)
-                raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: 0 tie connections matched. Zones are isolated. See '{log_f}'")
+                raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: 0 tie connections matched. Zones are not connected. See '{log_f}'")
         else:
             tie_registry = {}
             W_mapping = {}
@@ -208,7 +229,11 @@ def start_pybem_app():
         # --- 10. MULTI-ZONE MATRIX ALLOCATION & SYSTEM OFFSETS ---
         # ==================================================================
         # Compute the exact memory matrix footprint for the solver
-        zone_offsets, total_matrix_size = compute_global_offsets(zones_mesh, tie_registry)
+        zone_offsets, total_matrix_size = get_global_offsets(zones_mesh, tie_registry)
+        
+        # # DEBUG
+        # print(zone_offsets)
+        # # DEBUG_end
         
         # --- Start Timers & UX Metric Initializations ---
         all_t_avr = 0
@@ -265,7 +290,7 @@ def start_pybem_app():
             # 11.1 Extract clean, isolated geometry data local to this zone
             z_nodes, z_centers, z_areas, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
             
-            # 11.2 Run our pristine, isolated pre_assembly function
+            # 11.2 Run pre_assembly function per BEM Zone
             z_gp, z_gp_start, z_R, z_G_stat, z_H_stat, z_g_diag, z_h_diag = pre_assembly(
                 z_nodes, z_centers, z_areas, z_normals
             )
@@ -286,19 +311,11 @@ def start_pybem_app():
             t_pre_1 = time.time()
             t_pre_assy += t_pre_1 - t_pre_0
     
-            # 11.3 Process Optional Microphones within this same zone loop
+            # 11.3 Process Optional Microphones within this zone
             if z_mesh['n_mics'] > 0:
                 print(f"     Pre-calculating microphone distances for Zone: [ {zone_name} ]")
-                pm_G, pm_H, pm_R, n_mics = pre_mics(z_mesh['mics_centers'], z_centers, z_normals)
-
-                # --- Safely build the dict from unique PrePoMax IDs ---
-                mics_nodes_dict = {}
-                if z_mesh['mics_elements']:
-                    for conn in z_mesh['mics_elements'].values():
-                        for nid in conn:
-                            # Pull the pristine coordinate straight from the master parser.nodes
-                            if nid in parser.nodes:
-                                mics_nodes_dict[nid] = parser.nodes[nid]
+                pm_G, pm_H, pm_R, n_mics = pre_mics(z_mesh['mics_nodes'], z_centers, z_normals)
+                mics_nodes_dict = z_mesh.get('mics_nodes_dict', {})
                 
                 pre_mics_data[zone_name] = {
                     'pre_mics_G': pm_G,
@@ -321,7 +338,7 @@ def start_pybem_app():
             global_c[zone_name] = parser.materials[zone_name]['c']
             global_rho[zone_name] = parser.materials[zone_name]['density']
 
-        # Pack up all static collections cleanly for the multiprocessing shared container
+        # Pack up all static data cleanly for the shared container in solve
         static_data = {
             # Map the per-zone c & rho here
             'global_c': global_c, 
@@ -333,6 +350,7 @@ def start_pybem_app():
             'pre_bem_data': pre_bem_data,
             'pre_mics_data': pre_mics_data,
             'sorted_nodes': sorted_nodes,
+            'nodal_id_map': nodal_id_map,
             'sorted_bem_els': sorted_bem_els,
             'sorted_bem_ids': sorted_bem_ids,
             'zones_mesh': zones_mesh,
@@ -343,6 +361,19 @@ def start_pybem_app():
             'master_elements': master_elements, 
             'slave_elements': slave_elements
         }
+
+        # # DEBUG
+        # # print(static_data['pre_bem_data'])
+        # # print(static_data['pre_mics_data'])
+        # print(static_data['zones_mesh'])
+        # # print(static_data['pre_mics_data'].keys())
+        # # print("\n=== DIAGNOSTIC 3: STATIC PACKING FOR WORKERS ===")
+        # # for z_name, z_data in pre_mics_data.items():
+        # #     print(f"Zone: [ {z_name} ] in pre_mics_data:")
+        # #     print(f"  -> num_mics scalar: {z_data.get('num_mics')}")
+        # #     if 'pre_mics_G' in z_data and z_data['pre_mics_G'] is not None:
+        # #         print(f"  -> pre_mics_G matrix shape: {z_data['pre_mics_G'].shape}\n")
+        # # DEBUG_end
         
         # --- Dynamic Resource Governor Allocation ---
         # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
@@ -361,9 +392,7 @@ def start_pybem_app():
             # based on loads of testing to date on a single PC.
             num_workers = 1
 
-            # OLD code for auto-parallel workers experiments
-            # Multi-zone scales dense matrices. We leverage your tested single worker baseline 
-            # while leaving open parallel scaling options if memory limits allow.
+            # OLD code for auto-parallel workers (Freqs) experiments.
             # num_workers = max(1, min(n_CPUs - 1, n_potential_workers)) if n_potential_workers > 1 else 1
         
         # Determine Numba threads per worker based on Physical Cores
@@ -398,7 +427,6 @@ def start_pybem_app():
         rslt_f = 'In Memory'  # For consistency with the log table string layout
         print(f"{'=' * 80}")
         pbar = tqdm(total=len(parser.frequencies), desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e")
-        log_DEBUG = ""
         
         try:
             with ProcessPoolExecutor(
@@ -431,14 +459,13 @@ def start_pybem_app():
                     all_t_avr += meta['t_avrg_nodes']
                     solve_RAM = meta['solve_RAM']
                     
-                    # 13.2 CRITICAL: Pass results to ParaView exporter in RAM
-                    # This guarantees multi-zone pressures populate the VTK cells flawlessly!
+                    # 13.2 Pass results to ParaView exporter in RAM
                     exporter.add_frequency_step(f_done, nodal_pressures)
                     
                     # 13.3 Update UI progress bars
                     pbar.update(1)
                     pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
-                    solve_RAM_2 = get_ram()  # Monitor local parent RAM step changes
+                    # solve_RAM_2 = get_ram()  # Monitor local parent RAM step changes
                     
                     # 13.4 Write to log using your exact scaling layout format
                     log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
@@ -448,7 +475,7 @@ def start_pybem_app():
                         log.flush()  # Forces real-time tail tracking updates on disk
                         
         finally:
-            # Safely releases shared memory allocations regardless of a success or sudden crash
+            # Safely releases shared memory allocations regardless of success or sudden crash
             global_shm_cleanup()
         
         pbar.close()  # Close terminal progress visualization cleanly
@@ -507,7 +534,7 @@ def start_pybem_app():
 if __name__ == "__main__":
     from utils import get_cpus, set_hardware_limits
     # Get number of physical CPUs to pass onto Numpy libraries for the solve
-    # This is required before any import numpy
+    # This is required before any `import numpy`
     n_CPUs, n_threads, RAM_gb = get_cpus()
     used_CPUs = n_CPUs
     # This makes sure at the start that all solve libraries are set to a CPU max.
