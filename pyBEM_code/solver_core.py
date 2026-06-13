@@ -172,15 +172,9 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     A_global = np.zeros((total_matrix_size, total_matrix_size), dtype=np.complex128)
     B_global = np.zeros((total_matrix_size,), dtype=np.complex128)
 
-    eid_global_p_col = {}
-    eid_area_map = {}
-    
-    for zone_name, z_mesh in zones_mesh.items():
-        alloc = zone_offsets[zone_name]
-        z_areas = static_data['pre_bem_data'][zone_name]['areas']
-        for local_j, eid in enumerate(z_mesh['elements'].keys()):
-            eid_global_p_col[eid] = alloc['start_idx'] + local_j
-            eid_area_map[eid] = z_areas[local_j]
+    # REUSE THE PRE-CALCULATED GLOBAL MAPS DIRECTLY
+    eid_global_p_col = static_data['global_eid_to_col']
+    eid_area_map = static_data['global_bem_areas']
 
     # Trailing columns (N_all ... End) house the Master Interface Pressure Multipliers (lambda)
     master_lambda_col_mapping = {m_eid: N_all + idx for idx, m_eid in enumerate(master_elements)}
@@ -381,6 +375,9 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     # PHASE 4: POST-PROCESS MICS + AVERAGE AT NODES ALL RESULTS
     # ==================================================================
     all_p_mics_list = []
+    all_vx_mics_list = []
+    all_vy_mics_list = []
+    all_vz_mics_list = []
     ordered_mic_tracking = []  
     
     if 'pre_mics_data' in static_data and static_data['pre_mics_data']:
@@ -400,33 +397,25 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     H_sign_zone = static_data['global_h_signs'][zone_name]
                     
                     # --- Extract local zone BEM results ---
-                    zone_el_ids = list(z_mesh['elements'].keys()) 
-                    num_surf_local = len(zone_el_ids)
-                    
-                    p_surf_local = np.zeros(num_surf_local, dtype=np.complex128)
-                    v_surf_local = np.zeros(num_surf_local, dtype=np.complex128)
-
                     alloc = zone_offsets[zone_name]
                     start_row = alloc['start_idx']
                     n_elements = alloc['n_elements']
                     p_surf_local = p_surf[start_row:start_row+n_elements]
                     v_surf_local = v_surf[start_row:start_row+n_elements]
                     
-                    # Compute zone MICS pressures
-                    p_mics_zone = calculate_mics(
-                        z_mic['pre_mics_G'], z_mic['pre_mics_H'], z_mic['pre_mics_R'], 
-                        z_mic['num_mics'], z_bem['areas'], 
+                    # Compute zone MICS results
+                    p_mics_zone, v_mics_x_zone, v_mics_y_zone, v_mics_z_zone = calculate_mics(
+                        z_mic['pre_mics_G'], z_mic['pre_mics_H'], z_mic['pre_mics_R'],
+                        z_mic['pre_mics_dx'], z_mic['pre_mics_dy'], z_mic['pre_mics_dz'],
+                        z_mic['num_mics'], z_bem['areas'], z_bem['normals'],
                         p_surf_local, v_surf_local, k_zone, rho_omega_zone, H_sign_zone
                     )
-
-                    # # DEBUG
-                    # print("\n\n", zone_name, alloc)
-                    # print(f"\n{p_surf_local}")
-                    # print(f"\n{p_mics_zone}")
-                    # # DEBUG_end
                     
                     # Accumulate arrays
                     all_p_mics_list.append(p_mics_zone)
+                    all_vx_mics_list.append(v_mics_x_zone)
+                    all_vy_mics_list.append(v_mics_y_zone)
+                    all_vz_mics_list.append(v_mics_z_zone)
                     
                     local_mics_dict = z_mic.get('mics_nodes_dict') if z_mic.get('mics_nodes_dict') else z_mic.get('mics_nodes', {})
                     
@@ -435,26 +424,14 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                         ordered_mic_tracking.append((zone_name, nid))
 
     p_mics = np.concatenate(all_p_mics_list) if all_p_mics_list else None
-    # # DEBUG
-    # print(f"\n{p_surf}")
-    # print(f"\n{p_mics}")
-    # # DEBUG_end
-            
-    t_slv_2 = time.time()
-    t_avg_0 = time.time()
-
-    # --- CRITICAL TRACKING ---
-    # Extract the raw, sequential node IDs from our row-by-row tracking list
+    v_mics_x = np.concatenate(all_vx_mics_list) if all_vx_mics_list else None
+    v_mics_y = np.concatenate(all_vy_mics_list) if all_vy_mics_list else None
+    v_mics_z = np.concatenate(all_vz_mics_list) if all_vz_mics_list else None
+    # Extract the raw, sequential node IDs from the tracking list
     ordered_mic_ids = [nid for (zone, nid) in ordered_mic_tracking] if ordered_mic_tracking else None
 
-    # # DEBUG
-    # print("\n=== DIAGNOSTIC 4: FREQUENCY WORKER CONCATENATION ===")
-    # print(f"Number of arrays inside all_p_mics_list: {len(all_p_mics_list)}")
-    # for idx, arr in enumerate(all_p_mics_list):
-    #     if arr is not None:
-    #         print(f"  -> Array index {idx} shape: {arr.shape} | Contains non-zeros: {np.any(arr != 0)}")
-    # print(f"Final ordered_mic_ids tracking list length: {len(ordered_mic_ids) if ordered_mic_ids else 0}\n")
-    # # DEBUG_end
+    t_slv_2 = time.time()
+    t_avg_0 = time.time()
     
     nodal_pressures = averaged_at_nodes(
         static_data['sorted_nodes'], static_data['sorted_bem_els'], p_surf, 
@@ -468,7 +445,14 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         't_solve_bem': t_slv_1 - t_slv_0,
         't_solve_mics': t_slv_2 - t_slv_1,
         't_avrg_nodes': t_avg_1 - t_avg_0,
-        'solve_RAM': solve_RAM
+        'solve_RAM': solve_RAM,
+        # --- PACKAGE RAW ARRAYS DIRECTLY INTO METADATA FOR THE POWER CALCULATOR ---
+        'p_surf': p_surf,
+        'v_surf': v_surf,
+        'p_mics': p_mics,
+        'v_mics_x': v_mics_x,
+        'v_mics_y': v_mics_y,
+        'v_mics_z': v_mics_z
     }
     
     return f, nodal_pressures, metadata
@@ -607,22 +591,36 @@ def pre_mics(mics_nodes, bem_centers, bem_normals):
     pre_mics_G = np.zeros((num_mics, num_surf), dtype=np.float32)
     pre_mics_H = np.zeros((num_mics, num_surf), dtype=np.float32)
     pre_mics_R = np.zeros((num_mics, num_surf), dtype=np.float32)
+    # 3D velocity vectors
+    pre_mics_dx = np.zeros((num_mics, num_surf), dtype=np.float32)
+    pre_mics_dy = np.zeros((num_mics, num_surf), dtype=np.float32)
+    pre_mics_dz = np.zeros((num_mics, num_surf), dtype=np.float32)
+
     inv_4pi = 1.0 / (4.0 * np.pi)
 
     for i in prange(num_mics):
         for j in range(num_surf):
             r_vec = mics_nodes[i] - bem_centers[j]
             r = np.linalg.norm(r_vec)
-            pre_mics_R[i, j] = r
+            # Unit directional vectors components
+            dx = r_vec[0] / r
+            dy = r_vec[1] / r
+            dz = r_vec[2] / r
+            
+            pre_mics_dx[i, j] = dx
+            pre_mics_dy[i, j] = dy
+            pre_mics_dz[i, j] = dz
 
+            pre_mics_R[i, j] = r
             # Green's Function (G) 1/r
             pre_mics_G[i, j] = inv_4pi / r
 
             # Dot product of (r_vec) and the surface normal / r
-            r_dot_n = np.dot(r_vec, bem_normals[j]) / r
+            # r_dot_n = np.dot(r_vec, bem_normals[j]) / r
+            r_dot_n = (dx * bem_normals[j, 0] + dy * bem_normals[j, 1] + dz * bem_normals[j, 2])
             pre_mics_H[i, j] = r_dot_n
 
-    return pre_mics_G, pre_mics_H, pre_mics_R, num_mics
+    return pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy, pre_mics_dz, num_mics
 
 # NEW main_assembly to handle multi-zone BEM
 # @njit(parallel=False, boundscheck=True)  # <-- Uncomment / use this to DEBUG
@@ -690,27 +688,84 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
 
     return G, H
 
+# NEW calculate_mics to handle multi-zone BEM & total power calcs
 @njit(parallel=True, cache=True)
-def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, num_mics, bem_areas, p_surf, v_surf, k, rho_omega, H_sign):
+def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy, pre_mics_dz, 
+                   num_mics, bem_areas, bem_normals, p_surf, v_surf, k, rho_omega, H_sign):
     """
     Projects solved Element (BEM) results onto Microphone nodes.
+    Kirchhoff-Helmholtz boundary integral.
     """
     num_surf = len(bem_areas)
     p_mics = np.zeros(num_mics, dtype=np.complex128)
-    v_surf = v_surf * (1j * rho_omega)
+    
+    # Component arrays for nodal velocity vectors
+    v_mics_x = np.zeros(num_mics, dtype=np.complex128)
+    v_mics_y = np.zeros(num_mics, dtype=np.complex128)
+    v_mics_z = np.zeros(num_mics, dtype=np.complex128)
+    
+    # Scaling factor for the boundary condition term
+    v_surf_scaled = v_surf * (1j * rho_omega)
+    
+    # Pre-compute wave number squares and coefficients for efficiency
+    k2 = k * k
+    inv_rho_omega = -1.0 / (1j * rho_omega)
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
+        sum_grad_px = 0.0 + 0.0j
+        sum_grad_py = 0.0 + 0.0j
+        sum_grad_pz = 0.0 + 0.0j
+        
         for j in range(num_surf):
-            # Green's Function (G)
-            g_val = np.exp(1j * k * pre_mics_R[i, j]) * pre_mics_G[i, j]
-
-            # Derivative of Green's Function (H)
-            h_val = H_sign * g_val * (1j * k - 1.0 / pre_mics_R[i, j]) * pre_mics_H[i, j]
+            r = pre_mics_R[i, j]
+            inv_r = 1.0 / r
+            inv_r2 = inv_r * inv_r
             
-            # p_mic = G*v + H*p (integrated over area)
-            # TODO: check the sign for interior vs exterior when the time comes.
-            sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
-        p_mics[i] = sum_p
+            dx = pre_mics_dx[i, j]
+            dy = pre_mics_dy[i, j]
+            dz = pre_mics_dz[i, j]
+            
+            r_dot_n = pre_mics_H[i, j]
+            nx = bem_normals[j, 0]
+            ny = bem_normals[j, 1]
+            nz = bem_normals[j, 2]
 
-    return p_mics
+            # Base Green's Function (G) value
+            g_val = np.exp(1j * k * r) * pre_mics_G[i, j]
+
+            # Common spatial terms
+            jk_minus_inv_r = 1j * k - inv_r
+            
+            # Pressure Kernel: Derivative of Green's Function (H)
+            h_val = H_sign * g_val * jk_minus_inv_r * r_dot_n
+            
+            # Integrate Pressure
+            sum_p += (g_val * v_surf_scaled[j] + h_val * p_surf[j]) * bem_areas[j]
+            
+            # --- Velocity Kernel Calculations ---
+            # Monopole analytical gradient components
+            dg_dx = g_val * jk_minus_inv_r * dx
+            dg_dy = g_val * jk_minus_inv_r * dy
+            dg_dz = g_val * jk_minus_inv_r * dz
+            
+            # Dipole analytical gradient components (Quadrupole terms)
+            quad_term = (-k2 - 3.0 * 1j * k * inv_r + 3.0 * inv_r2) * r_dot_n
+            
+            dh_dx = H_sign * g_val * (quad_term * dx + jk_minus_inv_r * nx * inv_r)
+            dh_dy = H_sign * g_val * (quad_term * dy + jk_minus_inv_r * ny * inv_r)
+            dh_dz = H_sign * g_val * (quad_term * dz + jk_minus_inv_r * nz * inv_r)
+            
+            # Integrate Pressure Gradient components over the element area
+            sum_grad_px += (dg_dx * v_surf_scaled[j] + dh_dx * p_surf[j]) * bem_areas[j]
+            sum_grad_py += (dg_dy * v_surf_scaled[j] + dh_dy * p_surf[j]) * bem_areas[j]
+            sum_grad_pz += (dg_dz * v_surf_scaled[j] + dh_dz * p_surf[j]) * bem_areas[j]
+            
+        p_mics[i] = sum_p
+        
+        # Apply Euler's relationship to convert pressure gradient to particle velocity
+        v_mics_x[i] = sum_grad_px * inv_rho_omega
+        v_mics_y[i] = sum_grad_py * inv_rho_omega
+        v_mics_z[i] = sum_grad_pz * inv_rho_omega
+
+    return p_mics, v_mics_x, v_mics_y, v_mics_z

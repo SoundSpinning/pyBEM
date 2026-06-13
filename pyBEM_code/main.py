@@ -150,7 +150,7 @@ def start_pybem_app():
         )
 
         # --- 8. RESOLVE BOUNDARY CONDITIONS MAPPING ---
-        bc_map, log_bc_info = parser.get_bcs()
+        bc_map, log_bc_info, surface_to_elements = parser.get_bcs()
         log_info += '\n' + log_bc_info
         print(f"{log_info}")
         with open(log_f, "a") as log:
@@ -282,12 +282,22 @@ def start_pybem_app():
         t_pre_mics = 0
         pre_bem_data = {}
         pre_mics_data = {}
+        # --- INITIALIZE UNIFIED GLOBAL TRACKING STRUCTURES ---
+        global_eid_to_col = {}
+        global_bem_areas = {}
+        global_bem_normals = {}
+        
+        global_nid_to_mic_col = {}
+        global_mics_areas = {}
+        global_mics_normals = {}
+        global_mics_elements_conn = {}
+        mic_node_counter = 0
     
         for zone_name, z_mesh in zones_mesh.items():
             t_pre_0 = time.time()
             print(f"\n---> Pre-assembling Geometric Static Kernels for Zone: [ {zone_name} ]")
             
-            # 11.1 Extract clean, isolated geometry data local to this zone
+            # 11.1 Extract BEM geometry data local to this zone
             z_nodes, z_centers, z_areas, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
             
             # 11.2 Run pre_assembly function per BEM Zone
@@ -308,24 +318,53 @@ def start_pybem_app():
                 'normals': z_normals,
                 'areas': z_areas
             }
+
+            # --- POPULATE GLOBAL BEM MAPS ---
+            alloc = zone_offsets[zone_name]
+            for local_idx, eid in enumerate(z_mesh['elements'].keys()):
+                g_idx = alloc['start_idx'] + local_idx
+                global_eid_to_col[eid] = g_idx
+                global_bem_areas[eid] = z_areas[local_idx]
+                global_bem_normals[eid] = z_normals[local_idx]
+            
             t_pre_1 = time.time()
             t_pre_assy += t_pre_1 - t_pre_0
     
             # 11.3 Process Optional Microphones within this zone
             if z_mesh['n_mics'] > 0:
                 print(f"     Pre-calculating microphone distances for Zone: [ {zone_name} ]")
-                pm_G, pm_H, pm_R, n_mics = pre_mics(z_mesh['mics_nodes'], z_centers, z_normals)
-                mics_nodes_dict = z_mesh.get('mics_nodes_dict', {})
+                z_mics_nodes, z_mics_centers, z_mics_areas, z_mics_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['mics_elements'])
+
+                pm_G, pm_H, pm_R, pre_mics_dx, pre_mics_dy, pre_mics_dz, n_mics = pre_mics(z_mesh['mics_nodes'], z_centers, z_normals)
+                mics_nodes_dict = z_mesh.get('mics_nodes_dict', {}) if z_mesh.get('mics_nodes_dict') else z_mesh.get('mics_nodes', {})
                 
                 pre_mics_data[zone_name] = {
                     'pre_mics_G': pm_G,
                     'pre_mics_H': pm_H,
                     'pre_mics_R': pm_R,
+                    'pre_mics_dx': pre_mics_dx,
+                    'pre_mics_dy': pre_mics_dy,
+                    'pre_mics_dz': pre_mics_dz,
                     'num_mics': n_mics,
-                    'mics_nodes': mics_nodes_dict
+                    'mics_nodes': mics_nodes_dict,
+                    'mics_elements': z_mesh['mics_elements']
                 }
+
+                # --- POPULATE GLOBAL MICROPHONE NODAL & ELEMENTAL MAPS ---
+                for nid in mics_nodes_dict.keys():
+                    global_nid_to_mic_col[nid] = mic_node_counter
+                    mic_node_counter += 1
+                    
+                for local_idx, meid in enumerate(z_mesh['mics_elements'].keys()):
+                    global_mics_areas[meid] = z_mics_areas[local_idx]
+                    global_mics_normals[meid] = z_mics_normals[local_idx]
+                    global_mics_elements_conn[meid] = z_mesh['mics_elements'][meid]
+            
             t_pre_2 = time.time()
             t_pre_mics += t_pre_2 - t_pre_1
+        # Capture exact structural shapes for array initialization
+        n_bem_els = len(sorted_bem_ids)
+        n_mics_nodes = mic_node_counter
         t_pre = time.time() - t_pre_start
         
         # ==================================================================
@@ -359,7 +398,17 @@ def start_pybem_app():
             'tie_registry': tie_registry,
             'W_mapping': W_mapping,  
             'master_elements': master_elements, 
-            'slave_elements': slave_elements
+            'slave_elements': slave_elements,
+            # --- INJECT THE FLAT GLOBAL MAPS AND SIZES ---
+            'global_eid_to_col': global_eid_to_col,
+            'global_nid_to_mic_col': global_nid_to_mic_col,
+            'global_bem_areas': global_bem_areas,
+            'global_bem_normals': global_bem_normals,
+            'global_mics_areas': global_mics_areas,
+            'global_mics_normals': global_mics_normals,
+            'global_mics_elements_conn': global_mics_elements_conn,
+            'n_bem_els': n_bem_els,
+            'n_mics_nodes': n_mics_nodes
         }
 
         # # DEBUG
@@ -422,11 +471,26 @@ def start_pybem_app():
             log.flush()
 
         # ==================================================================
+        # --- 13. PRE-ALLOCATE GLOBAL SOLVER RESULTS FOR SOUND POWER ---
+        # ==================================================================
+        # Create an ordered frequency-to-index dictionary map to handle out-of-order pool resolution
+        freq_to_idx_map = {freq: idx for idx, freq in enumerate(parser.frequencies)}
+        
+        # Allocate master global matrices for raw frequency-domain fields
+        global_p_surf = np.zeros((num_freqs, n_bem_els), dtype=np.complex128)
+        global_v_surf = np.zeros((num_freqs, n_bem_els), dtype=np.complex128)
+        
+        global_p_mics = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
+        global_v_mics_x = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
+        global_v_mics_y = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
+        global_v_mics_z = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
+        
+        # ==================================================================
         # --- 13. THE PARALLEL SWEEP POOL INTERFACE ---
         # ==================================================================
-        rslt_f = 'In Memory'  # For consistency with the log table string layout
+        rslt_f = 'In Memory'  
         print(f"{'=' * 80}")
-        pbar = tqdm(total=len(parser.frequencies), desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e")
+        pbar = tqdm(total=num_freqs, desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e")
         
         try:
             with ProcessPoolExecutor(
@@ -444,6 +508,19 @@ def start_pybem_app():
                 for future in as_completed(futures):
                     # Unpack the frequency step results returned by the worker
                     f_done, nodal_pressures, meta = future.result()
+                    
+                    # Get the correct sorted row sequence index for this frequency
+                    f_matrix_idx = freq_to_idx_map[f_done]
+                    
+                    # --- STORE THE UN-AVERAGED FIELDS DIRECTLY INTO GLOBAL MATRICES ---
+                    global_p_surf[f_matrix_idx, :] = meta['p_surf']
+                    global_v_surf[f_matrix_idx, :] = meta['v_surf']
+                    
+                    if n_mics_nodes > 0 and meta['p_mics'] is not None:
+                        global_p_mics[f_matrix_idx, :] = meta['p_mics']
+                        global_v_mics_x[f_matrix_idx, :] = meta['v_mics_x']
+                        global_v_mics_y[f_matrix_idx, :] = meta['v_mics_y']
+                        global_v_mics_z[f_matrix_idx, :] = meta['v_mics_z']
                     
                     # 13.1 Update precise timing and benchmark info
                     t_assembly = meta['t_assembly']
@@ -484,6 +561,34 @@ def start_pybem_app():
         
         # 13.5 Finalize and write complete VTU outputs to disk
         exporter.finalise()
+
+        # ==================================================================
+        # --- 13.6 COMPUTE AND EXPORT TOTAL SURFACE SOUND POWER ---
+        # ==================================================================
+        if len(parser.surfaces) > 0:
+            from utils import calculate_total_sound_power, generate_power_flux_plot
+            calculate_total_sound_power(
+                model_name = parser.model_name,
+                surfaces = parser.surfaces,
+                surface_elements = surface_to_elements,
+                freqs = parser.frequencies,
+                global_p_surf = global_p_surf,
+                global_v_surf = global_v_surf,
+                global_p_mics = global_p_mics,
+                global_v_mics_x = global_v_mics_x,
+                global_v_mics_y = global_v_mics_y,
+                global_v_mics_z = global_v_mics_z,
+                global_bem_elements_map = static_data['global_eid_to_col'],
+                global_mics_nodes_map = static_data['global_nid_to_mic_col'],
+                global_bem_areas = static_data['global_bem_areas'],
+                global_mics_areas = static_data['global_mics_areas'],
+                global_mics_normals = static_data['global_mics_normals'],
+                global_mics_elements_conn = static_data['global_mics_elements_conn']
+            )
+
+            # Trigger the headless plot generation right after the CSV writes out
+            generate_power_flux_plot(model_name = parser.model_name)
+
         t_exp_1 = time.time()
         all_t_exp += t_exp_1 - t_exp_0
         # --- Final Timing Summary Calculations --- 

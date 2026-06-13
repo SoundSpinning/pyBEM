@@ -1,6 +1,7 @@
 from collections import defaultdict
 import psutil
 import os
+import csv
 
 def get_cpus():
     # CPUs
@@ -124,7 +125,7 @@ def _write_and_fail(log_f, log_top, log_info):
 
 def get_zone_data(parser, sorted_nodes):
     """
-    Groups BEM elements and MICS nodes by material names per zone.
+    Groups BEM elements and MICS nodes/elements by material names per zone.
     If no multi-zones exist (single zone & material), it bundles everything into a single domain.
     It handles the case where some or all zones have no MICS elements defined.
     """
@@ -547,11 +548,260 @@ def get_total_gps(element_nodes):
         total_gps += (11 if len(nodes) == 3 else 14)
     return total_gps
 
+# NEW for multi-zone capa
+def averaged_at_nodes(nodes, elements, P_bem, bem_areas, elem_id_map, ordered_mic_ids=None, P_mics=None, nodal_id_map=None):
+    """
+    Averages BEM element results to nodes, plus adds MICS nodes results.
+    nodes: dict {nid: [x, y, z]}
+    elements: dict {eid: [n1, n2, ...]}
+    P_bem: array of complex values (one per element)
+    bem_areas: array of BEM areas (one per element)
+    elem_id_map: BEM global {eid: index}
+    ordered_mic_ids: list of microphone node IDs
+    P_mics: array of complex values (one per microphone node)
+    nodal_id_map: All nodes global {nid: index}
+    nodal_pressures: output array of complex values
+    """
+    # 1. Size the array exactly to the number of nodes tracked by ParaView
+    num_global_nodes = len(nodal_id_map) if nodal_id_map is not None else max(nodes.keys()) + 1
+    
+    # Initialize buffers
+    node_sums = np.zeros(num_global_nodes, dtype=np.complex128)
+    area_sums = np.zeros(num_global_nodes, dtype=np.float64)  
+    nodal_pressures = np.zeros(num_global_nodes, dtype=np.complex128)
+
+    # 2. Map BEM element results to their constituent nodes
+    for i, (eid, conn) in enumerate(elements.items()):
+        if i >= len(bem_areas) or i >= len(P_bem):
+            continue
+        el_idx = elem_id_map[eid]
+        area = bem_areas[el_idx]
+        val = P_bem[el_idx] * area
+        for nid in conn:
+            if nodal_id_map is not None:
+                if nid in nodal_id_map:
+                    vtk_idx = nodal_id_map[nid]
+                    node_sums[vtk_idx] += val
+                    area_sums[vtk_idx] += area
+            else:
+                if nid < num_global_nodes:
+                    node_sums[nid] += val
+                    area_sums[nid] += area
+
+    # 3. Perform the weighted area average for BEM elements
+    mask = area_sums > 1e-14
+    nodal_pressures[mask] = node_sums[mask] / area_sums[mask]
+
+    # 4. Map microphone results using unified identity mapping
+    if ordered_mic_ids is not None and P_mics is not None:
+        for i, nid in enumerate(ordered_mic_ids):
+            if i < len(P_mics):
+                if nodal_id_map is not None:
+                    if nid in nodal_id_map:
+                        vtk_idx = nodal_id_map[nid]
+                        # Direct assignment to the precise ParaView cell row
+                        nodal_pressures[vtk_idx] = P_mics[i]
+                else:
+                    if nid < num_global_nodes:
+                        nodal_pressures[nid] = P_mics[i]
+
+    return nodal_pressures
+
+def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs, 
+                                global_p_surf, global_v_surf, 
+                                global_p_mics, global_v_mics_x, global_v_mics_y, global_v_mics_z,
+                                global_bem_elements_map, global_mics_nodes_map, 
+                                global_bem_areas, global_mics_areas, 
+                                global_mics_normals, global_mics_elements_conn):
+    """
+    Computes total sound power passing through BEM and MICS surfaces across all frequencies.
+    Outputs net acoustic power transmission values to a single model_name_power.csv file.
+    Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
+    """
+    # print(f"\n{'='*80}")
+    print(f"---> CALCULATING TOTAL SOUND POWER FOR ALL INPUT SURFACES")
+    # print(f"{'='*80}")
+
+    surface_power_results = {surf_name: [] for surf_name in surfaces.keys()}
+    # --- Loop over each solved frequency step ---
+    for f_idx, freq in enumerate(freqs):
+        # Extract global arrays for the current frequency
+        p_surf_f = global_p_surf[f_idx, :]
+        v_surf_f = global_v_surf[f_idx, :]
+        
+        p_mics_f = global_p_mics[f_idx, :]
+        vx_mics_f = global_v_mics_x[f_idx, :]
+        vy_mics_f = global_v_mics_y[f_idx, :]
+        vz_mics_f = global_v_mics_z[f_idx, :]
+
+        for surf_name, surf_elements in surface_elements.items():
+            # surf_elements = surf_info['element_ids']
+            if len(surf_elements) == 0:
+                surface_power_results[surf_name].append(0.0)
+                continue
+                
+            first_eid = surf_elements[0]
+            total_surf_power = 0.0
+
+            # --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
+            if first_eid in global_bem_elements_map:
+                for eid in surf_elements:
+                    g_idx = global_bem_elements_map[eid]
+                    
+                    P_elem = p_surf_f[g_idx]
+                    V_elem = v_surf_f[g_idx]  # Already normal component scalar
+                    area_elem = global_bem_areas[eid]
+
+                    # Real active normal intensity flux: 0.5 * Re{P * conj(V)}
+                    intensity_n = 0.5 * np.real(P_elem * np.conj(V_elem))
+                    total_surf_power += intensity_n * area_elem
+
+                # CONVENTION OPTIMIZATION:
+                # If it's a driving source boundary (Inlet/BC), net flux is into the volume (negative).
+                # We apply a sign inversion if the net sum is negative so that input power reads positive.
+                # For TIED boundaries, this preserves the natural balance check (Zone1 + Zone2 = 0).
+                if "tied" not in surf_name.lower() and total_surf_power < 0:
+                    total_surf_power = -total_surf_power
+
+            # --- CASE B: MICS SURFACE (NODAL-TO-ELEMENTAL RATIO) ---
+            elif first_eid in global_mics_elements_conn:
+                for meid in surf_elements:
+                    elem_nodes = global_mics_elements_conn[meid]
+                    area_m_elem = global_mics_areas[meid]
+                    normal_m_elem = global_mics_normals[meid]
+
+                    # Average nodal values to element centroid
+                    P_centroid = 0.0 + 0.0j
+                    Vx_centroid = 0.0 + 0.0j
+                    Vy_centroid = 0.0 + 0.0j
+                    Vz_centroid = 0.0 + 0.0j
+
+                    for nid in elem_nodes:
+                        g_n_idx = global_mics_nodes_map[nid]
+                        P_centroid += p_mics_f[g_n_idx]
+                        Vx_centroid += vx_mics_f[g_n_idx]
+                        Vy_centroid += vy_mics_f[g_n_idx]
+                        Vz_centroid += vz_mics_f[g_n_idx]
+
+                    num_nodes = len(elem_nodes)
+                    P_centroid /= num_nodes
+                    Vx_centroid /= num_nodes
+                    Vy_centroid /= num_nodes
+                    Vz_centroid /= num_nodes
+
+                    # Project 3D velocity vector onto MICS element normal
+                    V_normal_centroid = (Vx_centroid * normal_m_elem[0] + 
+                                         Vy_centroid * normal_m_elem[1] + 
+                                         Vz_centroid * normal_m_elem[2])
+
+                    intensity_n = 0.5 * np.real(P_centroid * np.conj(V_normal_centroid))
+                    total_surf_power += intensity_n * area_m_elem
+
+                # For an external field sphere of microphones, make the net output power positive
+                if total_surf_power < 0:
+                    total_surf_power = -total_surf_power
+
+            surface_power_results[surf_name].append(total_surf_power)
+
+    # --- WRITE DATA TO CSV ---
+    csv_filename = f"{model_name}_power.csv"
+    surface_names = list(surfaces.keys())
+
+    with open(csv_filename, mode='w', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        
+        # Header layout
+        writer.writerow(["Freq(Hz)"] + [f"{sname}_power" for sname in surface_names])
+        
+        # Frequency step rows
+        for f_idx, freq in enumerate(freqs):
+            row = [freq] + [surface_power_results[sname][f_idx] for sname in surface_names]
+            writer.writerow(row)
+
+    print(f"---> Power output file ( '{csv_filename}' ) successfully written.")
+    # print(f"{'='*80}\n")
+
+def generate_power_flux_plot(model_name):
+    """
+    Reads the generated model_name_power.csv file and outputs a clean,
+    professional PNG graph tracking energy flux across all imported surfaces.
+    Uses a headless background rendering engine to minimize overhead.
+    """
+    try:
+        import matplotlib
+        # Force a non-interactive backend so no GUI window or desktop subsystem is loaded
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print(" [Warning]: Matplotlib not found. Skipping automated PNG plot generation.")
+        return
+
+    csv_filename = f"{model_name}_power.csv"
+    png_filename = f"{model_name}_power.png"
+    
+    frequencies = []
+    surface_data = {}
+    
+    # --- Read data back from the fresh CSV payload ---
+    with open(csv_filename, mode='r') as csv_file:
+        reader = csv.reader(csv_file)
+        headers = next(reader)
+        
+        surface_names = headers[1:]
+        for sname in surface_names:
+            surface_data[sname] = []
+            
+        for row in reader:
+            if not row:
+                continue
+            frequencies.append(float(row[0]))
+            for idx, sname in enumerate(surface_names):
+                surface_data[sname].append(float(row[idx + 1]))
+
+    # --- Build Plot ---
+    plt.figure(figsize=(8, 5), dpi=150)
+    
+    # Use a clean, professional color palette
+    # Differentiate TIED surfaces with distinct line styles so they don't block each other visually
+    for sname in surface_names:
+        name_lower = sname.lower()
+        if "tied" in name_lower or "z1" in name_lower or "z2" in name_lower:
+            if "z2" in name_lower:
+                # Plot z2 slightly thinner and beneath z1
+                plt.plot(frequencies, surface_data[sname], label=sname, 
+                         linewidth=2.0, linestyle='--', color='#d62728', zorder=2)
+            else:
+                # Plot z1 slightly thicker, dotted, and forced to the very top (zorder=3)
+                plt.plot(frequencies, surface_data[sname], label=sname, 
+                         linewidth=3.0, linestyle=':', color='#2ca02c', zorder=3)
+        else:
+            plt.plot(frequencies, surface_data[sname], label=sname, linewidth=2.5, zorder=1)
+
+    # Styling for engineering reports
+    plt.title(f"Acoustic Total Sound Power (Surfaces) — Model: {model_name}", fontsize=11, fontweight='bold', pad=12)
+    plt.xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
+    plt.ylabel("Sound Power", fontsize=10, labelpad=6)
+    
+    plt.grid(True, which="both", linestyle=":", color="#cccccc", alpha=0.8)
+    plt.axhline(0, color="#333333", linewidth=1.0, linestyle="-", alpha=0.5) # Explicit zero balance baseline
+    
+    # Use an engineering scientific notation formatter for the power axis
+    plt.gca().yaxis.set_major_formatter(plt.FormatStrFormatter('%.2e'))
+    
+    plt.legend(loc="best", frameon=True, facecolor="#ffffff", edgecolor="#cccccc", fontsize=9)
+    plt.tight_layout()
+    
+    # Save image out instantly
+    plt.savefig(png_filename, dpi=150)
+    plt.close()
+    
+    print(f"---> Power graph visual successfully written to: [ {png_filename} ]")
 
 # ---------------------------------
+# all that heavy maths stuff ...
 # ---------------------------------
 ###
-### Gauss Points for QUADS & TRIAS
+### Integration / Gauss Points for QUADS & TRIAS
 ###
 # ---------------------------------
 ###
@@ -760,61 +1010,3 @@ def pre_high_order(element_nodes, element_area):
     
     return pts, wts * element_area / sum_w
 
-# NEW for multi-zone capa
-def averaged_at_nodes(nodes, elements, P_bem, bem_areas, elem_id_map, ordered_mic_ids=None, P_mics=None, nodal_id_map=None):
-    """
-    Averages BEM element results to nodes, plus adds MICS nodes results.
-    nodes: dict {nid: [x, y, z]}
-    elements: dict {eid: [n1, n2, ...]}
-    P_bem: array of complex values (one per element)
-    bem_areas: array of BEM areas (one per element)
-    elem_id_map: BEM global {eid: index}
-    ordered_mic_ids: list of microphone node IDs
-    P_mics: array of complex values (one per microphone node)
-    nodal_id_map: All nodes global {nid: index}
-    nodal_pressures: output array of complex values
-    """
-    # 1. Size the array exactly to the number of nodes tracked by ParaView
-    num_global_nodes = len(nodal_id_map) if nodal_id_map is not None else max(nodes.keys()) + 1
-    
-    # Initialize buffers
-    node_sums = np.zeros(num_global_nodes, dtype=np.complex128)
-    area_sums = np.zeros(num_global_nodes, dtype=np.float64)  
-    nodal_pressures = np.zeros(num_global_nodes, dtype=np.complex128)
-
-    # 2. Map BEM element results to their constituent nodes
-    for i, (eid, conn) in enumerate(elements.items()):
-        if i >= len(bem_areas) or i >= len(P_bem):
-            continue
-        el_idx = elem_id_map[eid]
-        area = bem_areas[el_idx]
-        val = P_bem[el_idx] * area
-        for nid in conn:
-            if nodal_id_map is not None:
-                if nid in nodal_id_map:
-                    vtk_idx = nodal_id_map[nid]
-                    node_sums[vtk_idx] += val
-                    area_sums[vtk_idx] += area
-            else:
-                if nid < num_global_nodes:
-                    node_sums[nid] += val
-                    area_sums[nid] += area
-
-    # 3. Perform the weighted area average for BEM elements
-    mask = area_sums > 1e-14
-    nodal_pressures[mask] = node_sums[mask] / area_sums[mask]
-
-    # 4. Map microphone results using unified identity mapping
-    if ordered_mic_ids is not None and P_mics is not None:
-        for i, nid in enumerate(ordered_mic_ids):
-            if i < len(P_mics):
-                if nodal_id_map is not None:
-                    if nid in nodal_id_map:
-                        vtk_idx = nodal_id_map[nid]
-                        # Direct assignment to the precise ParaView cell row
-                        nodal_pressures[vtk_idx] = P_mics[i]
-                else:
-                    if nid < num_global_nodes:
-                        nodal_pressures[nid] = P_mics[i]
-
-    return nodal_pressures

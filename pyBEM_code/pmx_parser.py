@@ -426,7 +426,7 @@ class PMXParser:
                                 bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
 
         log_bc_info += f"--> BC-PROCESSING: BC resolution complete ==> ( {len(bc_dict)} ) elements have active BCs."
-        return bc_dict, log_bc_info
+        return bc_dict, log_bc_info, surface_to_elements
 
     def _get_param(self, line, key):
         """Extracts command parameters' values like 'NAME=Pipe'."""
