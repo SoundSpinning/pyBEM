@@ -81,7 +81,7 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(z_elements, bem_centers, bem_areas, bem_normals)
         
         log_info += f"\n--> ZONE: [ {zone_name} ]"
-        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.4f} L**2 )"
+        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.3f} L**2 )"
         log_info += f"\n    CoG of BEM zone:            [ {bem_CoG[0]:.2f}, {bem_CoG[1]:.2f}, {bem_CoG[2]:.2f} ] L"
         log_info += f"\n    Max Element Aspect Ratio:   ( {np.max(elem_ratio):.2f} )"
         log_info += f"\n    Element Size (approx):      ( {order_length:.2f} L )"
@@ -102,13 +102,13 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         if bem_total_vol > 1e-9:
             global_h_signs[zone_name] = -1.0
             log_info += f"""
-    Closed (+) Volume detected: ( {bem_total_vol:.4f} L**3 )
+    Closed (+) Volume detected: ( {bem_total_vol:.3f} L**3 )
     -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
 """
         elif bem_total_vol < -1e-9:
             global_h_signs[zone_name] = 1.0
             log_info += f"""
-    Closed (-) Volume detected: ( {bem_total_vol:.4f} L**3 )
+    Closed (-) Volume detected: ( {bem_total_vol:.3f} L**3 )
     -> Normals point INWARDS ==> Assuming EXTERIOR Analysis
 """
         else:
@@ -618,11 +618,22 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
     Outputs net acoustic power transmission values to a single model_name_power.csv file.
     Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
     """
-    # print(f"\n{'='*80}")
-    print(f"---> CALCULATING TOTAL SOUND POWER FOR ALL INPUT SURFACES")
-    # print(f"{'='*80}")
 
     surface_power_results = {surf_name: [] for surf_name in surfaces.keys()}
+    # SUM all power from all freqs, and areas for results output labels
+    surface_metrics = {surf_name: {'area': 0.0, 'total_energy_sum': 0.0} for surf_name in surfaces.keys()}
+    # Doing areas once
+    for surf_name, surf_elements in surface_elements.items():
+        if len(surf_elements) == 0:
+            continue
+        first_eid = surf_elements[0]
+        
+        # Sum areas depending on BEM or MICS type
+        if first_eid in global_bem_elements_map:
+            surface_metrics[surf_name]['area'] = sum(global_bem_areas[eid] for eid in surf_elements)
+        elif first_eid in global_mics_elements_conn:
+            surface_metrics[surf_name]['area'] = sum(global_mics_areas[meid] for meid in surf_elements)
+
     # --- Loop over each solved frequency step ---
     for f_idx, freq in enumerate(freqs):
         # Extract global arrays for the current frequency
@@ -635,7 +646,6 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
         vz_mics_f = global_v_mics_z[f_idx, :]
 
         for surf_name, surf_elements in surface_elements.items():
-            # surf_elements = surf_info['element_ids']
             if len(surf_elements) == 0:
                 surface_power_results[surf_name].append(0.0)
                 continue
@@ -647,7 +657,6 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
             if first_eid in global_bem_elements_map:
                 for eid in surf_elements:
                     g_idx = global_bem_elements_map[eid]
-                    
                     P_elem = p_surf_f[g_idx]
                     V_elem = v_surf_f[g_idx]  # Already normal component scalar
                     area_elem = global_bem_areas[eid]
@@ -656,7 +665,7 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
                     intensity_n = 0.5 * np.real(P_elem * np.conj(V_elem))
                     total_surf_power += intensity_n * area_elem
 
-                # CONVENTION OPTIMIZATION:
+                # CONVENTION of signs:
                 # If it's a driving source boundary (Inlet/BC), net flux is into the volume (negative).
                 # We apply a sign inversion if the net sum is negative so that input power reads positive.
                 # For TIED boundaries, this preserves the natural balance check (Zone1 + Zone2 = 0).
@@ -701,8 +710,12 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
                 if total_surf_power < 0:
                     total_surf_power = -total_surf_power
 
+            # Track power result for current freq step
             surface_power_results[surf_name].append(total_surf_power)
 
+            # Accumulate integrated total sound power (TSW) across the whole sweep
+            surface_metrics[surf_name]['total_energy_sum'] += total_surf_power
+    
     # --- WRITE DATA TO CSV ---
     csv_filename = f"{model_name}_power.csv"
     surface_names = list(surfaces.keys())
@@ -710,18 +723,107 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
     with open(csv_filename, mode='w', newline='') as csv_file:
         writer = csv.writer(csv_file)
         
-        # Header layout
-        writer.writerow(["Freq(Hz)"] + [f"{sname}_power" for sname in surface_names])
+        headers = ["Freq(Hz)"]
+        for sname in surface_names:
+            A_val = surface_metrics[sname]['area']
+            TSW_val = surface_metrics[sname]['total_energy_sum']
+            headers.append(f"{sname} | A = {A_val:.4} L**2 | TSW = {TSW_val:.4}")
+
+        writer.writerow(headers)
         
         # Frequency step rows
         for f_idx, freq in enumerate(freqs):
             row = [freq] + [surface_power_results[sname][f_idx] for sname in surface_names]
             writer.writerow(row)
-
-    print(f"---> Power output file ( '{csv_filename}' ) successfully written.")
-    # print(f"{'='*80}\n")
+        
+        return headers[1:]
 
 def generate_power_flux_plot(model_name):
+    """
+    Reads the generated model_name_power.csv file and outputs a clean,
+    professional PNG graph tracking energy flux across all imported surfaces.
+    Uses a headless background rendering engine to minimize overhead.
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
+        return
+
+    csv_filename = f"{model_name}_power.csv"
+    png_filename = f"{model_name}_power.png"
+    
+    frequencies = []
+    plot_series = []  # List of dicts holding label, data, and parsed name
+    
+    with open(csv_filename, mode='r') as csv_file:
+        reader = csv.reader(csv_file)
+        headers = next(reader)
+        
+        raw_headers = headers[1:]
+        for h_text in raw_headers:
+            plot_series.append({
+                'full_label': h_text,
+                'clean_name': h_text.split('|')[0].strip(),
+                'data': []
+            })
+            
+        for row in reader:
+            if not row or not row[0]:
+                continue
+            # If a duplicate header row slipped in, skip it cleanly instead of crashing
+            if "freq" in row[0].lower():
+                continue
+            try:
+                freq_val = float(row[0])
+                # Double check that we actually have corresponding data entries to match columns
+                row_data_vals = [float(val) for val in row[1:]]
+            except ValueError:
+                # Catch any other corrupted string lines safely
+                continue
+
+            frequencies.append(freq_val)
+            for idx, series in enumerate(plot_series):
+                series['data'].append(row_data_vals[idx])
+
+    # --- Build Extended Plot ---
+    plt.figure(figsize=(9, 5.5), dpi=150)
+    
+    for series in plot_series:
+        name_lower = series['clean_name'].lower()
+        full_lbl = series['full_label']
+        
+        if "tied" in name_lower or "z1" in name_lower or "z2" in name_lower:
+            if "z2" in name_lower:
+                plt.plot(frequencies, series['data'], label=full_lbl, 
+                         linewidth=2.0, linestyle='--', color='#d62728', zorder=2)
+            else:
+                plt.plot(frequencies, series['data'], label=full_lbl, 
+                         linewidth=3.0, linestyle=':', color='#2ca02c', zorder=3)
+        else:
+            plt.plot(frequencies, series['data'], label=full_lbl, linewidth=2.5, zorder=1)
+
+    plt.title(f"Acoustic Sound Power (Surfaces) — Model: {model_name}", fontsize=11, fontweight='bold', pad=12)
+    plt.xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
+    plt.ylabel("Sound Power", fontsize=10, labelpad=6)
+    
+    plt.grid(True, which="both", linestyle=":", color="#cccccc", alpha=0.8)
+    plt.axhline(0, color="#333333", linewidth=1.0, linestyle="-", alpha=0.5)
+    
+    plt.gca().yaxis.set_major_formatter(plt.FormatStrFormatter('%.2e'))
+    
+    # Place the decorated legend neatly
+    plt.legend(loc="best", frameon=True, facecolor="#ffffff", edgecolor="#cccccc", fontsize=8)
+    plt.tight_layout()
+    
+    plt.savefig(png_filename, dpi=150)
+    plt.close()
+    
+    # print(f" ---> Decorated power graph visual updated: [ {png_filename} ]")
+
+def old_generate_power_flux_plot(model_name):
     """
     Reads the generated model_name_power.csv file and outputs a clean,
     professional PNG graph tracking energy flux across all imported surfaces.
@@ -794,8 +896,7 @@ def generate_power_flux_plot(model_name):
     # Save image out instantly
     plt.savefig(png_filename, dpi=150)
     plt.close()
-    
-    print(f"---> Power graph visual successfully written to: [ {png_filename} ]")
+
 
 # ---------------------------------
 # all that heavy maths stuff ...

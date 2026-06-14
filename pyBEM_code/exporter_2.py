@@ -81,7 +81,7 @@ class PVExporter:
         root = ET.Element("VTKFile", type="Collection", version="0.1")
         collection = ET.SubElement(root, "Collection")
 
-        print(f"\n---> Writing {len(self.block_collection)} binary frequency steps --")
+        print(f"\n --> Writing {len(self.block_collection)} binary frequency steps")
         
         for freq in sorted(self.block_collection.keys()):
             filename = f"Freq_{freq:.1f}.vtu"
@@ -100,4 +100,4 @@ class PVExporter:
         with open(pvd_path, "w") as f:
             f.write(xml_str)
             
-        print(f"---> Export Complete: '{pvd_path}' --")
+        print(f"     Export Complete. Results file written to: ( '{pvd_path}' )")

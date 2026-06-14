@@ -264,13 +264,13 @@ def start_pybem_app():
             str_CPUs += f" --> Zone [ {z_name:<12} ]: Matrix Index Range [{alloc['start_idx']:>5} -> {alloc['start_idx'] + alloc['n_elements'] - 1:<5}] ( {alloc['n_elements']} elements )\n"
 
         print(f"{'=' * 80}")
-        print(f"    ACOUSTICS multi-zone job started at:  {time.ctime()}")
+        print(f"*** ACOUSTICS multi-zone job started at:  {time.ctime()}")
         print(f"{'=' * 80}")
-        print(f" -- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) -- \n{str_CPUs}")
+        print(f"--> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) <-- \n{str_CPUs}")
         
         with open(log_f, "a") as log:
-            log.write(f"\n{'=' * 98}\n    ACOUSTICS multi-zone job started at: {time.ctime()}\n{'=' * 98}")
-            log.write(f"\n -- Solving {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] -- \n")
+            log.write(f"\n{'=' * 98}\n*** ACOUSTICS multi-zone job started at: {time.ctime()}\n{'=' * 98}")
+            log.write(f"\n--> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] <-- \n")
             log.write(str_CPUs)
             log.flush()
 
@@ -295,7 +295,7 @@ def start_pybem_app():
     
         for zone_name, z_mesh in zones_mesh.items():
             t_pre_0 = time.time()
-            print(f"\n---> Pre-assembling Geometric Static Kernels for Zone: [ {zone_name} ]")
+            print(f"\n --> Pre-assembling Geometric Static Kernels for Zone: [ {zone_name} ]")
             
             # 11.1 Extract BEM geometry data local to this zone
             z_nodes, z_centers, z_areas, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
@@ -410,19 +410,6 @@ def start_pybem_app():
             'n_bem_els': n_bem_els,
             'n_mics_nodes': n_mics_nodes
         }
-
-        # # DEBUG
-        # # print(static_data['pre_bem_data'])
-        # # print(static_data['pre_mics_data'])
-        # print(static_data['zones_mesh'])
-        # # print(static_data['pre_mics_data'].keys())
-        # # print("\n=== DIAGNOSTIC 3: STATIC PACKING FOR WORKERS ===")
-        # # for z_name, z_data in pre_mics_data.items():
-        # #     print(f"Zone: [ {z_name} ] in pre_mics_data:")
-        # #     print(f"  -> num_mics scalar: {z_data.get('num_mics')}")
-        # #     if 'pre_mics_G' in z_data and z_data['pre_mics_G'] is not None:
-        # #         print(f"  -> pre_mics_G matrix shape: {z_data['pre_mics_G'].shape}\n")
-        # # DEBUG_end
         
         # --- Dynamic Resource Governor Allocation ---
         # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
@@ -449,8 +436,8 @@ def start_pybem_app():
         set_num_threads(threads_per_worker)
         
         log_pre_stats = (f"""
- PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
-     BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f}GB )
+ [ i ] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
+       BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f}GB )
      
  Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f}GB ):
  Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB ) | Parallel Frequency Workers: ( {num_workers} )
@@ -459,12 +446,12 @@ def start_pybem_app():
        which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
 """)
         print(log_pre_stats)
-        print("       [ i ] Promoting heavy arrays to Shared Memory...\n")
+        print(" [ i ] Promoting heavy arrays to Shared Memory...\n")
         shm_static_data = promote_to_shm(static_data)
 
         with open(log_f, "a") as log:
             log.write(log_pre_stats)
-            log.write(f"       [ i ] Promoting heavy arrays to Shared Memory...\n")
+            log.write(f" [ i ] Promoting heavy arrays to Shared Memory...\n")
             log.write(f"\n{'=' * 98}")
             log.write(f"\n {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}")
             log.write(f"\n{'=' * 98}\n")
@@ -566,8 +553,15 @@ def start_pybem_app():
         # --- 13.6 COMPUTE AND EXPORT TOTAL SURFACE SOUND POWER ---
         # ==================================================================
         if len(parser.surfaces) > 0:
+            log_post = f"""
+ --> Calculating TOTAL SOUND POWER for all input surfaces:
+     A = surface Area | TSW = Total Sound Power, from all frequencies"""
+            print(log_post)
+            with open(log_f, "a") as log:
+                log.write(log_post)
+                log.flush()
             from utils import calculate_total_sound_power, generate_power_flux_plot
-            calculate_total_sound_power(
+            surf_pwr_labels = calculate_total_sound_power(
                 model_name = parser.model_name,
                 surfaces = parser.surfaces,
                 surface_elements = surface_to_elements,
@@ -585,10 +579,24 @@ def start_pybem_app():
                 global_mics_normals = static_data['global_mics_normals'],
                 global_mics_elements_conn = static_data['global_mics_elements_conn']
             )
+            # print(surf_pwr_labels)
+            for i in range(len(surf_pwr_labels)):
+                print(f"     {surf_pwr_labels[i]}")
+                with open(log_f, "a") as log:
+                    log.write(f"\n     {surf_pwr_labels[i]}")
+                    log.flush()
 
+            csv_filename = f"{parser.model_name}_power.csv"
+            png_filename = f"{parser.model_name}_power.png"
+            log_post = f"\n     Freq / Power results file written to: ( '{csv_filename}' )"
             # Trigger the headless plot generation right after the CSV writes out
             generate_power_flux_plot(model_name = parser.model_name)
-
+            log_post += f"\n     Freq / Power graph plotted to: ( '{png_filename}' )"
+            print(log_post)
+            with open(log_f, "a") as log:
+                log.write(log_post)
+                log.flush()
+        
         t_exp_1 = time.time()
         all_t_exp += t_exp_1 - t_exp_0
         # --- Final Timing Summary Calculations --- 
@@ -602,9 +610,9 @@ def start_pybem_app():
         avg_export = avg_to_nodes + avg_vtu
 
         summary_log = f"""
-    [ i ] Shared Memory released.
+ [ i ] Shared Memory released.
 
- -- All Multi-Zone Frequency Steps Completed Successfully --
+--> COMPLETED all Multi-Zone Frequency Steps <--
     Function 'averaged_at_nodes' took: ( {all_t_avr:.2f}s )
     Export Write and VTU Processing:   ( {all_t_exp:.2f}s )
 {'-' * 80}"""

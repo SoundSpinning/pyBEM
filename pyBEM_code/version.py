@@ -1,4 +1,4 @@
-__version__ = "0.1.1-alpha"
+__version__ = "0.1.2-alpha"
 
 div_1 = f" "*10+"="*60+" "*10
 __solver__ = f"""
