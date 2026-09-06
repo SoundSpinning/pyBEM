@@ -1,11 +1,13 @@
 # The heavy math (Numba-accelerated BEM kernels)
-import numpy as np
 import time
 import os
 import atexit
-from multiprocessing import shared_memory
+import numpy as np
 from numba import njit, prange
-from utils import get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
+from multiprocessing import shared_memory
+from utils import (
+    get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
+)
 
 # This keeps track of all blocks created in this session
 _SHM_REGISTRY = {}
@@ -138,83 +140,6 @@ def apply_tie_collocation_columns(A_global, H_local, G_local, local_j, start_row
                 # Opposite interface normal (+G) scaled by master area fraction (A_intersect / A_master)
                 A_global[start_row : start_row + n_elements, l_col] += G_local[:, local_j] * ik_rho_c * w_m2s
 
-def old2_apply_tie_collocation_columns(A_global, H_local, G_local, local_j, start_row, n_elements, 
-                                  eid, rho_omega, slave_lagrange_col_map, W_slave_to_master, W_master_to_slave, p_col):
-    """
-    Handles column-wise coefficient assembly for tied interface elements.
-    - Native pressure P_eid goes into column 'p_col' multiplied by H_local.
-    - Interface normal velocity (Lagrange multiplier lambda_s) goes into 
-      trailing column 'l_col' multiplied by G_local * (1j * rho_omega).
-    """
-    # 1. Native Pressure Unknown (P_eid) ALWAYS receives H_local in its native column
-    A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j]
-
-    # Factor converting normal velocity v_n to acoustic flux term
-    ik_rho_c = 1j * rho_omega
-
-    # 2. Check: Is this element a SLAVE?
-    # Scale by W_{S -> M} = A_intersect / A_slave so row evaluates G_slave * A_intersect
-    if eid in slave_lagrange_col_map:
-        l_col = slave_lagrange_col_map[eid]
-        if eid in W_slave_to_master:
-            # Sum mapping across all overlapping master segments
-            total_s2m_weight = sum(W_slave_to_master[eid].values())
-            A_global[start_row : start_row + n_elements, l_col] -= G_local[:, local_j] * ik_rho_c * total_s2m_weight
-        else:
-            A_global[start_row : start_row + n_elements, l_col] -= G_local[:, local_j] * ik_rho_c
-
-    # # 2. Check: Is this element a SLAVE?
-    # if eid in slave_lagrange_col_map:
-    #     l_col = slave_lagrange_col_map[eid]
-    #     # Slave normal velocity maps 1:1 to its Lagrange multiplier column
-    #     # Standard BEM sign for outgoing normal: -G * (i * rho * omega) * lambda_s
-    #     A_global[start_row : start_row + n_elements, l_col] -= G_local[:, local_j] * ik_rho_c
-
-    # 3. Check: Is this element a MASTER?
-    # Master elements receive flux contributions from all overlapping slave Lagrange multipliers
-    if eid in W_master_to_slave:
-        for s_eid, w_m2s in W_master_to_slave[eid].items():
-            if s_eid in slave_lagrange_col_map:
-                l_col = slave_lagrange_col_map[s_eid]
-                # Opposite normal direction (+G) scaled by flux conservation area weight W_{M -> S}
-                A_global[start_row : start_row + n_elements, l_col] += G_local[:, local_j] * ik_rho_c * w_m2s
-
-def old_apply_tie_collocation_columns(A_global, H_local, G_local, local_j, start_row, n_elements, 
-                                  eid, rho_omega, slave_lagrange_col_map, W_slave_to_master, W_master_to_slave, p_col):
-    """
-    Handles the column-wise coefficient modifications for tied elements during Zone assembly,
-    using pre-normalized dimensionless mortar weights.
-    True Mortar Update: Maps pressure potentials via slave-centric Lagrange multipliers.
-    """
-    A_global[start_row : start_row + n_elements, p_col] -= G_local[:, local_j] * (1j * rho_omega)
-
-    # Check 1: Is this element acting as a Master?
-    # Loop over slave mappings to find if 'eid' is a master to any slave s_eid
-    for s_eid, master_dict in W_slave_to_master.items():
-        if eid in master_dict:
-            if s_eid in slave_lagrange_col_map:
-                l_col = slave_lagrange_col_map[s_eid]
-                # Retrieve dimensionless weight directly
-                mortar_weight = master_dict[eid] # W_{S -> M}
-
-                # Continuous pressure mapping across interface
-                # Master contribution weighted by mortar shape function / overlap fraction
-                A_global[start_row : start_row + n_elements, l_col] += H_local[:, local_j] * mortar_weight
-
-    # Check 2: Is this element acting as a Slave?
-    if eid in W_slave_to_master:
-        if eid in slave_lagrange_col_map:
-            l_col = slave_lagrange_col_map[eid]
-            # Compute total slave coverage fraction by summing entries from W_master_to_slave
-            # Reuses W_master_to_slave[m_eid][eid] = (A_overlap / A_slave)
-            slave_fraction = sum(
-                master_dict[eid] 
-                for m_eid, master_dict in W_master_to_slave.items() 
-                if eid in master_dict
-            )
-            # Direct substitution for slave potential (Identity weight = 1.0)
-            A_global[start_row : start_row + n_elements, l_col] -= H_local[:, local_j] * slave_fraction
-
 def enforce_interface_pressure_continuity(A_global, B_global, N_all, 
                                           eid_global_p_col, W_slave_to_master, slave_lagrange_col_map):
     """
@@ -241,54 +166,6 @@ def enforce_interface_pressure_continuity(A_global, B_global, N_all,
         # 3. Continuity RHS remains zero
         B_global[tie_row] = 0.0
 
-def old_enforce_interface_velocity_continuity(A_global, B_global, N_all, 
-                                          eid_global_p_col, W_master_to_slave, W_slave_to_master, slave_lagrange_col_map):
-    """
-    PHASE 2: Enforces physical velocity continuity across the interface rows.
-    Maps the Slave dual weights back onto the actual slave velocity column index, 
-    ensuring both sides of the interface are bound without duplication.
-    Uses pre-normalized dimensionless fractions directly from W_master_to_slave.
-    """
-    # Track which slave rows have already had their self-weight initialized
-    initialized_slave_rows = set()
-
-    # Loop over the master-to-slave distributions
-    for m_eid, slave_dict in W_master_to_slave.items():
-        m_v_col = eid_global_p_col[m_eid]
-        
-        for s_eid, mortar_weight in slave_dict.items():
-            tie_row = slave_lagrange_col_map[s_eid]
-            s_v_col = eid_global_p_col[s_eid] # The actual continuous domain column for the slave
-
-            # 1. Continuous Slave Velocity Term (+1.0)
-            if tie_row not in initialized_slave_rows:
-                # Sum all incoming coverage fractions for this slave across all master elements
-                total_slave_coverage = sum(
-                    m_dict[s_eid] for m_dict in W_master_to_slave.values() if s_eid in m_dict
-                )
-                A_global[tie_row, s_v_col] = total_slave_coverage
-                # / (1j * rho_omega)
-                initialized_slave_rows.add(tie_row)
-            
-            # 2. Area-Weighted Master Velocity Transfer using normalized W_slave_to_master weight
-            # Pull pre-calculated normalized weight from W_slave_to_master
-            weight_val = W_slave_to_master.get(s_eid, {}).get(m_eid, mortar_weight)
-            A_global[tie_row, m_v_col] -= weight_val
-            # / (1j * rho_omega)
-            
-            # Continuity RHS remains zero
-            B_global[tie_row] = 0.0
-
-def not_used_reconstruct_tied_pressures(global_solution, eid, W_slave_to_master, slave_lagrange_col_map, eid_global_p_col):
-    """
-    Extracts the solved primary acoustic pressure P for any interface element (Slave or Master)
-    directly from the global solution vector.
-    """
-    # Pressure for BOTH Slave and Master elements lives in primary columns
-    p_col = eid_global_p_col[eid]
-    return global_solution[p_col]
-
-
 def reconstruct_master_velocity(global_solution, master_eid, W_slave_to_master, W_master_to_slave, slave_lagrange_col_map, eid_area_map):
     """
     Reconstructs master element normal velocity v_master from slave Lagrange multipliers (lambda_s)
@@ -310,63 +187,6 @@ def reconstruct_master_velocity(global_solution, master_eid, W_slave_to_master, 
             v_master += v_slave * w_m2s
 
     return v_master
-
-def old_reconstruct_tied_pressures(global_solution, eid, W_slave_to_master, slave_lagrange_col_map, eid_area_map):
-    """
-    Extracts or interpolates pressure fields for tied interface elements from the solution vector.
-    True Mortar Update: Reconstructs pressures using slave-centric multiplier mappings.
-    """
-    # Case A: It's a Slave Element (Pressure is directly the Lagrange multiplier)
-    if eid in slave_lagrange_col_map:
-        l_col = slave_lagrange_col_map[eid]
-        return global_solution[l_col]
-        
-    # Case B: It's a Master Element (Interpolate from the connected slave multipliers)
-    else:
-        p_val = 0.0 + 0.0j
-        total_m_weight = 0.0
-        m_area = eid_area_map[eid]
-        
-        for s_eid, master_dict in W_slave_to_master.items():
-            if eid in master_dict and s_eid in slave_lagrange_col_map:
-                l_col = slave_lagrange_col_map[s_eid]
-                # s_area = eid_area_map[s_eid]
-                raw_area_ij = master_dict[eid]
-                
-                mortar_weight = raw_area_ij
-                p_val += global_solution[l_col] * mortar_weight
-                total_m_weight += mortar_weight
-                
-        if total_m_weight > 1e-12:
-            return p_val
-            
-    if total_m_weight <= 1e-12:
-        raise ValueError(f"\n[Tie Error] Master element {eid} has no mapped slave elements in W_slave_to_master.")
-
-def old_reconstruct_master_velocity(global_solution, master_eid, W_slave_to_master, eid_global_p_col, eid_area_map):
-    """
-    Computes master element velocity by enforcing acoustic flux continuity across slave elements:
-    v_master = sum(A_slave_i * v_slave_i) / A_master
-    """
-    v_flux_sum = 0.0 + 0.0j
-    master_area = eid_area_map[master_eid]
-    
-    for s_eid, master_dict in W_slave_to_master.items():
-        if master_eid in master_dict:
-            # Locate the slave element's primary velocity solution entry
-            s_col = eid_global_p_col[s_eid]
-            v_slave = global_solution[s_col]
-            
-            # Sub-area of intersection between this slave and master
-            intersection_area = master_dict[master_eid]
-            
-            v_flux_sum += v_slave * intersection_area
-
-    if master_area > 1e-12:
-        return v_flux_sum
-        # return v_flux_sum / master_area
-    
-    raise ValueError(f"\n[Tie Error] Master element {master_eid} has zero area or no mapped slave elements.")
 
 # ==================================================================
 # --- REFACTORED MAIN WORKER FUNCTION ---
@@ -761,7 +581,6 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     }
     
     return f, nodal_pressures, metadata
-
 
 # @njit(parallel=False, boundscheck=True)  # <-- Change this temporarily to DEBUG
 @njit(parallel=True, cache=True)

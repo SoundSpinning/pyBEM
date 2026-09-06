@@ -1,7 +1,7 @@
 import os
+import shutil
 import numpy as np
 import pyvista as pv
-import shutil
 from constants import P_REF
 
 class PVExporter:

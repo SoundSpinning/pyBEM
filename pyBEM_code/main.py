@@ -1,29 +1,33 @@
 import sys
 import os
-import numpy as np
-from numba import set_num_threads
+import gc
 import traceback
 import time
 from tqdm import tqdm
-
-# Import custom modules
-from version import __solver__
-from pmx_parser import PMXParser
-from solver_core import global_shm_cleanup, promote_to_shm, init_worker, frequency_worker, pre_assembly, pre_mics
-# from exporter import PVExporter
-from exporter_2 import PVExporter
-from utils import get_ram, prepare_geometry, get_zone_data, validate_and_log_zones, resolve_tie_interfaces, compute_tie_area_weights, get_global_offsets, format_per_tie_mortar_weights
-
-
-# Paralel libraries
-import gc
+import numpy as np
+from numba import set_num_threads
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-# limit terminal prints size
-np.set_printoptions(threshold=100)  
+# Version & Core Imports
+from version import __solver__
+from pmx_parser import PMXParser
+from solver_core import (
+    global_shm_cleanup, promote_to_shm, init_worker, 
+    frequency_worker, pre_assembly, pre_mics
+)
+from exporter_2 import PVExporter
+from utils import (
+    get_cpus, set_hardware_limits, get_ram, prepare_geometry, 
+    get_zone_data, validate_and_log_zones, resolve_tie_interfaces, 
+    compute_tie_area_weights, get_global_offsets, format_per_tie_mortar_weights
+)
+
+# Configuration
+np.set_printoptions(threshold=100) # limit terminal prints size
 gc.disable()  # Disable automatic garbage collection
 
-def start_pybem_app():
+
+def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     print(f"{__solver__}")
     
     # --- 1. COLLECT ARGUMENTS ---
@@ -681,15 +685,35 @@ def start_pybem_app():
         print(f"\n[ERROR] {e}")
         traceback.print_exc()
 
-if __name__ == "__main__":
-    from utils import get_cpus, set_hardware_limits
+def main():
+    """Application entry point: manages hardware initialization and runs pyBEM."""
+
     # Get number of physical CPUs to pass onto Numpy libraries for the solve
     # This is required before any `import numpy`
     n_CPUs, n_threads, RAM_gb = get_cpus()
     used_CPUs = n_CPUs
+
     # This makes sure at the start that all solve libraries are set to a CPU max.
     # This is to minimise race conditions on multi-threading.
     set_hardware_limits(used_CPUs)
     # AFTER, in the code we do try better with Numba, as it has the function
     # set_num_threads(), which the other libraries don't.
-    start_pybem_app()
+    
+    start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb)
+
+
+if __name__ == "__main__":
+    main()
+
+# if __name__ == "__main__":
+#     from utils import get_cpus, set_hardware_limits
+#     # Get number of physical CPUs to pass onto Numpy libraries for the solve
+#     # This is required before any `import numpy`
+#     n_CPUs, n_threads, RAM_gb = get_cpus()
+#     used_CPUs = n_CPUs
+#     # This makes sure at the start that all solve libraries are set to a CPU max.
+#     # This is to minimise race conditions on multi-threading.
+#     set_hardware_limits(used_CPUs)
+#     # AFTER, in the code we do try better with Numba, as it has the function
+#     # set_num_threads(), which the other libraries don't.
+#     start_pybem_app()
