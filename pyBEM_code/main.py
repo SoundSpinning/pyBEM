@@ -12,7 +12,8 @@ from pmx_parser import PMXParser
 from solver_core import global_shm_cleanup, promote_to_shm, init_worker, frequency_worker, pre_assembly, pre_mics
 # from exporter import PVExporter
 from exporter_2 import PVExporter
-from utils import get_ram, prepare_geometry, get_zone_data, validate_and_log_zones, resolve_tie_interfaces, compute_tie_projection_matrix, get_global_offsets
+from utils import get_ram, prepare_geometry, get_zone_data, validate_and_log_zones, resolve_tie_interfaces, compute_tie_area_weights, get_global_offsets, format_per_tie_mortar_weights
+
 
 # Paralel libraries
 import gc
@@ -156,75 +157,98 @@ def start_pybem_app():
         with open(log_f, "a") as log:
             log.write(log_info + '\n')
             log.flush()
-        
+
         # ==================================================================
-        # --- 9. RESOLVE MULTI-ZONE TIE COUPLINGS ---
+        # --- 9. RESOLVE MULTI-ZONE TIED PAIRS ---
         # ==================================================================
-        # Append connection discoveries to terminal output and log
         log_tie_info = """
     ==========================
     *** SURFACE TIED PAIRS ***
     ==========================
 """
-        # Check if ties were expected globally in the model file
         has_global_ties = bool(getattr(parser, 'ties', None))
         
         if has_global_ties:
-            log_tie_info += f"""    Found a total of ( {len(parser.ties)} ) TIED pair constraints.
-    [ i ] It is recommended that the slave side has a finer mesh vs the master one.
-          If the number of 'mapped pairs' found is less than number of slave elements, 
-          you may need to increase the 'Position tolerance' value in the *Tie command.\n\n"""
-            # 1. First run the basic search to check for isolation/errors and pull basic tie data
-            # Locate matching node identities along touching zone boundaries
+            log_tie_info += f"""    Found a total of ( {len(parser.ties)} ) TIED pair constraint(s).
+    [ i ] It is recommended equal mesh, or that the slave side has a coarser mesh vs the master one.
+          This is to ensure stable area-weighted polygon clipping and mortar flux integration across overlapping patches.
+          However, this is automatically handled by pyBEM during PRE, which may show as '[ Auto-Swap ]'.\n\n"""
+            
+            def indent_text(text, prefix="    "):
+                return "\n".join(prefix + line if line.strip() else line for line in text.splitlines())
+
+            # 1. Resolve matching interface elements
             tie_registry = resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3)
     
-            # 2. Build the continuous projection matrix [W] and get precise unique lists of elements
-            W_mapping, master_elements, slave_elements = compute_tie_projection_matrix(tie_registry, zones_mesh, sorted_nodes)
-            
-            for tie_name, info in tie_registry.items():
-                n_el_pairs = len(info['element_pairs'])
-                n_zone_input_slave = tie_registry[tie_name]['n_input_slave_els']
-                n_zone_input_master = tie_registry[tie_name]['n_input_master_els']
-                
-                log_tie_info += f"--> TIE: [ {tie_name} ]\n"
-                log_tie_info += f"    Input Master Elements: ( {n_zone_input_master} ) | Input Slave Elements: ( {n_zone_input_slave} )\n"
-                log_tie_info += f"    Mapping Search Tolerance: ( {info['tolerance_used']} L )\n"
-                log_tie_info += f"    Interface Elements on Tied Zones : ( {n_el_pairs} ) mapped pairs\n"
-                
-                # Double safety: 
-                # handle the case where e.g. Tie_1 matched pairs but Tie_2 found 0 nodal pairs
-                if n_el_pairs == 0:
-                    log_tie_info += f"\n\n    [!] FATAL ERROR: Tie contact group '{tie_name}' failed to pair any elements!\n"
-                    with open(log_f, "a") as log:
-                        log.write(log_tie_info)
-                    raise RuntimeError(f"\n [pyBEM] PRE-PROCESSING FAILED: Tie '{tie_name}' has 0 matched elements. See '{log_f}'")
             if not tie_registry:
-                # Fatal Error: The parser had *Tie definitions, but completely failed to pair any nodes
                 log_tie_info += "\n" + "!"*60 + "\n"
                 log_tie_info += " FATAL ERROR: MODEL TIE PAIR PROBLEM(s) DETECTED\n"
                 log_tie_info += "!"*60 + "\n"
                 log_tie_info += " [!] CRITICAL: *Tie definitions exist, but 0 node pairs were matched.\n"
-                log_tie_info += "     REASON: The acoustic zones are physically disconnected.\n"
-                log_tie_info += "     SOLUTION: Increase the 'POSITION TOLERANCE' on your *Tie card in PrePoMax,\n"
-                log_tie_info += "               or check for mesh misalignments on TIED pair surfaces.\n"
                 log_tie_info += "!"*60 + "\n"
                 
+                print(log_tie_info)
                 with open(log_f, "a") as log:
                     log.write(log_tie_info)
-                raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: 0 tie connections matched. Zones are not connected. See '{log_f}'")
+                    log.flush()
+                raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: 0 tie connections matched. See '{log_f}'")
+
+            # 2. Build continuous projection weights & geometry diagnostic logs
+            W_slave_to_master, W_master_to_slave, master_elements, slave_elements, log_pre_ties = compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes)
+
+            # Append interface geometry diagnostic
+            log_tie_info += indent_text(log_pre_ties) + "\n\n"
+
+            # 3. Format mortar weights grouped per *TIE definition
+            weights_ties = format_per_tie_mortar_weights(tie_registry, W_slave_to_master, W_master_to_slave)
+            log_tie_info += indent_text(weights_ties) + "\n\n"
+
+            # 4. Build individual tie surface summaries
+            for tie_name, info in tie_registry.items():
+                tie_slave_eids = set(info['active_slave_eids'])
+                n_el_pairs = sum(
+                    len(master_weights) 
+                    for s_eid, master_weights in W_slave_to_master.items()
+                    if s_eid in tie_slave_eids
+                )
+                
+                m_surf_name = info['master_surface']
+                s_surf_name = info['slave_surface']
+                n_zone_input_slave = info['n_input_slave_els']
+                n_zone_input_master = info['n_input_master_els']
+                n_active_slave = len(info['active_slave_eids'])
+                n_active_master = len(info['active_master_eids'])
+                
+                log_tie_info += f"    --> TIE: [ {tie_name} ]\n"
+                if info.get('is_swapped'):
+                    log_tie_info += f"        [ Auto-Swap ] Master/Slave roles inverted: Slave designated as the coarser mesh surface; i.e. higher 'h_avg'.\n"
+    
+                log_tie_info += f"        Master Surface '{m_surf_name}': {n_zone_input_master} total elements | Active Sub-Patch: {n_active_master} elements (h_avg = {info['h_master']:.4f})\n"
+                log_tie_info += f"        Slave Surface '{s_surf_name}': {n_zone_input_slave} total elements | Active Sub-Patch: {n_active_slave} elements (h_avg = {info['h_slave']:.4f})\n"
+                log_tie_info += f"        Mapping Search Tolerance: {info['tolerance_used']} L\n"
+                log_tie_info += f"        Area-Weighted Collocation Mapped Pairs: {n_el_pairs} element intersections\n\n"
+                
+                if n_el_pairs == 0:
+                    log_tie_info += f"\n    [!] FATAL ERROR: Tie contact group '{tie_name}' failed to pair any elements!\n"
+                    print(log_tie_info)
+                    with open(log_f, "a") as log:
+                        log.write(log_tie_info)
+                        log.flush()
+                    raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: Tie '{tie_name}' has 0 matched element intersections. See '{log_f}'")
+
         else:
             tie_registry = {}
-            W_mapping = {}
+            W_slave_to_master = {}
+            W_master_to_slave = {}
             master_elements = []
             slave_elements = []
-            log_tie_info += " [ i ] No *Tie constraints active or found in model.\n"
+            log_tie_info += "    [ i ] No *Tie constraints active or found in model.\n"
             
         print(log_tie_info)
-        # Re-flush everything to LOG
         with open(log_f, "a") as log:
             log.write(log_tie_info)
             log.flush()
-        
+
         # ==================================================================
         # --- 10. MULTI-ZONE MATRIX ALLOCATION & SYSTEM OFFSETS ---
         # ==================================================================
@@ -266,11 +290,11 @@ def start_pybem_app():
         print(f"{'=' * 80}")
         print(f"*** ACOUSTICS multi-zone job started at:  {time.ctime()}")
         print(f"{'=' * 80}")
-        print(f"--> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) <-- \n{str_CPUs}")
+        print(f"==> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) <== \n{str_CPUs}")
         
         with open(log_f, "a") as log:
             log.write(f"\n{'=' * 98}\n*** ACOUSTICS multi-zone job started at: {time.ctime()}\n{'=' * 98}")
-            log.write(f"\n--> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] <-- \n")
+            log.write(f"\n==> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] <== \n")
             log.write(str_CPUs)
             log.flush()
 
@@ -396,7 +420,8 @@ def start_pybem_app():
             'zone_offsets': zone_offsets,
             'total_matrix_size': total_matrix_size,
             'tie_registry': tie_registry,
-            'W_mapping': W_mapping,  
+            'W_slave_to_master': W_slave_to_master,  
+            'W_master_to_slave': W_master_to_slave,
             'master_elements': master_elements, 
             'slave_elements': slave_elements,
             # --- INJECT THE FLAT GLOBAL MAPS AND SIZES ---
@@ -549,6 +574,13 @@ def start_pybem_app():
         # 13.5 Finalize and write complete VTU outputs to disk
         exporter.finalise()
 
+        # # DEBUG
+        # print("global_p_surf")
+        # print(global_p_surf)
+        # print("global_v_surf")
+        # print(global_v_surf)
+        # # DEBUG_end
+
         # ==================================================================
         # --- 13.6 COMPUTE AND EXPORT TOTAL SURFACE SOUND POWER ---
         # ==================================================================
@@ -560,6 +592,9 @@ def start_pybem_app():
             with open(log_f, "a") as log:
                 log.write(log_post)
                 log.flush()
+            # ----------------------------------
+            # ELEMENT-CENTROID POWER CALCULATION
+            # ----------------------------------
             from utils import calculate_total_sound_power, generate_power_flux_plot
             surf_pwr_labels = calculate_total_sound_power(
                 model_name = parser.model_name,
@@ -577,26 +612,27 @@ def start_pybem_app():
                 global_bem_areas = static_data['global_bem_areas'],
                 global_mics_areas = static_data['global_mics_areas'],
                 global_mics_normals = static_data['global_mics_normals'],
-                global_mics_elements_conn = static_data['global_mics_elements_conn']
+                global_mics_elements_conn = static_data['global_mics_elements_conn'],
+                tie_registry = tie_registry
             )
             # print(surf_pwr_labels)
-            for i in range(len(surf_pwr_labels)):
-                print(f"     {surf_pwr_labels[i]}")
+            for label in surf_pwr_labels:
+                print(f"     {label}")
                 with open(log_f, "a") as log:
-                    log.write(f"\n     {surf_pwr_labels[i]}")
+                    log.write(f"\n     {label}")
                     log.flush()
 
             csv_filename = f"{parser.model_name}_power.csv"
             png_filename = f"{parser.model_name}_power.png"
             log_post = f"\n     Freq / Power results file written to: ( '{csv_filename}' )"
             # Trigger the headless plot generation right after the CSV writes out
-            generate_power_flux_plot(model_name = parser.model_name)
+            generate_power_flux_plot(model_name = parser.model_name, suffix="")
             log_post += f"\n     Freq / Power graph plotted to: ( '{png_filename}' )"
             print(log_post)
             with open(log_f, "a") as log:
                 log.write(log_post)
                 log.flush()
-        
+            
         t_exp_1 = time.time()
         all_t_exp += t_exp_1 - t_exp_0
         # --- Final Timing Summary Calculations --- 
@@ -610,11 +646,12 @@ def start_pybem_app():
         avg_export = avg_to_nodes + avg_vtu
 
         summary_log = f"""
- [ i ] Shared Memory released.
 
---> COMPLETED all Multi-Zone Frequency Steps <--
+==> COMPLETED all Multi-Zone Frequency Steps <==
     Function 'averaged_at_nodes' took: ( {all_t_avr:.2f}s )
     Export Write and VTU Processing:   ( {all_t_exp:.2f}s )
+
+ [ i ] Shared Memory released.
 {'-' * 80}"""
         print(summary_log)
         with open(log_f, "a") as log:

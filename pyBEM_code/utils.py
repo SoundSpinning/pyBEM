@@ -207,6 +207,54 @@ def get_zone_data(parser, sorted_nodes):
             
     return zone_data
 
+def evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
+    """
+    Evaluates characteristic lengths (h_bar) of both candidate surfaces.
+    Forces the side with larger h_bar (COARSER mesh) to be the SLAVE 
+    for point-collocation sound power conservation.
+    """
+    def calc_surface_hbar(eids):
+        total_area = 0.0
+        weighted_h = 0.0
+        for z_name, z_mesh in zones_mesh.items():
+            for idx, eid in enumerate(z_mesh['elements'].keys()):
+                if eid in eids:
+                    # Retrieve element nodes and max edge length (h)
+                    conn = z_mesh['elements'][eid]
+                    coords = np.array([sorted_nodes[nid] for nid in conn])
+                    # Simple h_char estimate via maximum bounding distance or edge length
+                    h_elem = max(np.linalg.norm(coords[i] - coords[j]) 
+                                 for i in range(len(coords)) for j in range(i+1, len(coords)))
+                    
+                    # Area calculation for weighting
+                    _, _, area, _, _, _ = get_element_properties(sorted_nodes, conn)
+                    total_area += area
+                    weighted_h += area * h_elem
+        return weighted_h / total_area if total_area > 0 else 0.0
+
+    h_slave = calc_surface_hbar(slave_eids)
+    h_master = calc_surface_hbar(master_eids)
+
+    # FOR POINT-COLLOCATION: Force COARSE mesh to be the SLAVE.
+    # If the user-defined slave is FINER than the master (h_slave < h_master),
+    # swap so the coarser side (larger h_bar) becomes the slave.
+    is_swapped = False
+    if h_slave * 1.05 < h_master:  # 5% hysteresis buffer
+        is_swapped = True
+
+    # # If slave mesh is coarser than master mesh, swap roles
+    # is_swapped = False
+    # if h_slave > h_master * 1.05:  # 5% hysteresis buffer to prevent unnecessary flipping
+    #     is_swapped = True
+
+    return is_swapped, h_slave, h_master
+
+def format_section_header(title: str, indent: str = "    ") -> str:
+    """Formats a header block where '=' lines match the exact length of the title."""
+    header_text = f"*** {title} ***"
+    border = "=" * len(header_text)
+    return f"{indent}{border}\n{indent}{header_text}\n{indent}{border}"
+
 from scipy.spatial import cKDTree
 def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3):
     """
@@ -237,6 +285,16 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         
         slave_eids = parser.elsets.get(slave_elset, [])
         master_eids = parser.elsets.get(master_elset, [])
+        
+        # Evaluate mesh density & execute swap BEFORE pulling geometry:
+        is_swapped, h_s, h_m = evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes)
+
+        if is_swapped:
+            # Swap surface references for calculation
+            slave_eids, master_eids = master_eids, slave_eids
+            slave_surf_name, master_surf_name = master_surf_name, slave_surf_name
+            h_s, h_m = h_m, h_s
+        
         n_input_slave_els = len(slave_eids)
         n_input_master_els = len(master_eids)
 
@@ -266,76 +324,171 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         # Spatial Gap Matching Pass
         element_pairs = []
         for seid, (s_center, s_normal) in slave_data.items():
-            best_meid = None
-            min_lateral_dist = float('inf')
-            best_gap = float('inf')
+            s_conn = zones_mesh[slave_zone]['elements'][seid]
+            s_coords = np.array([sorted_nodes[nid] for nid in s_conn])
+            s_radius = max(np.linalg.norm(pt - s_center) for pt in s_coords)
 
-            # Phase 1: Project gap along the normal, filter by tolerance,
-            # and map to the closest spatial neighbour to catch dissimilar overlap.
             for meid, m_center in master_data.items():
-                # 1. Vector from slave centroid to master centroid
+                m_conn = zones_mesh[master_zone]['elements'][meid]
+                m_coords = np.array([sorted_nodes[nid] for nid in m_conn])
+                m_radius = max(np.linalg.norm(pt - m_center) for pt in m_coords)
+
                 vec = m_center - s_center
                 
-                # 2. Calculate true physical GAP via dot product with slave normal
+                # 1. Normal gap check
                 gap = abs(np.dot(vec, s_normal))
                 
-                # 3. Check if the element face falls within the gap tolerance
                 if gap <= tolerance:
-                    # Calculate lateral/sideways distance component to find the overlapping face
+                    # 2. Bounding sphere contact check (Sum of both radii)
                     lateral_vec = vec - np.dot(vec, s_normal) * s_normal
                     lateral_dist = np.linalg.norm(lateral_vec)
                     
-                    if lateral_dist < min_lateral_dist:
-                        min_lateral_dist = lateral_dist
-                        best_meid = meid
-                        best_gap = gap
-
-            if best_meid is not None:
-                element_pairs.append((best_meid, seid))  # (Master Element ID, Slave Element ID)
+                    if lateral_dist <= (s_radius + m_radius + 1e-6):
+                        element_pairs.append((meid, seid))
 
         if len(element_pairs) > 0:
             tie_registry[tie_name] = {
+                'slave_surface': slave_surf_name,
+                'master_surface': master_surf_name,
                 'slave_zone': slave_zone,
                 'master_zone': master_zone,
                 'element_pairs': element_pairs,
                 'tolerance_used': tolerance,
                 'n_input_slave_els': n_input_slave_els,
-                'n_input_master_els': n_input_master_els
+                'n_input_master_els': n_input_master_els,
+                'active_slave_eids': list({pair[1] for pair in element_pairs}),
+                'active_master_eids': list({pair[0] for pair in element_pairs}),
+                'is_swapped': is_swapped,
+                'h_slave': h_s,
+                'h_master': h_m
             }
 
     if len(tie_registry) == 0:
         raise RuntimeError(" [ ! ] 0 tie connections matched. Verify surface normal orientations.")
     return tie_registry
 
-def compute_tie_projection_matrix(tie_registry, zones_mesh, sorted_nodes):
+# NEW TIED pairs weighting method, area overlap approach 
+# for better accuracy across zones interfaces
+def ensure_ccw_2d(poly):
+    """Ensures a 2D polygon is wound counter-clockwise."""
+    if len(poly) < 3:
+        return poly
+    # Calculate signed area
+    x = [p[0] for p in poly]
+    y = [p[1] for p in poly]
+    # signed_area = 0.5 * (np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+    signed_area = 0.5 * (np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+    # If signed area is negative, it's clockwise -> reverse it
+    if signed_area < 0:
+        return poly[::-1]
+    return poly
+
+def clip_polygon_2d(poly1, poly2):
     """
-    TIED pair PRE-processing phase geometric projection calculator.
-    Builds the mapping matrix [W] for dissimilar interface meshes.
+    Sutherland-Hodgman polygon clipping algorithm in 2D.
+    Clips poly1 against the convex clipping polygon poly2.
+    Returns the vertices of the intersecting polygon.
+    Guaranteed to work if both polygons are explicitly forced to CCW first.
+    """
+    # Ensure strict CCW alignment for the clipping logic
+    p1 = ensure_ccw_2d(poly1)
+    p2 = ensure_ccw_2d(poly2)
+    
+    def inside(p, cp1, cp2):
+        # Strict CCW left-of-edge test
+        return (cp2[0] - cp1[0]) * (p[1] - cp1[1]) - (cp2[1] - cp1[1]) * (p[0] - cp1[0]) >= -1e-12
+
+    def intersection(cp1, cp2, s, e):
+        dc = [cp1[0] - cp2[0], cp1[1] - cp2[1]]
+        dp = [s[0] - e[0], s[1] - e[1]]
+        denom = dc[0] * dp[1] - dc[1] * dp[0]
+        if abs(denom) < 1e-12:
+            return s
+        n1 = cp1[0] * cp2[1] - cp1[1] * cp2[0]
+        n2 = s[0] * e[1] - s[1] * e[0]
+        return [(n1 * dp[0] - dc[0] * n2) / denom, (n1 * dp[1] - dc[1] * n2) / denom]
+
+    output_list = p1
+    cp1 = p2[-1]
+
+    for cp2 in p2:
+        input_list = output_list
+        output_list = []
+        if not input_list:
+            break
+        s = input_list[-1]
+        for e in input_list:
+            if inside(e, cp1, cp2):
+                if not inside(s, cp1, cp2):
+                    output_list.append(intersection(cp1, cp2, s, e))
+                output_list.append(e)
+            elif inside(s, cp1, cp2):
+                output_list.append(intersection(cp1, cp2, s, e))
+            s = e
+        cp1 = cp2
+    return output_list
+
+def compute_polygon_area_2d(vertices):
+    """Calculates the area of a 2D polygon using the Shoelace formula."""
+    if len(vertices) < 3:
+        return 0.0
+    x = [v[0] for v in vertices]
+    y = [v[1] for v in vertices]
+    return 0.5 * np.abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+
+def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
+    """
+    Geometric Area-Overlap Weight Calculator for Point-Collocation Tie Constraints.
+
+    Calculates 2D planar polygon intersection areas between non-conforming interface 
+    elements and normalizes them into scalar area fractions.
+
+    Mathematical Note:
+        This is an Area-Weighted Point-Collocation mapping, NOT a variational 
+        Dual-Mortar integration formulation. Because constraint equations are 
+        evaluated at single element centroids (point-collocation), exact power 
+        conservation across non-conforming interfaces requires the coarse surface 
+        to be designated as the Slave surface.
+
     Returns:
-      W_mapping: dict mapping slave_eid -> {master_eid: weight, ...}
-      master_eids_set: unique set of all master elements active in the tie
-      slave_eids_set: unique set of all slave elements active in the tie
+        W_slave_to_master (dict): 
+            Maps slave element IDs to master element IDs with weight w_s2m = A_ij / A_slave.
+            Used to interpolate Master pressures to Slave centroids.
+        W_master_to_slave (dict): 
+            Maps master element IDs to slave element IDs with weight w_m2s = A_ij / A_master.
+            Used to transfer Slave flux/velocities to Master elements.
     """
-    W_mapping = {}
+    W_slave_to_master = {}
+    W_master_to_slave = {}
     master_eids_set = set()
     slave_eids_set = set()
     
+    # log_pre_ties = ("\n" + "="*22)
+    log_pre_ties = (" TIED INTERFACE AREAS")
+    log_pre_ties += ("\n" + "="*22)
+
     for tie_name, tie_info in tie_registry.items():
         s_zone = tie_info['slave_zone']
         m_zone = tie_info['master_zone']
         tolerance = tie_info['tolerance_used']
         
-        # Pull geometric parameters for both interface zones safely
-        _, s_centers, _, s_normals, _, _ = prepare_geometry(sorted_nodes, zones_mesh[s_zone]['elements'])
-        _, m_centers, _, _, _, _ = prepare_geometry(sorted_nodes, zones_mesh[m_zone]['elements'])
+        s_elements = zones_mesh[s_zone]['elements']
+        m_elements = zones_mesh[m_zone]['elements']
         
-        s_eids_local = list(zones_mesh[s_zone]['elements'].keys())
-        m_eids_local = list(zones_mesh[m_zone]['elements'].keys())
+        # Pull geometric parameters
+        _, s_centers, _, s_normals, _, _ = prepare_geometry(sorted_nodes, s_elements)
+        _, m_centers, _, _, _, _ = prepare_geometry(sorted_nodes, m_elements)
         
-        # Isolate targeted element IDs specified by the tie surface cards
+        s_eids_local = list(s_elements.keys())
+        m_eids_local = list(m_elements.keys())
+        
         target_s_eids = {pair[1] for pair in tie_info['element_pairs']}
         target_m_eids = {pair[0] for pair in tie_info['element_pairs']}
         
+        # Local per-tie tracking for geometry diagnostics
+        tie_slave_area = 0.0
+        tie_intersected_area = 0.0
+
         for s_idx, seid in enumerate(s_eids_local):
             if seid not in target_s_eids:
                 continue
@@ -343,40 +496,90 @@ def compute_tie_projection_matrix(tie_registry, zones_mesh, sorted_nodes):
             s_center = s_centers[s_idx]
             s_normal = s_normals[s_idx]
             
+            # 1. Reconstruct Slave 3D Polygon Vertices from sorted_nodes
+            s_node_ids = s_elements[seid]
+            s_vertices_3d = np.array([sorted_nodes[nid] for nid in s_node_ids])
+            
+            # Build local 2D coordinate system on the slave element plane
+            ref_vec = np.array([1.0, 0.0, 0.0]) if abs(s_normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+            u_axis = np.cross(s_normal, ref_vec)
+            u_axis /= np.linalg.norm(u_axis)
+            v_axis = np.cross(s_normal, u_axis)
+            
+            # Project Slave to Local 2D Plane
+            s_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in s_vertices_3d]
+            s_area = compute_polygon_area_2d(s_vertices_2d)
+            
+            if s_area < 1e-12:
+                continue
+            
             overlapping_masters = []
             weights_raw = []
             
+            # 2. Filter & Project Candidate Master Elements
             for m_idx, meid in enumerate(m_eids_local):
                 if meid not in target_m_eids:
                     continue
-                    
+
                 vec = m_centers[m_idx] - s_center
                 gap = abs(np.dot(vec, s_normal))
                 
-                # Check if master element falls within normal proximity tolerance bubble
+                # Proximity check acts as the boundary filter
                 if gap <= tolerance:
-                    lateral_vec = vec - np.dot(vec, s_normal) * s_normal
-                    lateral_dist = np.linalg.norm(lateral_vec)
+                    m_node_ids = m_elements[meid]
+                    m_vertices_3d = np.array([sorted_nodes[nid] for nid in m_node_ids])
                     
-                    # Prevent division by zero if centroids align perfectly
-                    if lateral_dist < 1e-10:
-                        lateral_dist = 1e-10
-                        
-                    overlapping_masters.append(meid)
-                    weights_raw.append(1.0 / (lateral_dist ** 2))
+                    # Project Master onto the Slave's Local 2D Plane
+                    m_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in m_vertices_3d]
+                    
+                    # 3. Geometric Polygon Clipping
+                    intersection_polygon = clip_polygon_2d(s_vertices_2d, m_vertices_2d)
+                    intersection_area = compute_polygon_area_2d(intersection_polygon)
+                    
+                    if intersection_area > 1e-12:  # Physical overlap found
+                        overlapping_masters.append(meid)
+                        weights_raw.append(intersection_area)
             
+            # 4. Build Independent Weights for Pressure and Velocity
             if overlapping_masters:
                 slave_eids_set.add(seid)
-                sum_weights = sum(weights_raw)
-                W_mapping[seid] = {}
+                W_slave_to_master[seid] = {}
+                tie_slave_area += s_area
                 
-                # Normalize weights to ensure partition of unity (sum of weights = 1.0)
-                for m_eid, w_raw in zip(overlapping_masters, weights_raw):
-                    norm_w = w_raw / sum_weights
-                    W_mapping[seid][m_eid] = norm_w
-                    master_eids_set.add(m_eid)
+                for m_eid, area_ij in zip(overlapping_masters, weights_raw):
+                    if m_eid not in W_master_to_slave:
+                        W_master_to_slave[m_eid] = {}
                     
-    return W_mapping, list(master_eids_set), list(slave_eids_set)
+                    # Calculate true 3D master area
+                    m_node_ids = m_elements[m_eid]
+                    m_vertices_3d = np.array([sorted_nodes[nid] for nid in m_node_ids])
+                    
+                    if len(m_vertices_3d) == 3:
+                        m_area_true = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[1] - m_vertices_3d[0], m_vertices_3d[2] - m_vertices_3d[0]))
+                    else:  # Quad element
+                        area1 = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[1] - m_vertices_3d[0], m_vertices_3d[2] - m_vertices_3d[0]))
+                        area2 = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[2] - m_vertices_3d[0], m_vertices_3d[3] - m_vertices_3d[0]))
+                        m_area_true = area1 + area2
+
+                    # Store pure non-dimensional fractions
+                    w_master_fraction = area_ij / m_area_true
+                    w_slave_fraction = area_ij / s_area
+
+                    W_slave_to_master[seid][m_eid] = w_slave_fraction
+                    W_master_to_slave[m_eid][seid] = w_master_fraction
+
+                    master_eids_set.add(m_eid)
+                    tie_intersected_area += area_ij
+
+        # Append per-tie diagnostics to log_pre_ties
+        log_pre_ties += f"\n TIE: [{tie_name}] | Master: '{tie_info.get('master_surface', 'N/A')}' <---> Slave: '{tie_info.get('slave_surface', 'N/A')}'"
+        log_pre_ties += f"\n   Total Slave Surface Area:  {tie_slave_area:.6} L^2"
+        log_pre_ties += f"\n   Total Intersected Area:    {tie_intersected_area:.6} L^2"
+        log_pre_ties += f"\n   Area Conservation Error:   {abs(tie_slave_area - tie_intersected_area):.6} L^2\n"
+
+    log_pre_ties += ("="*70 + "\n")
+                    
+    return W_slave_to_master, W_master_to_slave, list(master_eids_set), list(slave_eids_set), log_pre_ties
 
 def get_global_offsets(zones_mesh, tie_registry):
     """
@@ -548,6 +751,40 @@ def get_total_gps(element_nodes):
         total_gps += (11 if len(nodes) == 3 else 14)
     return total_gps
 
+def format_per_tie_mortar_weights(tie_reg, W_s2m, W_m2s):
+    lines = []
+    for tie_name, reg_info in tie_reg.items():
+        tie_slave_eids = reg_info.get('active_slave_eids', [])
+        tie_master_eids = reg_info.get('active_master_eids', [])
+        m_surf_name = reg_info.get('master_surface', 'N/A')
+        s_surf_name = reg_info.get('slave_surface', 'N/A')
+        # lines.append("=" * 70)
+        lines.append(f" MORTAR INTERFACE WEIGHTS: [ {tie_name} ]")
+        lines.append(f" Master Surface: '{m_surf_name}' <---> Slave Surface: '{s_surf_name}'")
+        lines.append("=" * 70)
+        # --- Slave -> Master Mapping ---
+        lines.append("\n[ SLAVE -> MASTER (Area Fractions) ]")
+        lines.append(f"{'Slave EID':<10} | {'Master EIDs & Weights':<42} | {'Sum':<6}")
+        lines.append("-" * 65)
+        for s_eid in tie_slave_eids:
+            if s_eid in W_s2m:
+                m_dict = W_s2m[s_eid]
+                pairs = [f"M{m_eid}:{w:.3f}" for m_eid, w in m_dict.items()]
+                weight_sum = sum(m_dict.values())
+                lines.append(f"{s_eid:<10} | {', '.join(pairs):<42} | {weight_sum:.4f}")
+        # --- Master -> Slave Mapping ---
+        lines.append("\n[ MASTER -> SLAVE (Flux Distribution) ]")
+        lines.append(f"{'Master EID':<10} | {'Slave EIDs & Weights':<42} | {'Sum':<6}")
+        lines.append("-" * 65)
+        for m_eid in tie_master_eids:
+            if m_eid in W_m2s:
+                s_dict = W_m2s[m_eid]
+                pairs = [f"S{s_eid}:{w:.3f}" for s_eid, w in s_dict.items()]
+                weight_sum = sum(s_dict.values())
+                lines.append(f"{m_eid:<10} | {', '.join(pairs):<42} | {weight_sum:.4f}")
+        lines.append("=" * 70)
+    return "\n".join(lines)
+
 # NEW for multi-zone capa
 def averaged_at_nodes(nodes, elements, P_bem, bem_areas, elem_id_map, ordered_mic_ids=None, P_mics=None, nodal_id_map=None):
     """
@@ -607,36 +844,55 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, elem_id_map, ordered_mi
 
     return nodal_pressures
 
+# ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
 def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs, 
                                 global_p_surf, global_v_surf, 
                                 global_p_mics, global_v_mics_x, global_v_mics_y, global_v_mics_z,
                                 global_bem_elements_map, global_mics_nodes_map, 
                                 global_bem_areas, global_mics_areas, 
-                                global_mics_normals, global_mics_elements_conn):
+                                global_mics_normals, global_mics_elements_conn, 
+                                tie_registry=None):
     """
     Computes total sound power passing through BEM and MICS surfaces across all frequencies.
     Outputs net acoustic power transmission values to a single model_name_power.csv file.
     Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
+    If TIED pairs present, it also calculates the Active power for slave and master surfaces.
     """
 
-    surface_power_results = {surf_name: [] for surf_name in surfaces.keys()}
-    # SUM all power from all freqs, and areas for results output labels
-    surface_metrics = {surf_name: {'area': 0.0, 'total_energy_sum': 0.0} for surf_name in surfaces.keys()}
-    # Doing areas once
-    for surf_name, surf_elements in surface_elements.items():
+    # 1. Create extended surface dictionary to incorporate active tied sub-patches
+    all_surface_elements = dict(surface_elements)
+
+    if tie_registry:
+        for tie_name, info in tie_registry.items():
+            master_active_key = f"{tie_name}_Master"
+            slave_active_key = f"{tie_name}_Slave"
+            # master_active_key = f"{tie_name}_Master [Active]"
+            # slave_active_key = f"{tie_name}_Slave [Active]"
+
+            # Map active element sets saved during PRE mesh alignment
+            all_surface_elements[master_active_key] = info['active_master_eids']
+            all_surface_elements[slave_active_key] = info['active_slave_eids']
+            # all_surface_elements[master_active_key] = info['active_master_eids']
+            # all_surface_elements[slave_active_key] = info['active_slave_eids']
+
+    # Initialize container tracking
+    surface_power_results = {surf_name: [] for surf_name in all_surface_elements.keys()}
+    surface_metrics = {surf_name: {'area': 0.0, 'total_energy_sum': 0.0} for surf_name in all_surface_elements.keys()}
+
+    # 2. Compute Surface Areas (BEM vs MICS)
+    for surf_name, surf_elements in all_surface_elements.items():
         if len(surf_elements) == 0:
             continue
         first_eid = surf_elements[0]
         
         # Sum areas depending on BEM or MICS type
         if first_eid in global_bem_elements_map:
-            surface_metrics[surf_name]['area'] = sum(global_bem_areas[eid] for eid in surf_elements)
+            surface_metrics[surf_name]['area'] = sum(global_bem_areas[eid] for eid in surf_elements if eid in global_bem_areas)
         elif first_eid in global_mics_elements_conn:
-            surface_metrics[surf_name]['area'] = sum(global_mics_areas[meid] for meid in surf_elements)
+            surface_metrics[surf_name]['area'] = sum(global_mics_areas[meid] for meid in surf_elements if meid in global_mics_areas)
 
-    # --- Loop over each solved frequency step ---
+    # 3. Frequency Integration Loop
     for f_idx, freq in enumerate(freqs):
-        # Extract global arrays for the current frequency
         p_surf_f = global_p_surf[f_idx, :]
         v_surf_f = global_v_surf[f_idx, :]
         
@@ -645,7 +901,7 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
         vy_mics_f = global_v_mics_y[f_idx, :]
         vz_mics_f = global_v_mics_z[f_idx, :]
 
-        for surf_name, surf_elements in surface_elements.items():
+        for surf_name, surf_elements in all_surface_elements.items():
             if len(surf_elements) == 0:
                 surface_power_results[surf_name].append(0.0)
                 continue
@@ -656,30 +912,32 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
             # --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
             if first_eid in global_bem_elements_map:
                 for eid in surf_elements:
+                    if eid not in global_bem_elements_map:
+                        continue
                     g_idx = global_bem_elements_map[eid]
                     P_elem = p_surf_f[g_idx]
-                    V_elem = v_surf_f[g_idx]  # Already normal component scalar
+                    V_elem = v_surf_f[g_idx]  # Normal velocity scalar component
                     area_elem = global_bem_areas[eid]
 
                     # Real active normal intensity flux: 0.5 * Re{P * conj(V)}
-                    intensity_n = 0.5 * np.real(P_elem * np.conj(V_elem))
+                    # intensity_n = 0.5 * np.real(P_elem * np.conj(V_elem))
+                    # intensity_n = 0.5 * np.imag(P_elem * np.conj(V_elem))
+                    intensity_n = 0.5 * np.abs(P_elem * np.conj(V_elem))
                     total_surf_power += intensity_n * area_elem
 
-                # CONVENTION of signs:
-                # If it's a driving source boundary (Inlet/BC), net flux is into the volume (negative).
-                # We apply a sign inversion if the net sum is negative so that input power reads positive.
-                # For TIED boundaries, this preserves the natural balance check (Zone1 + Zone2 = 0).
-                if "tied" not in surf_name.lower() and total_surf_power < 0:
+                # Sign inversion for non-tied, inward-driving boundary sources
+                if "tied" not in surf_name.lower() and "[active]" not in surf_name.lower() and total_surf_power < 0:
                     total_surf_power = -total_surf_power
 
-            # --- CASE B: MICS SURFACE (NODAL-TO-ELEMENTAL RATIO) ---
+            # --- CASE B: MICS SURFACE (NODAL-TO-ELEMENTAL CENTROID) ---
             elif first_eid in global_mics_elements_conn:
                 for meid in surf_elements:
+                    if meid not in global_mics_elements_conn:
+                        continue
                     elem_nodes = global_mics_elements_conn[meid]
                     area_m_elem = global_mics_areas[meid]
                     normal_m_elem = global_mics_normals[meid]
 
-                    # Average nodal values to element centroid
                     P_centroid = 0.0 + 0.0j
                     Vx_centroid = 0.0 + 0.0j
                     Vy_centroid = 0.0 + 0.0j
@@ -698,50 +956,58 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
                     Vy_centroid /= num_nodes
                     Vz_centroid /= num_nodes
 
-                    # Project 3D velocity vector onto MICS element normal
+                    # Project 3D velocity vector onto MICS element normal unit vector
                     V_normal_centroid = (Vx_centroid * normal_m_elem[0] + 
                                          Vy_centroid * normal_m_elem[1] + 
                                          Vz_centroid * normal_m_elem[2])
 
-                    intensity_n = 0.5 * np.real(P_centroid * np.conj(V_normal_centroid))
+                    # Real active normal intensity flux: 0.5 * Re{P * conj(V)}
+                    # intensity_n = 0.5 * np.real(P_elem * np.conj(V_normal_centroid))
+                    # Imag reactive
+                    # intensity_n = 0.5 * np.imag(P_elem * np.conj(V_normal_centroid))
+                    # MAG intensity
+                    intensity_n = 0.5 * np.abs(P_elem * np.conj(V_normal_centroid))
                     total_surf_power += intensity_n * area_m_elem
 
-                # For an external field sphere of microphones, make the net output power positive
+                # Invert external field microphone signs if net power vector points inward
                 if total_surf_power < 0:
                     total_surf_power = -total_surf_power
 
-            # Track power result for current freq step
+            # Append step results
             surface_power_results[surf_name].append(total_surf_power)
-
-            # Accumulate integrated total sound power (TSW) across the whole sweep
             surface_metrics[surf_name]['total_energy_sum'] += total_surf_power
-    
-    # --- WRITE DATA TO CSV ---
+
+    # 4. Write CSV Export and Assemble Output Labels
     csv_filename = f"{model_name}_power.csv"
-    surface_names = list(surfaces.keys())
+    all_surf_names = list(all_surface_elements.keys())
+    surf_pwr_labels = []
 
     with open(csv_filename, mode='w', newline='') as csv_file:
         writer = csv.writer(csv_file)
         
         headers = ["Freq(Hz)"]
-        for sname in surface_names:
+        for sname in all_surf_names:
             A_val = surface_metrics[sname]['area']
             TSW_val = surface_metrics[sname]['total_energy_sum']
-            headers.append(f"{sname} | A = {A_val:.4} L**2 | TSW = {TSW_val:.4}")
+            
+            # Formatted column header and log string
+            hdr_str = f"{sname} | A = {A_val:.4} L**2 | TSW = {TSW_val:.4}"
+            headers.append(hdr_str)
+            surf_pwr_labels.append(hdr_str)
 
         writer.writerow(headers)
         
-        # Frequency step rows
+        # Write frequency rows
         for f_idx, freq in enumerate(freqs):
-            row = [freq] + [surface_power_results[sname][f_idx] for sname in surface_names]
+            row = [freq] + [surface_power_results[sname][f_idx] for sname in all_surf_names]
             writer.writerow(row)
-        
-        return headers[1:]
 
-def generate_power_flux_plot(model_name):
+    return surf_pwr_labels
+
+def generate_power_flux_plot(model_name, suffix):
     """
-    Reads the generated model_name_power.csv file and outputs a clean,
-    professional PNG graph tracking energy flux across all imported surfaces.
+    Reads the generated model_name_power.csv file and outputs a clean
+    PNG graph tracking energy flux across all imported surfaces.
     Uses a headless background rendering engine to minimize overhead.
     """
     try:
@@ -752,8 +1018,8 @@ def generate_power_flux_plot(model_name):
         print(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
         return
 
-    csv_filename = f"{model_name}_power.csv"
-    png_filename = f"{model_name}_power.png"
+    csv_filename = f"{model_name}_power{suffix}.csv"
+    png_filename = f"{model_name}_power{suffix}.png"
     
     frequencies = []
     plot_series = []  # List of dicts holding label, data, and parsed name
@@ -795,8 +1061,8 @@ def generate_power_flux_plot(model_name):
         name_lower = series['clean_name'].lower()
         full_lbl = series['full_label']
         
-        if "tied" in name_lower or "z1" in name_lower or "z2" in name_lower:
-            if "z2" in name_lower:
+        if "tie" in name_lower:
+            if "master" in name_lower:
                 plt.plot(frequencies, series['data'], label=full_lbl, 
                          linewidth=2.0, linestyle='--', color='#d62728', zorder=2)
             else:
@@ -818,82 +1084,6 @@ def generate_power_flux_plot(model_name):
     plt.legend(loc="best", frameon=True, facecolor="#ffffff", edgecolor="#cccccc", fontsize=8)
     plt.tight_layout()
     
-    plt.savefig(png_filename, dpi=150)
-    plt.close()
-    
-    # print(f" ---> Decorated power graph visual updated: [ {png_filename} ]")
-
-def old_generate_power_flux_plot(model_name):
-    """
-    Reads the generated model_name_power.csv file and outputs a clean,
-    professional PNG graph tracking energy flux across all imported surfaces.
-    Uses a headless background rendering engine to minimize overhead.
-    """
-    try:
-        import matplotlib
-        # Force a non-interactive backend so no GUI window or desktop subsystem is loaded
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-    except ImportError:
-        print(" [Warning]: Matplotlib not found. Skipping automated PNG plot generation.")
-        return
-
-    csv_filename = f"{model_name}_power.csv"
-    png_filename = f"{model_name}_power.png"
-    
-    frequencies = []
-    surface_data = {}
-    
-    # --- Read data back from the fresh CSV payload ---
-    with open(csv_filename, mode='r') as csv_file:
-        reader = csv.reader(csv_file)
-        headers = next(reader)
-        
-        surface_names = headers[1:]
-        for sname in surface_names:
-            surface_data[sname] = []
-            
-        for row in reader:
-            if not row:
-                continue
-            frequencies.append(float(row[0]))
-            for idx, sname in enumerate(surface_names):
-                surface_data[sname].append(float(row[idx + 1]))
-
-    # --- Build Plot ---
-    plt.figure(figsize=(8, 5), dpi=150)
-    
-    # Use a clean, professional color palette
-    # Differentiate TIED surfaces with distinct line styles so they don't block each other visually
-    for sname in surface_names:
-        name_lower = sname.lower()
-        if "tied" in name_lower or "z1" in name_lower or "z2" in name_lower:
-            if "z2" in name_lower:
-                # Plot z2 slightly thinner and beneath z1
-                plt.plot(frequencies, surface_data[sname], label=sname, 
-                         linewidth=2.0, linestyle='--', color='#d62728', zorder=2)
-            else:
-                # Plot z1 slightly thicker, dotted, and forced to the very top (zorder=3)
-                plt.plot(frequencies, surface_data[sname], label=sname, 
-                         linewidth=3.0, linestyle=':', color='#2ca02c', zorder=3)
-        else:
-            plt.plot(frequencies, surface_data[sname], label=sname, linewidth=2.5, zorder=1)
-
-    # Styling for engineering reports
-    plt.title(f"Acoustic Total Sound Power (Surfaces) — Model: {model_name}", fontsize=11, fontweight='bold', pad=12)
-    plt.xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
-    plt.ylabel("Sound Power", fontsize=10, labelpad=6)
-    
-    plt.grid(True, which="both", linestyle=":", color="#cccccc", alpha=0.8)
-    plt.axhline(0, color="#333333", linewidth=1.0, linestyle="-", alpha=0.5) # Explicit zero balance baseline
-    
-    # Use an engineering scientific notation formatter for the power axis
-    plt.gca().yaxis.set_major_formatter(plt.FormatStrFormatter('%.2e'))
-    
-    plt.legend(loc="best", frameon=True, facecolor="#ffffff", edgecolor="#cccccc", fontsize=9)
-    plt.tight_layout()
-    
-    # Save image out instantly
     plt.savefig(png_filename, dpi=150)
     plt.close()
 
