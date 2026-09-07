@@ -19,35 +19,40 @@ from exporter_2 import PVExporter
 from utils import (
     get_cpus, set_hardware_limits, get_ram, prepare_geometry, 
     get_zone_data, validate_and_log_zones, resolve_tie_interfaces, 
-    compute_tie_area_weights, get_global_offsets, format_per_tie_mortar_weights
+    compute_tie_area_weights, get_global_offsets, format_per_tie_mortar_weights,
+    setup_logger
 )
 
 # Configuration
 np.set_printoptions(threshold=100) # limit terminal prints size
 gc.disable()  # Disable automatic garbage collection
 
-
+# MAIN APP
 def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
-    print(f"{__solver__}")
-    
     # --- 1. COLLECT ARGUMENTS ---
     args = sys.argv[1:] # Skip the script name itself
-    # print(args)
     filename = None
     user_ncpus = None # Default is None, so auto-logic can take over
+    debug_mode = False
 
     for arg in args:
         if "=" in arg:
             key, val = arg.split("=", 1)
-            if key.lower() == "cpus":
+            clean_key = key.lstrip("-").lower()
+            
+            if clean_key == "cpus":
                 try:
                     user_ncpus = int(val)
                 except ValueError:
                     print(f" ( ! ) Warning: Invalid cpus value '{val}'. Using auto-parallel.")
+            elif clean_key == "debug":
+                debug_mode = val.lower() in ("true", "1", "yes")
             else:
-                raise RuntimeError(f" ( ! ) ERROR: Invalid parameter '{key}'. Did you mean 'cpus'?")
+                raise RuntimeError(f" ( ! ) ERROR: Unknown parameter '{key}'. Valid options are 'cpus=N' or 'debug=yes'.")
+        elif arg.lower() in ("--debug", "-debug"):
+            debug_mode = True
         else:
-            # If it doesn't have an '=', assume it's the filename
+            # If it doesn't have an '=', treat as input file
             filename = arg.strip()
 
     # --- 2. FALLBACK TO INTERACTIVE ---
@@ -73,18 +78,6 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         damping = parser.damping if parser.damping else {'value': 0.0}
         amps = parser.amplitudes
 
-        # # DEBUG
-        # print("\n=== DIAGNOSTIC 1: PARSER RAW MICS ===")
-        # print(f"Total entries in parser.mics_elements: {len(parser.mics_elements)}")
-        # if parser.mics_elements:
-        #     sample_eids = list(parser.mics_elements.keys())[:5]
-        #     print(f"Sample MICS element IDs from parser: {sample_eids}")
-
-        # # Check if element_to_zone holds the microphone elements
-        # mic_eids_in_zone_map = [eid for eid in parser.mics_elements if eid in parser.element_to_zone]
-        # print(f"Number of MICS elements successfully registered in element_to_zone: {len(mic_eids_in_zone_map)}\n\n")
-        # # DEBUG_end
-
         # --- 5. MULTI-ZONE GEOMETRY EXTRACTION ---
         # 5.1 Global Sort (Ensures index maps and arrays match input sequentially)
         sorted_nodes = dict(sorted(parser.nodes.items()))
@@ -95,11 +88,6 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         
         # 5.2 Extract separated BEM, MICS data by material zones
         zones_mesh = get_zone_data(parser, sorted_nodes)
-
-        # # DEBUG
-        # # print(parser.zone_to_elsets)
-        # print(zones_mesh)
-        # # DEBUG_end
         
         # 5.3 Count entire microphones across all zones for the memory allocator governor.
         # If there are no mics anywhere, this safely sums up to 0. 
@@ -107,30 +95,50 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         parser.n_mics_nodes = n_mics_nodes 
 
         # --- 6. INITIALISE LOG & ZONES DATA ---
-        # 6.1 Log file & prints setup
+        # 6.1 Log file & prints setup (Initializes directly into model_name.log)
         log_f = f"{parser.model_name}.log"
-        model_summary = parser.print_model_summary()
-        print(model_summary)
-        with open(log_f, "w") as log:
-            log.write(__solver__)
-            log.write(model_summary)
-            log.flush()
+        logger, file_logger = setup_logger(log_f, debug_mode=debug_mode)
+
+        # Write solver banner and model summary to log & terminal
+        logger.info(__solver__.strip())
+        logger.info(parser.print_model_summary())
+
+        if debug_mode:
+            logger.debug("-" * 72)
+            logger.debug("[DEBUG MODE ACTIVATED] Detailed diagnostic logging enabled for log file.")
+            logger.debug("-" * 72)
+
+        # DEBUG
+        logger.debug("\nDEBUG: === PARSER RAW MICS ===")
+        logger.debug(f"Total entries in parser.mics_elements: {len(parser.mics_elements)}")
+        if parser.mics_elements:
+            sample_eids = list(parser.mics_elements.keys())[:5]
+            logger.debug(f"Sample MICS element IDs from parser: {sample_eids}")
+
+        # Check if element_to_zone holds the microphone elements
+        mic_eids_in_zone_map = [eid for eid in parser.mics_elements if eid in parser.element_to_zone]
+        logger.debug(f"Number of MICS elements successfully registered in element_to_zone: {len(mic_eids_in_zone_map)}\n")
+        logger.debug(zones_mesh)
+        # DEBUG_end
+
         log_top = ''
 
         # 6.2 Execute Strict Water-Tight Checks & Log Summaries Per BEM Zone
         # This replaces the old single-domain geometry checks and establishes:
         #   - global_h_signs: Dict containing individual zone orientations (Interior -1.0 vs Exterior 1.0)
         #   - global_order_lengths: Dict tracking element lengths for Numba numerical integration bounds
-        log_info, global_h_signs, global_order_lengths = validate_and_log_zones(
+        log_zones_info, global_h_signs, global_order_lengths = validate_and_log_zones(
             zones_mesh, sorted_nodes, parser, log_f, log_top
         )
 
         # --- 7. SETUP GLOBAL EXPORTER PACKAGE (ParaView) ---
         # 7.1 Map nodal identifiers to a clean 0-indexed flat VTK table array
         nodal_id_map = {inp_id: i for i, inp_id in enumerate(sorted_node_ids)}
-        # # DEBUG
-        # print(nodal_id_map)
-        # # DEBUG_end
+
+        # DEBUG
+        logger.debug("\nDEBUG: === nodal input IDs --> index map ===")
+        logger.debug(nodal_id_map)
+        # DEBUG_end
         
         # 7.2 Accumulate all localized microphone arrays across zones into a unified export dictionary
         sorted_mics_els = {}
@@ -156,11 +164,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         # --- 8. RESOLVE BOUNDARY CONDITIONS MAPPING ---
         bc_map, log_bc_info, surface_to_elements = parser.get_bcs()
-        log_info += '\n' + log_bc_info
-        print(f"{log_info}")
-        with open(log_f, "a") as log:
-            log.write(log_info + '\n')
-            log.flush()
+        logger.info(f"{log_zones_info}")
+        logger.info(f"{log_bc_info}")
 
         # ==================================================================
         # --- 9. RESOLVE MULTI-ZONE TIED PAIRS ---
@@ -191,21 +196,18 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 log_tie_info += " [!] CRITICAL: *Tie definitions exist, but 0 node pairs were matched.\n"
                 log_tie_info += "!"*60 + "\n"
                 
-                print(log_tie_info)
-                with open(log_f, "a") as log:
-                    log.write(log_tie_info)
-                    log.flush()
+                logger.info(log_tie_info)
                 raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: 0 tie connections matched. See '{log_f}'")
 
             # 2. Build continuous projection weights & geometry diagnostic logs
             W_slave_to_master, W_master_to_slave, master_elements, slave_elements, log_pre_ties = compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes)
 
-            # Append interface geometry diagnostic
-            log_tie_info += indent_text(log_pre_ties) + "\n\n"
+            # Append interface areas
+            log_tie_info += indent_text(log_pre_ties) + "\n"
 
             # 3. Format mortar weights grouped per *TIE definition
             weights_ties = format_per_tie_mortar_weights(tie_registry, W_slave_to_master, W_master_to_slave)
-            log_tie_info += indent_text(weights_ties) + "\n\n"
+            log_tie_info += indent_text(weights_ties) + "\n"
 
             # 4. Build individual tie surface summaries
             for tie_name, info in tie_registry.items():
@@ -223,21 +225,18 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 n_active_slave = len(info['active_slave_eids'])
                 n_active_master = len(info['active_master_eids'])
                 
-                log_tie_info += f"    --> TIE: [ {tie_name} ]\n"
+                log_tie_info += f"\n    --> TIE: [ {tie_name} ]\n"
                 if info.get('is_swapped'):
                     log_tie_info += f"        [ Auto-Swap ] Master/Slave roles inverted: Slave designated as the coarser mesh surface; i.e. higher 'h_avg'.\n"
     
                 log_tie_info += f"        Master Surface '{m_surf_name}': {n_zone_input_master} total elements | Active Sub-Patch: {n_active_master} elements (h_avg = {info['h_master']:.4f})\n"
                 log_tie_info += f"        Slave Surface '{s_surf_name}': {n_zone_input_slave} total elements | Active Sub-Patch: {n_active_slave} elements (h_avg = {info['h_slave']:.4f})\n"
                 log_tie_info += f"        Mapping Search Tolerance: {info['tolerance_used']} L\n"
-                log_tie_info += f"        Area-Weighted Collocation Mapped Pairs: {n_el_pairs} element intersections\n\n"
+                log_tie_info += f"        Area-Weighted Collocation Mapped Pairs: {n_el_pairs} element intersections\n"
                 
                 if n_el_pairs == 0:
                     log_tie_info += f"\n    [!] FATAL ERROR: Tie contact group '{tie_name}' failed to pair any elements!\n"
-                    print(log_tie_info)
-                    with open(log_f, "a") as log:
-                        log.write(log_tie_info)
-                        log.flush()
+                    logger.info(log_tie_info)
                     raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: Tie '{tie_name}' has 0 matched element intersections. See '{log_f}'")
 
         else:
@@ -248,10 +247,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             slave_elements = []
             log_tie_info += "    [ i ] No *Tie constraints active or found in model.\n"
             
-        print(log_tie_info)
-        with open(log_f, "a") as log:
-            log.write(log_tie_info)
-            log.flush()
+        logger.info(log_tie_info)
 
         # ==================================================================
         # --- 10. MULTI-ZONE MATRIX ALLOCATION & SYSTEM OFFSETS ---
@@ -259,9 +255,10 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # Compute the exact memory matrix footprint for the solver
         zone_offsets, total_matrix_size = get_global_offsets(zones_mesh, tie_registry)
         
-        # # DEBUG
-        # print(zone_offsets)
-        # # DEBUG_end
+        # DEBUG
+        logger.debug(f"DEBUG: zone_offsets")
+        logger.debug(zone_offsets)
+        # DEBUG_end
         
         # --- Start Timers & UX Metric Initializations ---
         all_t_avr = 0
@@ -279,7 +276,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # Set initial hardware thread counts for the Numba compile phase
         set_num_threads(n_CPUs)  
         
-        str_CPUs = (f"""
+        log_CPUs = (f"""
  Number of CPUs found on this machine: ( {n_CPUs} ) |  Number of threads: ( {n_threads} )
  MAX number of CPUs assigned to Numba parallel loops in PRE is: ( {used_CPUs} )
  Available RAM found at job start:     ( {RAM_gb:.2f} GB )
@@ -289,18 +286,13 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
        Hold tight, it gets faster after, see times per Freq table in '{parser.model_name}.log'.
 """)
         for z_name, alloc in zone_offsets.items():
-            str_CPUs += f" --> Zone [ {z_name:<12} ]: Matrix Index Range [{alloc['start_idx']:>5} -> {alloc['start_idx'] + alloc['n_elements'] - 1:<5}] ( {alloc['n_elements']} elements )\n"
+            log_CPUs += f" --> Zone [ {z_name:<12} ]: Matrix Index Range [{alloc['start_idx']:>5} -> {alloc['start_idx'] + alloc['n_elements'] - 1:<5}] ( {alloc['n_elements']} elements )\n"
 
-        print(f"{'=' * 80}")
-        print(f"*** ACOUSTICS multi-zone job started at:  {time.ctime()}")
-        print(f"{'=' * 80}")
-        print(f"==> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) <== \n{str_CPUs}")
-        
-        with open(log_f, "a") as log:
-            log.write(f"\n{'=' * 98}\n*** ACOUSTICS multi-zone job started at: {time.ctime()}\n{'=' * 98}")
-            log.write(f"\n==> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] <== \n")
-            log.write(str_CPUs)
-            log.flush()
+        logger.info(f"\n{'=' * 70}")
+        logger.info(f"*** ACOUSTICS multi-zone job started at:  {time.ctime()} ***")
+        logger.info(f"{'=' * 70}")
+        logger.info(f"\n--> SOLVING {num_freqs} Frequencies [{min_freq:.1f}Hz --> {max_freq:.1f}Hz | delta_Hz = {del_freq:.2f}] (Steady State Direct) <--")
+        logger.info(log_CPUs)
 
         # ==================================================================
         # --- 11. LOCAL GEOMETRIC PRE-ASSEMBLY PASS (PER ZONE) ---
@@ -323,7 +315,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     
         for zone_name, z_mesh in zones_mesh.items():
             t_pre_0 = time.time()
-            print(f"\n --> Pre-assembling Geometric Static Kernels for Zone: [ {zone_name} ]")
+            logger.info(f" --> Pre-assembling BEM Geometric Static Kernels for Zone: [ {zone_name} ]")
             
             # 11.1 Extract BEM geometry data local to this zone
             z_nodes, z_centers, z_areas, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
@@ -360,7 +352,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     
             # 11.3 Process Optional Microphones within this zone
             if z_mesh['n_mics'] > 0:
-                print(f"     Pre-calculating microphone distances for Zone: [ {zone_name} ]")
+                logger.info(f"     Pre-calculating MICS distances for Zone: [ {zone_name} ]")
                 z_mics_nodes, z_mics_centers, z_mics_areas, z_mics_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['mics_elements'])
 
                 pm_G, pm_H, pm_R, pre_mics_dx, pre_mics_dy, pre_mics_dz, n_mics = pre_mics(z_mesh['mics_nodes'], z_centers, z_normals)
@@ -474,17 +466,13 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
        Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
        which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
 """)
-        print(log_pre_stats)
-        print(" [ i ] Promoting heavy arrays to Shared Memory...\n")
+        logger.info(log_pre_stats)
+        logger.info(" [ i ] Promoting heavy arrays to Shared Memory...")
         shm_static_data = promote_to_shm(static_data)
 
-        with open(log_f, "a") as log:
-            log.write(log_pre_stats)
-            log.write(f" [ i ] Promoting heavy arrays to Shared Memory...\n")
-            log.write(f"\n{'=' * 98}")
-            log.write(f"\n {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}")
-            log.write(f"\n{'=' * 98}\n")
-            log.flush()
+        file_logger.info(f"\n{'=' * 98}")
+        file_logger.info(f" {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}")
+        file_logger.info(f"{'=' * 98}")
 
         # ==================================================================
         # --- 13. PRE-ALLOCATE GLOBAL SOLVER RESULTS FOR SOUND POWER ---
@@ -504,7 +492,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # ==================================================================
         # --- 13. THE PARALLEL SWEEP POOL INTERFACE ---
         # ==================================================================
-        rslt_f = 'In Memory'  
+        rslt_f = 'In Memory'
+        # Terminal progress bar  
         print(f"{'=' * 80}")
         pbar = tqdm(total=num_freqs, desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e")
         
@@ -560,23 +549,23 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                     pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
                     # solve_RAM_2 = get_ram()  # Monitor local parent RAM step changes
                     
-                    # 13.4 Write to log using your exact scaling layout format
-                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}\n")
-                    
-                    with open(log_f, "a") as log:
-                        log.write(log_line)
-                        log.flush()  # Forces real-time tail tracking updates on disk
+                    # 13.4 Write to log
+                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}")
+                    file_logger.info(log_line)
                         
         finally:
             # Safely releases shared memory allocations regardless of success or sudden crash
             global_shm_cleanup()
-        
-        pbar.close()  # Close terminal progress visualization cleanly
+
+        file_logger.info(f"{'=' * 98}")
+        pbar.close()  # Close terminal progress bar
         t_exp_0 = time.time()
         print(f"{'=' * 80}")
         
         # 13.5 Finalize and write complete VTU outputs to disk
+        logger.info(f"\n --> Writing {num_freqs} binary frequency steps")
         exporter.finalise()
+        logger.info(f"     Export Complete. PV results file written to: ( '{parser.model_name}_Results.pvd' )")
 
         # # DEBUG
         # print("global_p_surf")
@@ -592,10 +581,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             log_post = f"""
  --> Calculating TOTAL SOUND POWER for all input surfaces:
      A = surface Area | TSW = Total Sound Power, from all frequencies"""
-            print(log_post)
-            with open(log_f, "a") as log:
-                log.write(log_post)
-                log.flush()
+            logger.info(log_post)
             # ----------------------------------
             # ELEMENT-CENTROID POWER CALCULATION
             # ----------------------------------
@@ -619,12 +605,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 global_mics_elements_conn = static_data['global_mics_elements_conn'],
                 tie_registry = tie_registry
             )
-            # print(surf_pwr_labels)
             for label in surf_pwr_labels:
-                print(f"     {label}")
-                with open(log_f, "a") as log:
-                    log.write(f"\n     {label}")
-                    log.flush()
+                logger.info(f"     {label}")
 
             csv_filename = f"{parser.model_name}_power.csv"
             png_filename = f"{parser.model_name}_power.png"
@@ -632,10 +614,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             # Trigger the headless plot generation right after the CSV writes out
             generate_power_flux_plot(model_name = parser.model_name, suffix="")
             log_post += f"\n     Freq / Power graph plotted to: ( '{png_filename}' )"
-            print(log_post)
-            with open(log_f, "a") as log:
-                log.write(log_post)
-                log.flush()
+            logger.info(log_post)
             
         t_exp_1 = time.time()
         all_t_exp += t_exp_1 - t_exp_0
@@ -651,18 +630,13 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         summary_log = f"""
 
-==> COMPLETED all Multi-Zone Frequency Steps <==
+--> COMPLETED all Multi-Zone Frequency Steps <--
     Function 'averaged_at_nodes' took: ( {all_t_avr:.2f}s )
     Export Write and VTU Processing:   ( {all_t_exp:.2f}s )
 
  [ i ] Shared Memory released.
-{'-' * 80}"""
-        print(summary_log)
-        with open(log_f, "a") as log:
-            log.write(summary_log)
-            log.flush()
-
-            def SUMMARY(): return f"""
+"""
+        summary_log += f"""
     ==========================
     *** SIMULATION SUMMARY ***
     ==========================
@@ -676,14 +650,13 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     Open '{parser.model_name}_Results.pvd' in ParaView.
 {"=" * 98}
 """
-            print(SUMMARY())
-            log.write("\n"+SUMMARY())
+        logger.info(summary_log)
     except ValueError as e:
-        print(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
-        traceback.print_exc()
+        logger.exception(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
+        # traceback.print_exc()
     except Exception as e:
-        print(f"\n[ERROR] {e}")
-        traceback.print_exc()
+        logger.exception(f"\n[ERROR] {e}")
+        # traceback.print_exc()
 
 def main():
     """Application entry point: manages hardware initialization and runs pyBEM."""
@@ -701,19 +674,5 @@ def main():
     
     start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb)
 
-
 if __name__ == "__main__":
     main()
-
-# if __name__ == "__main__":
-#     from utils import get_cpus, set_hardware_limits
-#     # Get number of physical CPUs to pass onto Numpy libraries for the solve
-#     # This is required before any `import numpy`
-#     n_CPUs, n_threads, RAM_gb = get_cpus()
-#     used_CPUs = n_CPUs
-#     # This makes sure at the start that all solve libraries are set to a CPU max.
-#     # This is to minimise race conditions on multi-threading.
-#     set_hardware_limits(used_CPUs)
-#     # AFTER, in the code we do try better with Numba, as it has the function
-#     # set_num_threads(), which the other libraries don't.
-#     start_pybem_app()

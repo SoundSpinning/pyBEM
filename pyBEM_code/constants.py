@@ -53,14 +53,14 @@ def TOP_LOG_LINES(self):
     surf_lines = []
     for s_name, s_info in self.surfaces.items():
         elset = s_info.get('elset', 'N/A')
-        surf_lines.append(f"        • '{s_name}': elset = '{elset}'")
+        surf_lines.append(f"        * '{s_name}': elset = '{elset}'")
     surf_str = "\n".join(surf_lines) if surf_lines else "        None"
 
     # 2. Tied Pairs
     tie_lines = []
     for t in self.ties:
         tol = t.get('tolerance', 'Auto')
-        tie_lines.append(f"        • [{t['name']}] Master: '{t['master']}' <---> Slave: '{t['slave']}' (Tol: {tol})")
+        tie_lines.append(f"        * [{t['name']}] Master: '{t['master']}' <---> Slave: '{t['slave']}' (Tol: {tol})")
     tie_str = "\n".join(tie_lines) if tie_lines else "        None"
 
     # 3. Materials
@@ -68,13 +68,13 @@ def TOP_LOG_LINES(self):
     for m_name, m_props in self.materials.items():
         rho = m_props.get('density', 0.0)
         c = m_props.get('c', 0.0)
-        mat_lines.append(f"        • '{m_name}': rho = {rho:.3e}, c = {c:.2f}")
+        mat_lines.append(f"        * '{m_name}': rho = {rho:.3e}, c = {c:.2f}")
     mat_str = "\n".join(mat_lines) if mat_lines else "        None"
 
     # 4. BEM Zones
     zone_lines = []
     for z_name, elsets in self.zone_to_elsets.items():
-        zone_lines.append(f"        • Zone '{z_name}': elsets = {elsets}")
+        zone_lines.append(f"        * Zone '{z_name}': elsets = {elsets}")
     zone_str = "\n".join(zone_lines) if zone_lines else "        None"
 
     # 5. Boundary Conditions
@@ -83,7 +83,7 @@ def TOP_LOG_LINES(self):
         b_type = bc.get('type', 'UNKNOWN')
         b_set = bc.get('set', 'N/A')
         b_val = bc.get('val', 0)
-        bc_lines.append(f"        • Type: {b_type:<5} | Set: '{b_set}' | Value: {b_val}")
+        bc_lines.append(f"        * Type: {b_type:<5} | Set: '{b_set}' | Value: {b_val}")
     bc_str = "\n".join(bc_lines) if bc_lines else "        None"
 
     # 6. Damping

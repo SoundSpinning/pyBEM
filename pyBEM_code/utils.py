@@ -2,6 +2,70 @@ from collections import defaultdict
 import psutil
 import os
 import csv
+import logging
+import sys
+import argparse
+
+def parse_cli_args():
+    """Parses command line arguments using standard CLI conventions."""
+    parser = argparse.ArgumentParser(description="pyBEM - Boundary Element Method Acoustics Solver")
+    
+    # Positional argument (optional, so fallback interactive mode works)
+    parser.add_argument("filename", nargs="?", default=None, help="Input file path (*.inp)")
+    
+    # Flag: --cpus=N or --cpus N
+    parser.add_argument("--cpus", type=int, default=None, help="Number of physical CPUs for parallel sweep")
+    
+    # Flag: --debug (boolean switch: present = True, absent = False)
+    parser.add_argument("--debug", action="store_true", help="Enable verbose DEBUG logging")
+
+    return parser.parse_args()
+
+def setup_logger(log_filename, debug_mode=False):
+    """
+    Configures pyBEM loggers:
+    - logger ("pyBEM"): Handles standard messages (terminal & file).
+    - file_logger ("pyBEM.file_only"): Handles tables/diagnostics (file ONLY).
+    """
+    # 1. Main Logger
+    logger = logging.getLogger("pyBEM")
+    
+    # Clear previous handlers on parent & child to prevent duplication
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    file_logger = logging.getLogger("pyBEM.file_only")
+    if file_logger.hasHandlers():
+        file_logger.handlers.clear()
+
+    # Master levels
+    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+    file_logger.setLevel(logging.INFO)
+    
+    # Prevent child logger from passing messages to main logger's console handler
+    file_logger.propagate = False 
+
+    file_formatter = logging.Formatter('%(message)s')
+
+    # Shared File Handler
+    file_handler = logging.FileHandler(log_filename, mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+    file_handler.setFormatter(file_formatter)
+
+    # Console Handler (Terminal)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(file_formatter)
+
+    # Attach handlers:
+    # Main logger gets BOTH file and console
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+
+    # File-only logger gets ONLY file_handler
+    file_logger.addHandler(file_handler)
+
+    return logger, file_logger
 
 def get_cpus():
     # CPUs
@@ -81,7 +145,7 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(z_elements, bem_centers, bem_areas, bem_normals)
         
         log_info += f"\n--> ZONE: [ {zone_name} ]"
-        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.3f} L**2 )"
+        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.6} L**2 )"
         log_info += f"\n    CoG of BEM zone:            [ {bem_CoG[0]:.2f}, {bem_CoG[1]:.2f}, {bem_CoG[2]:.2f} ] L"
         log_info += f"\n    Max Element Aspect Ratio:   ( {np.max(elem_ratio):.2f} )"
         log_info += f"\n    Element Size (approx):      ( {order_length:.2f} L )"
@@ -102,7 +166,7 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         if bem_total_vol > 1e-9:
             global_h_signs[zone_name] = -1.0
             log_info += f"""
-    Closed (+) Volume detected: ( {bem_total_vol:.3f} L**3 )
+    Closed (+) Volume detected: ( {bem_total_vol:.6} L**3 )
     -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
 """
         elif bem_total_vol < -1e-9:
@@ -759,11 +823,11 @@ def format_per_tie_mortar_weights(tie_reg, W_s2m, W_m2s):
         m_surf_name = reg_info.get('master_surface', 'N/A')
         s_surf_name = reg_info.get('slave_surface', 'N/A')
         # lines.append("=" * 70)
-        lines.append(f" MORTAR INTERFACE WEIGHTS: [ {tie_name} ]")
+        lines.append(f"\n MORTAR INTERFACE WEIGHTS: [ {tie_name} ]")
         lines.append(f" Master Surface: '{m_surf_name}' <---> Slave Surface: '{s_surf_name}'")
         lines.append("=" * 70)
         # --- Slave -> Master Mapping ---
-        lines.append("\n[ SLAVE -> MASTER (Area Fractions) ]")
+        lines.append("[ SLAVE -> MASTER (Area Fractions) ]")
         lines.append(f"{'Slave EID':<10} | {'Master EIDs & Weights':<42} | {'Sum':<6}")
         lines.append("-" * 65)
         for s_eid in tie_slave_eids:
