@@ -78,6 +78,15 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         damping = parser.damping if parser.damping else {'value': 0.0}
         amps = parser.amplitudes
 
+        # 4.2 Log file & prints setup (Initializes directly into model_name.log)
+        log_f = f"{parser.model_name}.log"
+        log_f_debug = f"{parser.model_name}_debug.log"
+
+        for f in [log_f, log_f_debug]:
+            if os.path.exists(f):
+                os.remove(f)
+        logger, file_logger = setup_logger(log_f, debug_mode=debug_mode)
+
         # --- 5. MULTI-ZONE GEOMETRY EXTRACTION ---
         # 5.1 Global Sort (Ensures index maps and arrays match input sequentially)
         sorted_nodes = dict(sorted(parser.nodes.items()))
@@ -94,19 +103,14 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         n_mics_nodes = sum(zone['n_mics'] for zone in zones_mesh.values())
         parser.n_mics_nodes = n_mics_nodes 
 
-        # --- 6. INITIALISE LOG & ZONES DATA ---
-        # 6.1 Log file & prints setup (Initializes directly into model_name.log)
-        log_f = f"{parser.model_name}.log"
-        logger, file_logger = setup_logger(log_f, debug_mode=debug_mode)
-
-        # Write solver banner and model summary to log & terminal
+        # 5.4 Write solver banner and model summary to log & terminal
         logger.info(__solver__.strip())
         logger.info(parser.print_model_summary())
 
         if debug_mode:
-            logger.debug("-" * 72)
-            logger.debug("[DEBUG MODE ACTIVATED] Detailed diagnostic logging enabled for log file.")
-            logger.debug("-" * 72)
+            logger.info("-" * 80)
+            logger.info(f"[DEBUG MODE ACTIVATED] Writing some diagnostics to file: '{parser.model_name}_debug.log'")
+            logger.info("-" * 80)
 
         # DEBUG
         logger.debug("\nDEBUG: === PARSER RAW MICS ===")
@@ -123,7 +127,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         log_top = ''
 
-        # 6.2 Execute Strict Water-Tight Checks & Log Summaries Per BEM Zone
+        # --- 6. ZONES DATA CHECKS ---
+        # 6.1 Execute Strict Water-Tight Checks & Log Summaries Per BEM Zone
         # This replaces the old single-domain geometry checks and establishes:
         #   - global_h_signs: Dict containing individual zone orientations (Interior -1.0 vs Exterior 1.0)
         #   - global_order_lengths: Dict tracking element lengths for Numba numerical integration bounds
@@ -180,8 +185,9 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         if has_global_ties:
             log_tie_info += f"""    Found a total of ( {len(parser.ties)} ) TIED pair constraint(s).
     [ i ] It is recommended equal mesh, or that the slave side has a coarser mesh vs the master one.
-          This is to ensure stable area-weighted polygon clipping and mortar flux integration across overlapping patches.
-          However, this is automatically handled by pyBEM during PRE, which may show as '[ Auto-Swap ]'.\n\n"""
+          This is to ensure stable area-weighted polygon clipping and mortar flux integration 
+          across overlapping patches. However, this is automatically handled by pyBEM during PRE, 
+          which shows as '[ Auto-Swap ]'.\n\n"""
             
             def indent_text(text, prefix="    "):
                 return "\n".join(prefix + line if line.strip() else line for line in text.splitlines())
@@ -501,7 +507,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             with ProcessPoolExecutor(
                 max_workers = num_workers,
                 initializer = init_worker,
-                initargs = (shm_static_data, threads_per_worker)
+                initargs = (shm_static_data, threads_per_worker, log_f, debug_mode)
             ) as executor:
                 
                 # Submit all multi-zone frequency calculations to the pool

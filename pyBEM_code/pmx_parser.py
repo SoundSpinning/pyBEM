@@ -62,7 +62,6 @@ class PMXParser:
 
         # Add the end of the file as a "final index"
         key_indices.append(len(all_lines))
-        # print(key_indices)
 
         # STEP 2: Loop through the blocks and route them
         for j in range(len(key_indices) - 1):

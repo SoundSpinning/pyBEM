@@ -2,9 +2,13 @@ from collections import defaultdict
 import psutil
 import os
 import csv
-import logging
 import sys
 import argparse
+import logging
+
+# Module-level loggers (automatically connected to setup_logger from main.py)
+logger = logging.getLogger("pyBEM")           # Dual output (Terminal + Log file)
+file_logger = logging.getLogger("pyBEM.file_only") # File-only output
 
 def parse_cli_args():
     """Parses command line arguments using standard CLI conventions."""
@@ -27,14 +31,67 @@ def setup_logger(log_filename, debug_mode=False):
     - logger ("pyBEM"): Handles standard messages (terminal & file).
     - file_logger ("pyBEM.file_only"): Handles tables/diagnostics (file ONLY).
     """
-    # 1. Main Logger
     logger = logging.getLogger("pyBEM")
+    file_logger = logging.getLogger("pyBEM.file_only")
+
+    # Clear handlers on re-initialization to prevent duplicates
+    if logger.hasHandlers():
+        logger.handlers.clear()
+    if file_logger.hasHandlers():
+        file_logger.handlers.clear()
+
+    # Master logger level MUST be DEBUG when debug_mode is active
+    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+    file_logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+    file_logger.propagate = False
+
+    file_formatter = logging.Formatter('%(message)s')
+
+    # 1. Main File Handler -> ALWAYS writes to model_name.log (INFO and above)
+    main_file_handler = logging.FileHandler(log_filename, mode='a', encoding='utf-8')
+    main_file_handler.setLevel(logging.INFO)
+    main_file_handler.setFormatter(file_formatter)
+
+    logger.addHandler(main_file_handler)
+    file_logger.addHandler(main_file_handler)
+
+    # 2. Console Handler -> Terminal output (INFO and above)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(file_formatter)
+    logger.addHandler(console_handler)
+
+    # 3. Dedicated Debug Handler -> Captures ONLY DEBUG output in model_name_debug.log
+    if debug_mode:
+        debug_filename = log_filename.replace(".log", "_debug.log")
+        debug_file_handler = logging.FileHandler(debug_filename, mode='a', encoding='utf-8')
+        debug_file_handler.setLevel(logging.DEBUG)
+        debug_file_handler.setFormatter(file_formatter)
+
+        # Inline lambda filter: Blocks INFO logs from polluting model_name_debug.log
+        debug_file_handler.addFilter(lambda record: record.levelno == logging.DEBUG)
+
+        logger.addHandler(debug_file_handler)
+        file_logger.addHandler(debug_file_handler)
+
+    return logger, file_logger
+
+def old_setup_logger(log_filename, debug_mode=False, name_prefix="pyBEM"):
+    """
+    Configures pyBEM loggers:
+    - logger ("pyBEM"): Handles standard messages (terminal & file).
+    - file_logger ("pyBEM.file_only"): Handles tables/diagnostics (file ONLY).
+    """
+    main_name = name_prefix
+    file_only_name = f"{name_prefix}.file_only"
+    # 1. Main Logger
+    logger = logging.getLogger(main_name)
     
     # Clear previous handlers on parent & child to prevent duplication
     if logger.hasHandlers():
         logger.handlers.clear()
         
-    file_logger = logging.getLogger("pyBEM.file_only")
+    file_logger = logging.getLogger(file_only_name)
     if file_logger.hasHandlers():
         file_logger.handlers.clear()
 
@@ -257,17 +314,6 @@ def get_zone_data(parser, sorted_nodes):
             zone_data[zone_name]['mics_nodes'] = np.empty((0, 3), dtype=np.float32)
             zone_data[zone_name]['n_mics'] = 0
             zone_data[zone_name]['mics_nodes_dict'] = {}
-        
-        # # DEBUG
-        # print(f"=== DIAGNOSTIC 2: GEOMETRY EXTRACTION FOR ZONE [ {zone_name} ] ===")
-        # local_mic_elements = zone_data[zone_name].get('mics_elements', {})
-        # print(f"  -> Number of MICS elements filtered into this zone: {len(local_mic_elements)}")
-
-        # if 'mics_nodes_dict' in zone_data[zone_name]:
-        #     print(f"  -> Number of unique MICS nodes in mics_nodes_dict: {len(zone_data[zone_name]['mics_nodes_dict'])}\n")
-        # elif 'mics_nodes' in zone_data[zone_name]:
-        #     print(f"  -> Shape of mics_nodes array: {zone_data[zone_name]['mics_centers'].shape}\n")
-        # # DEBUG_end
             
     return zone_data
 
@@ -341,7 +387,7 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         master_surface = parser.surfaces.get(master_surf_name)
         
         if not slave_surface or not master_surface:
-            print(f" [ ! ] Warning: Tie '{tie_name}' references missing surfaces.")
+            logger.info(f" [ ! ] Warning: Tie '{tie_name}' references missing surfaces.")
             continue
             
         slave_elset = slave_surface.get('elset', slave_surf_name)
@@ -382,7 +428,7 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
                     master_data[eid] = z_centers[idx]
 
         if not slave_zone or not master_zone:
-            print(f" [ ! ] Warning: Skipping Tie '{tie_name}' - Zone ownership unresolved.")
+            logger.info(f" [ ! ] Warning: Skipping Tie '{tie_name}' - Zone ownership unresolved.")
             continue
 
         # Spatial Gap Matching Pass
@@ -1079,7 +1125,7 @@ def generate_power_flux_plot(model_name, suffix):
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
     except ImportError:
-        print(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
+        logger.info(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
         return
 
     csv_filename = f"{model_name}_power{suffix}.csv"
