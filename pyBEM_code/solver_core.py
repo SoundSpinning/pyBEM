@@ -181,7 +181,7 @@ def reconstruct_master_velocity(global_solution, master_eid, W_slave_to_master, 
     v_master = sum( w_m2s * lambda_s )
     """
     if master_eid not in W_master_to_slave:
-        raise ValueError(f"\n[Tie Error] Master element {master_eid} not found in W_master_to_slave.")
+        raise ValueError(f"\n [!] ERROR Master element {master_eid} not found in W_master_to_slave.")
 
     v_master = 0.0 + 0.0j
 

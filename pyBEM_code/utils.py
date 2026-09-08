@@ -229,7 +229,7 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         elif bem_total_vol < -1e-9:
             global_h_signs[zone_name] = 1.0
             log_info += f"""
-    Closed (-) Volume detected: ( {bem_total_vol:.3f} L**3 )
+    Closed (-) Volume detected: ( {bem_total_vol:.6} L**3 )
     -> Normals point INWARDS ==> Assuming EXTERIOR Analysis
 """
         else:
@@ -240,9 +240,8 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
     return log_info, global_h_signs, global_order_lengths
 
 def _write_and_fail(log_f, log_top, log_info):
-    with open(log_f, "w") as log:
-        log.write(log_top + log_info)
-    raise RuntimeError(f"\n [pyBEM] PRE-PROCESSING GEOMETRY VALIDATION FAILED. See log file '{log_f}' for further details.\n")
+    logger.error(log_top + log_info)
+    raise RuntimeError(f"\n [!] PRE-PROCESSING GEOMETRY VALIDATION FAILED. See log file '{log_f}' for further details.\n")
 
 def get_zone_data(parser, sorted_nodes):
     """
@@ -472,9 +471,6 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
                 'h_slave': h_s,
                 'h_master': h_m
             }
-
-    if len(tie_registry) == 0:
-        raise RuntimeError(" [ ! ] 0 tie connections matched. Verify surface normal orientations.")
     return tie_registry
 
 # NEW TIED pairs weighting method, area overlap approach 
@@ -1125,7 +1121,7 @@ def generate_power_flux_plot(model_name, suffix):
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
     except ImportError:
-        logger.info(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
+        logger.warning(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
         return
 
     csv_filename = f"{model_name}_power{suffix}.csv"

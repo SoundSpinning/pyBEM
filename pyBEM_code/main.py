@@ -1,7 +1,6 @@
 import sys
 import os
 import gc
-import traceback
 import time
 from tqdm import tqdm
 import numpy as np
@@ -27,6 +26,7 @@ from utils import (
 np.set_printoptions(threshold=100) # limit terminal prints size
 gc.disable()  # Disable automatic garbage collection
 
+
 # MAIN APP
 def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     # --- 1. COLLECT ARGUMENTS ---
@@ -44,11 +44,11 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 try:
                     user_ncpus = int(val)
                 except ValueError:
-                    print(f" ( ! ) Warning: Invalid cpus value '{val}'. Using auto-parallel.")
+                    print(f" [!] Warning: Invalid cpus value '{val}'. Using auto-parallel.")
             elif clean_key == "debug":
                 debug_mode = val.lower() in ("true", "1", "yes")
             else:
-                raise RuntimeError(f" ( ! ) ERROR: Unknown parameter '{key}'. Valid options are 'cpus=N' or 'debug=yes'.")
+                raise RuntimeError(f" [!] ERROR: Unknown parameter '{key}'. Valid options are 'cpus=N' or 'debug=yes'.")
         elif arg.lower() in ("--debug", "-debug"):
             debug_mode = True
         else:
@@ -60,7 +60,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         filename = input("\n Enter PrePoMax *.inp filename: ").strip()
 
     if not filename or not os.path.exists(filename):
-        print(f"ERROR: File '{filename}' not found.")
+        print(f" [!] ERROR: File '{filename}' not found.")
         return
 
     # --- 3. APPLY SETTINGS ---
@@ -171,6 +171,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         bc_map, log_bc_info, surface_to_elements = parser.get_bcs()
         logger.info(f"{log_zones_info}")
         logger.info(f"{log_bc_info}")
+        if len(bc_map) == 0:
+            raise ValueError(f" [!] ERROR: Cannot find any BCs on any element.\n     Please check your '{parser.model_name}.inp' file.\n")
 
         # ==================================================================
         # --- 9. RESOLVE MULTI-ZONE TIED PAIRS ---
@@ -184,10 +186,10 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         
         if has_global_ties:
             log_tie_info += f"""    Found a total of ( {len(parser.ties)} ) TIED pair constraint(s).
-    [ i ] It is recommended equal mesh, or that the slave side has a coarser mesh vs the master one.
-          This is to ensure stable area-weighted polygon clipping and mortar flux integration 
-          across overlapping patches. However, this is automatically handled by pyBEM during PRE, 
-          which shows as '[ Auto-Swap ]'.\n\n"""
+    [i] It is recommended equal mesh, or that the slave side has a coarser mesh vs the master one.
+        This is to ensure stable area-weighted polygon clipping and mortar flux integration 
+        across overlapping patches. However, this is automatically handled by pyBEM during PRE, 
+        which shows as '[ Auto-Swap ]'.\n\n"""
             
             def indent_text(text, prefix="    "):
                 return "\n".join(prefix + line if line.strip() else line for line in text.splitlines())
@@ -196,14 +198,12 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             tie_registry = resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3)
     
             if not tie_registry:
-                log_tie_info += "\n" + "!"*60 + "\n"
-                log_tie_info += " FATAL ERROR: MODEL TIE PAIR PROBLEM(s) DETECTED\n"
-                log_tie_info += "!"*60 + "\n"
-                log_tie_info += " [!] CRITICAL: *Tie definitions exist, but 0 node pairs were matched.\n"
-                log_tie_info += "!"*60 + "\n"
-                
-                logger.info(log_tie_info)
-                raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: 0 tie connections matched. See '{log_f}'")
+                log_tie_info += f"""
+    [!] ERROR: MODEL TIE PAIR PROBLEM(s) DETECTED
+        *Tie definitions exist, but 0 element pairs were matched.
+"""
+                logger.error(log_tie_info)
+                raise RuntimeError(f" [!] PRE-PROCESSING FAILED: 0 tie connections found.\n")
 
             # 2. Build continuous projection weights & geometry diagnostic logs
             W_slave_to_master, W_master_to_slave, master_elements, slave_elements, log_pre_ties = compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes)
@@ -241,9 +241,9 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 log_tie_info += f"        Area-Weighted Collocation Mapped Pairs: {n_el_pairs} element intersections\n"
                 
                 if n_el_pairs == 0:
-                    log_tie_info += f"\n    [!] FATAL ERROR: Tie contact group '{tie_name}' failed to pair any elements!\n"
-                    logger.info(log_tie_info)
-                    raise RuntimeError(f"\n[pyBEM] PRE-PROCESSING FAILED: Tie '{tie_name}' has 0 matched element intersections. See '{log_f}'")
+                    log_tie_info += f"\n [!] ERROR: Tie contact group '{tie_name}' failed to pair any elements!"
+                    logger.error(log_tie_info)
+                    raise RuntimeError(f" [!] PRE-PROCESSING FAILED: Tie '{tie_name}' has 0 matched element intersections.")
 
         else:
             tie_registry = {}
@@ -251,7 +251,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             W_master_to_slave = {}
             master_elements = []
             slave_elements = []
-            log_tie_info += "    [ i ] No *Tie constraints active or found in model.\n"
+            log_tie_info += "\n    [i] No *Tie constraints active or found in model.\n"
             
         logger.info(log_tie_info)
 
@@ -288,8 +288,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
  Available RAM found at job start:     ( {RAM_gb:.2f} GB )
  Global Multi-Zone Matrix Structure:   ( {total_matrix_size} x {total_matrix_size} ) DOF
 
- [ i ] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
-       Hold tight, it gets faster after, see times per Freq table in '{parser.model_name}.log'.
+ [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
+     Hold tight, it gets faster after, see times per Freq table in '{parser.model_name}.log'.
 """)
         for z_name, alloc in zone_offsets.items():
             log_CPUs += f" --> Zone [ {z_name:<12} ]: Matrix Index Range [{alloc['start_idx']:>5} -> {alloc['start_idx'] + alloc['n_elements'] - 1:<5}] ( {alloc['n_elements']} elements )\n"
@@ -463,17 +463,17 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         set_num_threads(threads_per_worker)
         
         log_pre_stats = (f"""
- [ i ] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
-       BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f}GB )
+ [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
+     BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f}GB )
      
  Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f}GB ):
  Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB ) | Parallel Frequency Workers: ( {num_workers} )
- [ i ] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( {threads_per_worker} )
-       Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
-       which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
+ [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( {threads_per_worker} )
+     Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
+     which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
 """)
         logger.info(log_pre_stats)
-        logger.info(" [ i ] Promoting heavy arrays to Shared Memory...")
+        logger.info(" [i] Promoting heavy arrays to Shared Memory ...")
         shm_static_data = promote_to_shm(static_data)
 
         file_logger.info(f"\n{'=' * 98}")
@@ -640,7 +640,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     Function 'averaged_at_nodes' took: ( {all_t_avr:.2f}s )
     Export Write and VTU Processing:   ( {all_t_exp:.2f}s )
 
- [ i ] Shared Memory released.
+ [i] Shared Memory released.
 """
         summary_log += f"""
     ==========================
@@ -657,12 +657,12 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 {"=" * 98}
 """
         logger.info(summary_log)
-    except ValueError as e:
-        logger.exception(f"\n ERROR loading model: [FATAL INPUT ERROR] {e}")
-        # traceback.print_exc()
+    except (ValueError, RuntimeError) as e:
+        # Expected user/input/mesh errors -> Clean 1-line log, no traceback
+        logger.error(f"\n [!] Input ERROR, please check your BEM model setup.\n{e}")
     except Exception as e:
-        logger.exception(f"\n[ERROR] {e}")
-        # traceback.print_exc()
+        # Unexpected Python coding bugs (NameError, TypeError, etc.) -> Full traceback for debugging
+        logger.error(f"\n [!] UNEXPECTED BUG DETECTED\n{e}")
 
 def main():
     """Application entry point: manages hardware initialization and runs pyBEM."""
