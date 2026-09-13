@@ -6,7 +6,7 @@ import numpy as np
 from numba import njit, prange
 from multiprocessing import shared_memory
 from utils import (
-    get_ram, pre_high_order, pre_mid_order, averaged_at_nodes
+    get_ram, pre_high_order, pre_mid_order, split_quads_pre_high_order, averaged_at_nodes
 )
 import logging
 # Module-level loggers (automatically connected to setup_logger from main.py)
@@ -23,7 +23,7 @@ def global_shm_cleanup():
         try:
             shm.close()
             shm.unlink()
-            # file_logger.debug(f" ( i ) Cleaned up SHM: {name}") # Debug only
+            # print(f" ( i ) Cleaned up SHM: {name}") # Debug only
         except Exception:
             pass
     _SHM_REGISTRY.clear()
@@ -657,6 +657,8 @@ def pre_assembly(element_nodes, centers, areas, normals):
         pts_weights[mid_gp_idx:n_pts] = weights
         # --- Fill the "Flat Lists" ---
         for i in range(n_els): # Loop over RECEIVER elements
+            if i == j:
+                continue  # Keep diagonal entries as 0.0 (handled separately by z_g_diag / z_h_diag)
             recv_center = centers[i]
             # Explicit loop is "The Numba Way" - no axis issues here
             for p in range(n_pts):
@@ -665,24 +667,24 @@ def pre_assembly(element_nodes, centers, areas, normals):
                 rx = recv_center[0] - pts_coords[p, 0]
                 ry = recv_center[1] - pts_coords[p, 1]
                 rz = recv_center[2] - pts_coords[p, 2]
-                # r_vec = recv_center - pts_coords[p]
                 # 2. Distance math
                 r2 = rx*rx + ry*ry + rz*rz
-                # r = np.linalg.norm(r_vec)
-                # r2 = r * r
-                if r2 < 1e-18: # Safety for self-term
-                    r2 = 1e-18
                 r = np.sqrt(r2)
-                
-                R_map[i, idx] = r
-                # Fill Static Influence Matrices
-                # 3. Bake the G Static Map: G = weight / (4 * pi * r)
-                g_base = pts_weights[p] * inv_4pi / r
-                G_static_map[i, idx] = g_base
-                # 4. Bake the H Static Map: H = G_static * (dot / r^2)
-                # dot = np.dot(r_vec, normals[j])
-                dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
-                H_static_map[i, idx] = g_base * (dot / r2)
+                if r2 < 1e-12:
+                    # If a receiver centroid lands on an adjacent element's GP
+                    R_map[i, idx] = 0.0
+                    G_static_map[i, idx] = 0.0
+                    H_static_map[i, idx] = 0.0
+                else:
+                    R_map[i, idx] = r
+                    # Fill Static Influence Matrices
+                    # 3. Bake the G Static Map: G = weight / (4 * pi * r)
+                    g_base = pts_weights[p] * inv_4pi / r
+                    G_static_map[i, idx] = g_base
+                    # 4. Bake the H Static Map: H = G_static * (dot / r^2)
+                    # dot = np.dot(r_vec, normals[j])
+                    dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
+                    H_static_map[i, idx] = g_base * (dot / r2)
 
     # STEP 4: Calc the static [G] & [H] diagonal self-terms
     G_diag_static = np.zeros(n_els, dtype=np.float64)
@@ -711,6 +713,138 @@ def pre_assembly(element_nodes, centers, areas, normals):
         H_diag_static[i] = -row_sum
 
     return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
+
+@njit(parallel=True, cache=True)
+def split_quads_pre_assembly(element_nodes, centers, areas, normals):
+    """
+    Pre-Computes G and H (static, k=0) matrices using the input mesh ZONES:
+    - Green's Function Kernel (G-matrix): Gij = 1 / (4PI*r)
+    - Derivative Kernel (H-matrix): Hij = Gij / r * r_dot_n
+    It also pre-computes fast arrays with all GPs info for fast assembly in the solve.
+    element_nodes: BEM elem nodal coords
+    centers: (N, 3) array
+    areas: (N,) array
+    normals: (N, 3) array
+    Split quads into 2 trias at high-integration level.
+    """
+    n_els = len(centers)    # number of BEM elements
+    inv_4pi = 1.0 / (4.0 * np.pi) # 4*pi is a constant in the Green's function denominator
+
+    # STEP 1: Calculate Total GPs per ZONES
+    gp_per_element = np.zeros(n_els, dtype=np.int64)  # Force i64 for numba to work
+    for i in range(n_els):
+        elem_n_nodes = len(element_nodes[i])
+        # gp_per_element[i] = 11 if elem_n_nodes == 3 else 14 # 1 + 4 + 9
+        gp_per_element[i] = 11 if elem_n_nodes == 3 else 19 # 1 + 4 + 14 (2*trias)
+
+    total_gps = int(np.sum(gp_per_element))
+    
+    # STEP 2: Pre-allocate local static arrays with Exact Size for speed
+    # These are "Flat Lists" with all GPoints + dtype to save on RAM
+    GP_start_idx = np.zeros(n_els, dtype=np.int64)
+    offset = 0
+    for j in range(n_els):
+        GP_start_idx[j] = offset
+        offset += gp_per_element[j]
+
+    R_map = np.zeros((n_els, total_gps), dtype=np.float32)
+    G_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+    H_static_map = np.zeros((n_els, total_gps), dtype=np.float32)
+
+    # STEP 3: Compute distances, integration orders and basic green function static terms
+    for j in prange(n_els):
+        nodes = element_nodes[j]
+        area = areas[j]
+        nj = normals[j]
+        n_pts = gp_per_element[j]
+        start = GP_start_idx[j]
+
+        pts_coords = np.zeros((n_pts, 3), dtype=np.float64)
+        pts_weights = np.zeros(n_pts, dtype=np.float64)
+        # Calculate ALL possible GPs(coords, weights) per SOURCE element
+        if n_pts == 11: # TRIAs: 1 + 3 + 7 GPs levels
+            mid_gp_idx = 4
+        # elif n_pts == 14: # QUADs: 1 + 4 + 9 GPs levels
+        #     mid_gp_idx = 5
+        elif n_pts == 19: # split-QUADs: 1 + 4 + 14 GPs levels
+            mid_gp_idx = 5
+
+        # Integration options mapping:
+        # used later in solver as a function of distance receiver --> source elements:
+        # CENTROID (1pnt):
+        pts_coords[0] = centers[j]
+        pts_weights[0] = 1.0 * area
+        # MID-order (3pnts or 4pnts):
+        pts, weights = pre_mid_order(nodes, area)
+        pts_coords[1:mid_gp_idx] = pts
+        pts_weights[1:mid_gp_idx] = weights
+        # HIGH-order (7pnts or 9pnts):
+        # pts, weights = pre_high_order(nodes, area)
+        pts, weights = split_quads_pre_high_order(nodes, area)
+        pts_coords[mid_gp_idx:n_pts] = pts
+        pts_weights[mid_gp_idx:n_pts] = weights
+        # --- Fill the "Flat Lists" ---
+        for i in range(n_els): # Loop over RECEIVER elements
+            if i == j:
+                continue  # Keep diagonal entries as 0.0 (handled separately by z_g_diag / z_h_diag)
+            recv_center = centers[i]
+            # Explicit loop is "The Numba Way" - no axis issues here
+            for p in range(n_pts):
+                idx = start + p
+                # 1. Calculate the vector from GP to Receiver Center
+                rx = recv_center[0] - pts_coords[p, 0]
+                ry = recv_center[1] - pts_coords[p, 1]
+                rz = recv_center[2] - pts_coords[p, 2]
+                # 2. Distance math
+                r2 = rx*rx + ry*ry + rz*rz
+                r = np.sqrt(r2)
+                if r2 < 1e-12:
+                    # If a receiver centroid lands on an adjacent element's GP
+                    R_map[i, idx] = 0.0
+                    G_static_map[i, idx] = 0.0
+                    H_static_map[i, idx] = 0.0
+                else:
+                    R_map[i, idx] = r
+                    # Fill Static Influence Matrices
+                    # 3. Bake the G Static Map: G = weight / (4 * pi * r)
+                    g_base = pts_weights[p] * inv_4pi / r
+                    G_static_map[i, idx] = g_base
+                    # 4. Bake the H Static Map: H = G_static * (dot / r^2)
+                    # dot = np.dot(r_vec, normals[j])
+                    dot = rx*nj[0] + ry*nj[1] + rz*nj[2]
+                    H_static_map[i, idx] = g_base * (dot / r2)
+
+    # STEP 4: Calc the static [G] & [H] diagonal self-terms
+    G_diag_static = np.zeros(n_els, dtype=np.float64)
+    H_diag_static = np.zeros(n_els, dtype=np.float64)
+    for i in range(n_els):
+        row_sum = 0.0
+        G_diag_static[i] = np.sqrt(areas[i] / np.pi) * 2.0 * inv_4pi
+        
+        for j in range(n_els):
+            if i == j:
+                continue # Skip the pre-diagonals in their sum
+            n_pts = gp_per_element[j]
+            if n_pts == 11:   # TRIAs: 1 + 3 + 7
+                local_start = GP_start_idx[j] + 4
+                n_high_pts = 7
+            # elif n_pts == 14: # QUADs: 1 + 4 + 9
+            #     local_start = GP_start_idx[j] + 5
+            #     n_high_pts = 9
+            elif n_pts == 19: # QUADs: 1 + 4 + 14
+                local_start = GP_start_idx[j] + 5
+                n_high_pts = 14
+                
+            # SUM ONLY HIGH ORDER from the static pre-baked H values for this source element
+            for p in range(n_high_pts):
+                p_local = local_start + p
+                row_sum += H_static_map[i, p_local]
+
+        # The BEM [H] Diagonal Balance
+        H_diag_static[i] = -row_sum
+
+    return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
+
 
 @njit(parallel=True, cache=True)
 def pre_mics(mics_nodes, bem_centers, bem_normals):
@@ -786,6 +920,8 @@ def main_assembly(gp_per_element, GP_start_idx, R_map, G_static_map, H_static_ma
             if n_pts == 11:   # TRIA: 1 (Cent) + 3 (Mid) + 7 (High)
                 high_start_idx = 4
             elif n_pts == 14: # QUAD: 1 (Cent) + 4 (Mid) + 9 (High)
+                high_start_idx = 5
+            elif n_pts == 19: # QUAD: 1 (Cent) + 4 (Mid) + 14 (High, split 2 TRIAs)
                 high_start_idx = 5
             # We use the centroid (the first point in the array) for the distance check
             r_centroid = R_map[i, start]

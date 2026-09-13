@@ -12,11 +12,11 @@ from version import __solver__
 from pmx_parser import PMXParser
 from solver_core import (
     global_shm_cleanup, promote_to_shm, init_worker, 
-    frequency_worker, pre_assembly, pre_mics
+    frequency_worker, pre_assembly, split_quads_pre_assembly, pre_mics
 )
 from exporter_2 import PVExporter
 from utils import (
-    get_cpus, set_hardware_limits, get_ram, prepare_geometry, 
+    STOP_RUN, get_cpus, set_hardware_limits, get_ram, prepare_geometry, 
     get_zone_data, validate_and_log_zones, resolve_tie_interfaces, 
     compute_tie_area_weights, get_global_offsets, format_per_tie_mortar_weights,
     setup_logger
@@ -262,7 +262,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         zone_offsets, total_matrix_size = get_global_offsets(zones_mesh, tie_registry)
         
         # DEBUG
-        logger.debug(f"DEBUG: zone_offsets")
+        logger.debug(f"\nDEBUG: zone_offsets")
         logger.debug(zone_offsets)
         # DEBUG_end
         
@@ -330,6 +330,47 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             z_gp, z_gp_start, z_R, z_G_stat, z_H_stat, z_g_diag, z_h_diag = pre_assembly(
                 z_nodes, z_centers, z_areas, z_normals
             )
+            logger.debug(f"\nDEBUG: PRE static checks")
+            logger.debug(f"========================")
+            logger.debug(f" BASELINE: pre_assembly():")
+            logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
+            logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
+            logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
+            logger.debug(f"[PRE CHECK] z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
+            logger.debug(f"[PRE CHECK] z_h_diag: \n{z_h_diag}")
+            logger.debug(f"[PRE CHECK] z_g_diag: \n{z_g_diag}")
+            logger.debug(f"[PRE CHECK] z_R: \n{z_R}")
+            # logger.debug(f" gp_per_element: {z_gp}")
+            
+            logger.debug(f" Baseline 'z_h_diag' sum: {np.sum(z_h_diag)}")
+            max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
+            logger.debug(f" Max Baseline 'z_H_stat' residual:   {max_res}")
+            logger.debug(f"\n")
+
+            # Experimental split_quads approach - not working yet
+            z_gp, z_gp_start, z_R, z_G_stat, z_H_stat, z_g_diag, z_h_diag = split_quads_pre_assembly(
+                z_nodes, z_centers, z_areas, z_normals
+            )
+
+            logger.debug(f"\nDEBUG: PRE static checks")
+            logger.debug(f"========================")
+            logger.debug(f" NEW: split_quads_pre_assembly():")
+            logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
+            logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
+            logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
+            logger.debug(f"[PRE CHECK] z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
+            logger.debug(f"[PRE CHECK] z_h_diag: \n{z_h_diag}")
+            logger.debug(f"[PRE CHECK] z_g_diag: \n{z_g_diag}")
+            logger.debug(f"[PRE CHECK] z_R: \n{z_R}")
+            # logger.debug(f" gp_per_element: {z_gp}")
+
+            logger.debug(f" Split    'z_h_diag' sum: {np.sum(z_h_diag)}")
+            # Currently failing!
+            max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
+            logger.debug(f" Max split 'z_H_stat' residual:   {max_res}")  
+            logger.debug(f"\n")
+
+            # STOP_RUN()
             
             # Save local results cleanly into the zone storage dictionary
             pre_bem_data[zone_name] = {
@@ -565,20 +606,14 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         file_logger.info(f"{'=' * 98}")
         pbar.close()  # Close terminal progress bar
-        t_exp_0 = time.time()
         print(f"{'=' * 80}")
-        
+
         # 13.5 Finalize and write complete VTU outputs to disk
         logger.info(f"\n --> Writing {num_freqs} binary frequency steps")
         exporter.finalise()
         logger.info(f"     Export Complete. PV results file written to: ( '{parser.model_name}_Results.pvd' )")
 
-        # # DEBUG
-        # print("global_p_surf")
-        # print(global_p_surf)
-        # print("global_v_surf")
-        # print(global_v_surf)
-        # # DEBUG_end
+        t_exp_0 = time.time()
 
         # ==================================================================
         # --- 13.6 COMPUTE AND EXPORT TOTAL SURFACE SOUND POWER ---
@@ -621,7 +656,24 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             generate_power_flux_plot(model_name = parser.model_name, suffix="")
             log_post += f"\n     Freq / Power graph plotted to: ( '{png_filename}' )"
             logger.info(log_post)
-            
+
+        # DEBUG
+        # If --debug: plot all Gauss / integration points in pyBEM
+        if debug_mode:
+            poster_path = "pyBEM_integration_GPs.png"
+            if os.path.exists(poster_path):
+                logger.debug(
+                    f"DEBUG: Poster '{poster_path}' already exists. Skipping plot generation."
+                )
+            else:
+                logger.debug(
+                    "DEBUG: Integration / Gauss points diagrams in pyBEM.\n"
+                    f"Generating single poster PNG: '{poster_path}'..."
+                )
+                from integration_GPs_plotter import generate_integration_gps_poster
+                generate_integration_gps_poster()
+        # DEBUG_end
+
         t_exp_1 = time.time()
         all_t_exp += t_exp_1 - t_exp_0
         # --- Final Timing Summary Calculations --- 
@@ -660,9 +712,12 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     except (ValueError, RuntimeError) as e:
         # Expected user/input/mesh errors -> Clean 1-line log, no traceback
         logger.error(f"\n [!] Input ERROR, please check your BEM model setup.\n{e}")
+    except OSError as e:
+        # File I/O or path issues
+        logger.exception(f"\n [!] FILE SYSTEM / OS ERROR:\n     {e}")
     except Exception as e:
         # Unexpected Python coding bugs (NameError, TypeError, etc.) -> Full traceback for debugging
-        logger.error(f"\n [!] UNEXPECTED BUG DETECTED\n{e}")
+        logger.error(f"\n [!] UNEXPECTED BUG DETECTED:\n     {e}", exc_info=True)
 
 def main():
     """Application entry point: manages hardware initialization and runs pyBEM."""

@@ -10,6 +10,11 @@ import logging
 logger = logging.getLogger("pyBEM")           # Dual output (Terminal + Log file)
 file_logger = logging.getLogger("pyBEM.file_only") # File-only output
 
+def STOP_RUN():
+    """Code breakpoint when debugging"""
+    raise SystemExit("\n DEBUG: Job stopped after output to '*_debug.log' diagnostics.\n")
+    # sys.exit(0)  # Halts execution cleanly right here - Same as above
+
 def parse_cli_args():
     """Parses command line arguments using standard CLI conventions."""
     parser = argparse.ArgumentParser(description="pyBEM - Boundary Element Method Acoustics Solver")
@@ -73,54 +78,6 @@ def setup_logger(log_filename, debug_mode=False):
 
         logger.addHandler(debug_file_handler)
         file_logger.addHandler(debug_file_handler)
-
-    return logger, file_logger
-
-def old_setup_logger(log_filename, debug_mode=False, name_prefix="pyBEM"):
-    """
-    Configures pyBEM loggers:
-    - logger ("pyBEM"): Handles standard messages (terminal & file).
-    - file_logger ("pyBEM.file_only"): Handles tables/diagnostics (file ONLY).
-    """
-    main_name = name_prefix
-    file_only_name = f"{name_prefix}.file_only"
-    # 1. Main Logger
-    logger = logging.getLogger(main_name)
-    
-    # Clear previous handlers on parent & child to prevent duplication
-    if logger.hasHandlers():
-        logger.handlers.clear()
-        
-    file_logger = logging.getLogger(file_only_name)
-    if file_logger.hasHandlers():
-        file_logger.handlers.clear()
-
-    # Master levels
-    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
-    file_logger.setLevel(logging.INFO)
-    
-    # Prevent child logger from passing messages to main logger's console handler
-    file_logger.propagate = False 
-
-    file_formatter = logging.Formatter('%(message)s')
-
-    # Shared File Handler
-    file_handler = logging.FileHandler(log_filename, mode='w', encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG if debug_mode else logging.INFO)
-    file_handler.setFormatter(file_formatter)
-
-    # Console Handler (Terminal)
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(file_formatter)
-
-    # Attach handlers:
-    # Main logger gets BOTH file and console
-    logger.addHandler(file_handler)
-    logger.addHandler(console_handler)
-
-    # File-only logger gets ONLY file_handler
-    file_logger.addHandler(file_handler)
 
     return logger, file_logger
 
@@ -1371,6 +1328,42 @@ def get_tri_points_7p(v1, v2, v3):
         weights[i] = w
     return points, weights
 
+@njit
+def split_quad_get_quad_points_3x3(v1, v2, v3, v4):
+    """Direct 3D Barycentric Quadrature for QUAD4 Interior BEM.
+
+    Splits quad into two sub-triangles (v1,v2,v3) and (v1,v3,v4)
+    and evaluates 7 Gauss points per sub-triangle directly in 3D.
+    """
+    points = np.zeros((14, 3), dtype=np.float64)
+    weights = np.zeros(14, dtype=np.float64)
+
+    # Sub-triangle areas
+    area1 = 0.5 * np.linalg.norm(np.cross(v3 - v1, v2 - v1))
+    area2 = 0.5 * np.linalg.norm(np.cross(v4 - v1, v3 - v1))
+    total_area = area1 + area2
+
+    frac1 = 0.5 if total_area < 1e-14 else area1 / total_area
+    frac2 = 0.5 if total_area < 1e-14 else area2 / total_area
+
+    sum_w = 0.0
+    for i in range(7):
+        sum_w += TRI_7P[i, 3]
+
+    # Sub-Triangle 1: (v1, v2, v3)
+    pts1, w1 = get_tri_points_7p(v1, v2, v3)
+    for i in range(7):
+        points[i] = pts1[i]
+        weights[i] = (w1[i] / sum_w) * frac1
+
+    # Sub-Triangle 2: (v1, v3, v4)
+    pts2, w2 = get_tri_points_7p(v1, v3, v4)
+    for i in range(7):
+        points[7 + i] = pts2[i]
+        weights[7 + i] = (w2[i] / sum_w) * frac2
+
+    return points, weights
+
 # PRE-processing: we need 1st to know all GPoints we'll have in total.
 # This is during pre-processing, so that we make use of fast numpy & numba methods
 @njit
@@ -1407,3 +1400,16 @@ def pre_high_order(element_nodes, element_area):
     
     return pts, wts * element_area / sum_w
 
+@njit
+def split_quads_pre_high_order(element_nodes, element_area):
+    n_nodes = len(element_nodes)
+    
+    if n_nodes == 3:  # TRIA3
+        pts, wts = get_tri_points_7p(element_nodes[0], element_nodes[1], element_nodes[2])
+        sum_w = np.sum(wts)
+        return pts, wts * element_area / sum_w
+    else:  # QUAD4 (Sub-triangulated with local area weights already applied)
+        pts, wts = split_quad_get_quad_points_3x3(
+            element_nodes[0], element_nodes[1], element_nodes[2], element_nodes[3]
+        )
+        return pts, wts* element_area
