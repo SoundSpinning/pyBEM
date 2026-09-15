@@ -219,7 +219,7 @@ class PMXParser:
                 else: self.frequencies = np.linspace(f_min, f_max, n).tolist()
 
         # --- 8) Damping ---
-        # In most acoustic BEM, we input the Loss Factor η, where η=2ζ.
+        # In most acoustic BEM, we input the Damping Ratio ζ, for Loss Factor η, ζ = η * 0.5
         elif h_up.startswith('*MODAL DAMPING'):
             self.model_str += f'***\n{header}\n'
             amp = self._get_param(header, 'AMPLITUDE')

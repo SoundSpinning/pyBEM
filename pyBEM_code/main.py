@@ -136,6 +136,21 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             zones_mesh, sorted_nodes, parser, log_f, log_top
         )
 
+        # DEBUG
+        # Force higher /lower integration
+        # Optional scale factor flag (e.g., set to 1.0 for default, > 1.0 to force higher order)
+        # order_scale_factor = 10.0  
+        order_scale_factor = 1.0  # Default
+
+        # Scaled dictionary
+        global_order_lengths = {
+            zone: val * order_scale_factor 
+            for zone, val in global_order_lengths.items()
+        }
+        logger.debug(f"\nDEBUG: global_order_lengths")
+        logger.debug(global_order_lengths)
+        # DEBUG_end
+
         # --- 7. SETUP GLOBAL EXPORTER PACKAGE (ParaView) ---
         # 7.1 Map nodal identifiers to a clean 0-indexed flat VTK table array
         nodal_id_map = {inp_id: i for i, inp_id in enumerate(sorted_node_ids)}
@@ -264,6 +279,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # DEBUG
         logger.debug(f"\nDEBUG: zone_offsets")
         logger.debug(zone_offsets)
+        logger.debug(f"\n")
         # DEBUG_end
         
         # --- Start Timers & UX Metric Initializations ---
@@ -327,34 +343,34 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             z_nodes, z_centers, z_areas, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
             
             # 11.2 Run pre_assembly function per BEM Zone
-            z_gp, z_gp_start, z_R, z_G_stat, z_H_stat, z_g_diag, z_h_diag = pre_assembly(
-                z_nodes, z_centers, z_areas, z_normals
-            )
-            logger.debug(f"\nDEBUG: PRE static checks")
-            logger.debug(f"========================")
-            logger.debug(f" BASELINE: pre_assembly():")
-            logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
-            logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
-            logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
-            logger.debug(f"[PRE CHECK] z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
-            logger.debug(f"[PRE CHECK] z_h_diag: \n{z_h_diag}")
-            logger.debug(f"[PRE CHECK] z_g_diag: \n{z_g_diag}")
-            logger.debug(f"[PRE CHECK] z_R: \n{z_R}")
-            # logger.debug(f" gp_per_element: {z_gp}")
+            # z_gp, z_gp_start, z_R, z_G_stat, z_H_stat, z_g_diag, z_h_diag = pre_assembly(
+            #     z_nodes, z_centers, z_areas, z_normals
+            # )
+            # logger.debug(f"DEBUG: PRE static checks")
+            # logger.debug(f"========================")
+            # logger.debug(f" BASELINE: pre_assembly():")
+            # logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
+            # logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
+            # logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
+            # logger.debug(f"[PRE CHECK] z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
+            # logger.debug(f"[PRE CHECK] z_h_diag: \n{z_h_diag}")
+            # logger.debug(f"[PRE CHECK] z_g_diag: \n{z_g_diag}")
+            # logger.debug(f"[PRE CHECK] z_R: \n{z_R}")
+            # # logger.debug(f" gp_per_element: {z_gp}")
             
-            logger.debug(f" Baseline 'z_h_diag' sum: {np.sum(z_h_diag)}")
-            max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
-            logger.debug(f" Max Baseline 'z_H_stat' residual:   {max_res}")
-            logger.debug(f"\n")
+            # logger.debug(f" Baseline 'z_h_diag' sum: {np.sum(z_h_diag)}")
+            # max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
+            # logger.debug(f" Max Baseline 'z_H_stat' residual:   {max_res}")
+            # logger.debug(f"\n")
 
             # Experimental split_quads approach - not working yet
             z_gp, z_gp_start, z_R, z_G_stat, z_H_stat, z_g_diag, z_h_diag = split_quads_pre_assembly(
                 z_nodes, z_centers, z_areas, z_normals
             )
 
-            logger.debug(f"\nDEBUG: PRE static checks")
+            logger.debug(f"DEBUG: PRE static checks")
             logger.debug(f"========================")
-            logger.debug(f" NEW: split_quads_pre_assembly():")
+            logger.debug(f" NEW: split_quads_pre_assembly() | ZONE - '{zone_name}'")
             logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
             logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
             logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")

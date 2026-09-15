@@ -89,9 +89,9 @@ def TOP_LOG_LINES(self):
     # 6. Damping
     if isinstance(self.damping, dict):
         lf_val = self.damping.get('value', 0.0)
-        damp_str = f"Loss Factor (LF) = {lf_val}"
+        damp_str = f"Damping Ratio (DR) = {lf_val}"
     elif self.damping:
-        damp_str = f"Loss Factor (LF) = {self.damping}"
+        damp_str = f"Damping Ratio (DR) = {self.damping}"
     else:
         damp_str = "None (0.0)"
 
@@ -138,5 +138,7 @@ def TOP_LOG_LINES(self):
     [ ANALYSIS ]
       FREQUENCIES: {freq_str}
       DAMPING:     {damp_str}
-                   (Solver uses Damping Ratio: DR = LF * 0.5)
+                   Solver uses Damping Ratio (DR)
+                   In structures is Loss Factor (LF) = DR * 2
+                   Abaqus uses Volumetric Drag (gamma) = 2 * DR * rho * omega (Freq curve)
 """

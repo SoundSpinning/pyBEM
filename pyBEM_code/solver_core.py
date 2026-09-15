@@ -306,7 +306,9 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         rho_zone = static_data['global_rho'][zone_name]
         k_zone = omega / c_zone
         if damping_f != 0:
-            k_zone = k_zone * (1.0 - (1j * damping_f * 0.5))
+            # We assume damping input is Damping Ratio (DR)
+            k_zone = k_zone * (1.0 - (1j * damping_f))
+            # k_zone = k_zone * (1.0 - (1j * damping_f * 0.5))
             
         rho_omega = rho_zone * omega
 
@@ -364,7 +366,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     # ==================================================================
     # DIAGNOSTIC: PRINT MATRIX MAP AND COEF VALUES
     # ==================================================================
-    file_logger.debug(f"\n{'='*60}\nMATRIX DIAGNOSTIC FOR FREQ: {f} Hz")
+    file_logger.debug(f"{'='*60}\nMATRIX DIAGNOSTIC FOR FREQ: {f} Hz")
     file_logger.debug(f"Matrix Size: {total_matrix_size}x{total_matrix_size} (N_all: {N_all}, N_slave: {N_slave})")
     file_logger.debug(f"Number of Master elements: {len(master_elements)}, Slave elements: {len(slave_elements)}")
     
