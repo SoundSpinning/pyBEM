@@ -2,6 +2,7 @@
 import time
 import os
 import atexit
+import constants
 import numpy as np
 from numba import njit, prange
 from multiprocessing import shared_memory
@@ -110,6 +111,7 @@ def init_worker(shared_data, threads_per_worker, log_file, debug_mode):
     rebuilt_dict = rebuild_from_shm(shared_data)
     _worker_context = rebuilt_dict
     # Configure the loggers inside the worker process
+    constants.debug_mode = debug_mode
     setup_logger(log_file, debug_mode=debug_mode)
 
 # ==================================================================
@@ -149,7 +151,8 @@ def apply_tie_collocation_columns(A_global, H_local, G_local, local_j, start_row
                 A_global[start_row : start_row + n_elements, l_col] += G_local[:, local_j] * ik_rho_c * w_m2s
 
 def enforce_interface_pressure_continuity(A_global, B_global, N_all, 
-                                          eid_global_p_col, W_slave_to_master, slave_lagrange_col_map):
+                                          eid_global_p_col, W_slave_to_master, 
+                                          slave_lagrange_col_map):
     """
     PHASE 2: Enforces acoustic pressure potential continuity across tied interfaces.
     Row 'tie_row' (N_all ... N_all + N_slave - 1) enforces:
@@ -363,79 +366,82 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                                           eid_global_p_col, W_slave_to_master, slave_lagrange_col_map)
 
     # DEBUG
+    # file_logger.debug(constants.debug_mode)
     # ==================================================================
     # DIAGNOSTIC: PRINT MATRIX MAP AND COEF VALUES
     # ==================================================================
-    file_logger.debug(f"{'='*60}\nMATRIX DIAGNOSTIC FOR FREQ: {f} Hz")
-    file_logger.debug(f"Matrix Size: {total_matrix_size}x{total_matrix_size} (N_all: {N_all}, N_slave: {N_slave})")
-    file_logger.debug(f"Number of Master elements: {len(master_elements)}, Slave elements: {len(slave_elements)}")
-    
-    # 1. Row and Column Zero Checks
-    zero_rows = np.where(~A_global.any(axis=1))[0]
-    zero_cols = np.where(~A_global.any(axis=0))[0]
-    file_logger.debug(f"Completely empty rows: {list(zero_rows)}")
-    file_logger.debug(f"Completely empty columns: {list(zero_cols)}")
+    if constants.debug_mode:
+        file_logger.debug(f"{'='*60}\nMATRIX DIAGNOSTIC FOR FREQ: {f} Hz")
+        file_logger.debug(f"Matrix Size: {total_matrix_size}x{total_matrix_size} (N_all: {N_all}, N_slave: {N_slave})")
+        file_logger.debug(f"Number of Master elements: {len(master_elements)}, Slave elements: {len(slave_elements)}")
+        
+        # 1. Row and Column Zero Checks
+        zero_rows = np.where(~A_global.any(axis=1))[0]
+        zero_cols = np.where(~A_global.any(axis=0))[0]
+        file_logger.debug(f"Completely empty rows: {list(zero_rows)}")
+        file_logger.debug(f"Completely empty columns: {list(zero_cols)}")
 
-    # 2. Text-Based Sparsity Map (Shows where numbers vs zeros are)
-    file_logger.debug("\n[A_global Structural Layout Map] (X = Non-zero, . = Pure Zero):")
-    for r in range(total_matrix_size):
-        row_str = ""
-        for c in range(total_matrix_size):
-            if abs(A_global[r, c]) > 1e-15:
-                row_str += "X "
-            else:
-                row_str += ". "
-        # Highlight the trailing Dual-Lagrange rows/columns visually
-        if r == N_all:
-            file_logger.debug(f"{'-' * (total_matrix_size * 2)}\n")
-        file_logger.debug(f"Row {r:02d} | {row_str}")
+        # 2. Text-Based Sparsity Map (Shows where numbers vs zeros are)
+        if N_all <= 100:
+            file_logger.debug("\n[A_global Structural Layout Map] (X = Non-zero, . = Pure Zero):")
+            for r in range(total_matrix_size):
+                row_str = ""
+                for c in range(total_matrix_size):
+                    if abs(A_global[r, c]) > 1e-15:
+                        row_str += "X "
+                    else:
+                        row_str += ". "
+                # Highlight the trailing Dual-Lagrange rows/columns visually
+                if r == N_all:
+                    file_logger.debug(f"{'-' * (total_matrix_size * 2)}\n")
+                file_logger.debug(f"Row {r:02d} | {row_str}")
 
-    # # 3. Print raw matrices cleanly formatted if you want to see exact values
-    # # np.set_printoptions(precision=3, suppress=True, linewidth=200)
-    # np.set_printoptions(precision=3, suppress=False, linewidth=400, threshold=1e4)
-    # file_logger.debug("\n[A_global Raw Values]:")
-    # file_logger.debug(A_global)
-    # file_logger.debug("\n[B_global Raw Values]:")
-    # file_logger.debug(B_global)
-    file_logger.debug(f"{'='*60}\n")
+            if N_all <= 25:
+                # 3. Print raw matrices cleanly formatted if you want to see exact values
+                np.set_printoptions(precision=3, suppress=False, linewidth=400, threshold=1e4)
+                file_logger.debug("\n[A_global Raw Values]:")
+                file_logger.debug(A_global)
+                file_logger.debug("\n[B_global Raw Values]:")
+                file_logger.debug(B_global)
+        file_logger.debug(f"{'='*60}\n")
     # DEBUG_end
 
     # DEBUG
     # ==================================================================
     # DIAGNOSTIC: ISOLATE & INSPECT CONSTRAINT MATRIX [C]
     # ==================================================================
-    file_logger.debug(f"\n{'='*60}\nCONSTRAINT BLOCK [C] DIAGNOSTIC (N_all: {N_all}, N_slave: {N_slave})")
+        file_logger.debug(f"\n{'='*60}\nCONSTRAINT BLOCK [C] DIAGNOSTIC (N_all: {N_all}, N_slave: {N_slave})")
 
-    # Slice out the constraint rows: shape is (N_slave, total_matrix_size)
-    C_matrix = A_global[N_all:, :]
+        # Slice out the constraint rows: shape is (N_slave, total_matrix_size)
+        C_matrix = A_global[N_all:, :]
 
-    # 1. Sparsity / Structure Map of [C] only
-    file_logger.debug("\n[C Matrix Layout Map] (X = non-zero, . = zero):")
-    for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
-        row_str = "".join(["X " if abs(C_matrix[local_r, c]) > 1e-15 else ". " for c in range(total_matrix_size)])
-        file_logger.debug(f"Constraint Row {global_r:02d} (Slave local {local_r:02d}) | {row_str}")
+        # 1. Sparsity / Structure Map of [C] only
+        file_logger.debug("\n[C Matrix Layout Map] (X = non-zero, . = zero):")
+        for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
+            row_str = "".join(["X " if abs(C_matrix[local_r, c]) > 1e-15 else ". " for c in range(total_matrix_size)])
+            file_logger.debug(f"Constraint Row {global_r:02d} (Slave local {local_r:02d}) | {row_str}")
 
-    # 2. Detailed Index & Value Extraction
-    file_logger.debug("\n[C Matrix Explicit Coupling Pairs]:")
-    for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
-        non_zero_cols = np.where(np.abs(C_matrix[local_r, :]) > 1e-15)[0]
-        couplings = []
-        for c in non_zero_cols:
-            val = C_matrix[local_r, c]
-            # Format complex or real values cleanly
-            val_str = f"{val.real:+.3f}{val.imag:+.3f}j" if np.iscomplexobj(val) else f"{val:+.3f}"
-            couplings.append(f"col {c:02d}: {val_str}")
+        # 2. Detailed Index & Value Extraction
+        file_logger.debug("\n[C Matrix Explicit Coupling Pairs]:")
+        for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
+            non_zero_cols = np.where(np.abs(C_matrix[local_r, :]) > 1e-15)[0]
+            couplings = []
+            for c in non_zero_cols:
+                val = C_matrix[local_r, c]
+                # Format complex or real values cleanly
+                val_str = f"{val.real:+.3f}{val.imag:+.3f}j" if np.iscomplexobj(val) else f"{val:+.3f}"
+                couplings.append(f"col {c:02d}: {val_str}")
 
-        file_logger.debug(f"Row {global_r:02d} -> " + ", ".join(couplings))
+            file_logger.debug(f"Row {global_r:02d} -> " + ", ".join(couplings))
 
-    # 3. Sum of Master Weights Verification (Row Check)
-    # Check that the sum of master coupling weights for each slave row balances appropriately
-    file_logger.debug("\n[C Matrix Row Sum Check]:")
-    for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
-        row_sum = np.sum(C_matrix[local_r, :])
-        file_logger.debug(f"Row {global_r:02d} total row sum: {row_sum:.6f}")
+        # 3. Sum of Master Weights Verification (Row Check)
+        # Check that the sum of master coupling weights for each slave row balances appropriately
+        file_logger.debug("\n[C Matrix Row Sum Check]:")
+        for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
+            row_sum = np.sum(C_matrix[local_r, :])
+            file_logger.debug(f"Row {global_r:02d} total row sum: {row_sum:.6f}")
 
-    file_logger.debug(f"{'='*60}\n")
+        file_logger.debug(f"{'='*60}\n")
     # DEBUG_end
 
     # ==================================================================

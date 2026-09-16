@@ -124,6 +124,41 @@ def set_hardware_limits(threads_per_worker):
 import numpy as np
 from numba import njit
 
+def format_section_header(title: str, indent: str = "    ") -> str:
+    """Formats a header block where '=' lines match the exact length of the title."""
+    header_text = f"*** {title} ***"
+    border = "=" * len(header_text)
+    return f"{indent}{border}\n{indent}{header_text}\n{indent}{border}"
+
+# if constants.debug_mode:
+#     file_logger.debug(format_debug_dict(tie_data, name="Tie Coupling Data"))
+
+def format_debug_dict(d, name="Debug Dict", max_items=5):
+    """Returns a cleanly formatted multi-line string summarizing dictionary values."""
+    lines = [f"\n--- {name} (Keys: {len(d)}) ---"]
+
+    for k, v in d.items():
+        summary = _truncate_value(v, max_items)
+        lines.append(f"  '{k}': {summary}")
+
+    lines.append("-" * (len(name) + 12))
+    return "\n".join(lines)
+
+def _truncate_value(val, max_items=5):
+    if isinstance(val, np.ndarray):
+        if val.size > max_items:
+            return f"ndarray shape={val.shape} dtype={val.dtype} -> {np.array2string(val, threshold=max_items)}"
+        return val
+    elif isinstance(val, (list, tuple)):
+        if len(val) > max_items:
+            head = [_truncate_value(x, max_items) for x in val[:2]]
+            tail = [_truncate_value(x, max_items) for x in val[-2:]]
+            return f"[{head[0]}, {head[1]}, ... ({len(val)} items) ..., {tail[0]}, {tail[1]}]"
+        return [_truncate_value(x, max_items) for x in val]
+    elif isinstance(val, dict):
+        return {k: _truncate_value(v, max_items) for k, v in val.items()}
+    return val
+
 def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top):
     """
     Diagnostic Mesh Checks & Logging for Water-Tight Zones.
@@ -275,6 +310,44 @@ def get_zone_data(parser, sorted_nodes):
 
 def evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
     """
+    Evaluates characteristic edge lengths (h_bar) of both candidate surfaces.
+    Forces the side with larger h_bar (COARSER mesh) to be the SLAVE 
+    for point-collocation sound power conservation.
+    """
+    def calc_surface_hbar(eids):
+        total_area = 0.0
+        weighted_h = 0.0
+        for z_name, z_mesh in zones_mesh.items():
+            for idx, eid in enumerate(z_mesh['elements'].keys()):
+                if eid in eids:
+                    conn = z_mesh['elements'][eid]
+                    coords = np.array([sorted_nodes[nid] for nid in conn])
+                    n_nodes = len(conn)
+                    
+                    # Compute average perimeter edge length (not max diagonal)
+                    edge_lengths = [
+                        np.linalg.norm(coords[i] - coords[(i + 1) % n_nodes]) 
+                        for i in range(n_nodes)
+                    ]
+                    h_elem = np.mean(edge_lengths)
+                    
+                    _, _, area, _, _, _ = get_element_properties(sorted_nodes, conn)
+                    total_area += area
+                    weighted_h += area * h_elem
+        return weighted_h / total_area if total_area > 0 else 0.0
+
+    h_slave = calc_surface_hbar(slave_eids)
+    h_master = calc_surface_hbar(master_eids)
+
+    # Force COARSE side (larger h_bar) to be SLAVE.
+    # Swap if slave is strictly finer (h_slave < h_master)
+    is_swapped = h_slave < h_master
+    # is_swapped = False  ## for debugging only
+
+    return is_swapped, h_slave, h_master
+
+def old_evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
+    """
     Evaluates characteristic lengths (h_bar) of both candidate surfaces.
     Forces the side with larger h_bar (COARSER mesh) to be the SLAVE 
     for point-collocation sound power conservation.
@@ -308,18 +381,7 @@ def evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
     if h_slave * 1.05 < h_master:  # 5% hysteresis buffer
         is_swapped = True
 
-    # # If slave mesh is coarser than master mesh, swap roles
-    # is_swapped = False
-    # if h_slave > h_master * 1.05:  # 5% hysteresis buffer to prevent unnecessary flipping
-    #     is_swapped = True
-
     return is_swapped, h_slave, h_master
-
-def format_section_header(title: str, indent: str = "    ") -> str:
-    """Formats a header block where '=' lines match the exact length of the title."""
-    header_text = f"*** {title} ***"
-    border = "=" * len(header_text)
-    return f"{indent}{border}\n{indent}{header_text}\n{indent}{border}"
 
 from scipy.spatial import cKDTree
 def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3):
@@ -608,6 +670,9 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                 slave_eids_set.add(seid)
                 W_slave_to_master[seid] = {}
                 tie_slave_area += s_area
+
+                # Compute sum of clipped areas for this slave element
+                total_clipped_area = sum(weights_raw)
                 
                 for m_eid, area_ij in zip(overlapping_masters, weights_raw):
                     if m_eid not in W_master_to_slave:
@@ -624,9 +689,14 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                         area2 = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[2] - m_vertices_3d[0], m_vertices_3d[3] - m_vertices_3d[0]))
                         m_area_true = area1 + area2
 
-                    # Store pure non-dimensional fractions
+                    # Safe normalization: normalize w_slave_fraction against total_clipped_area 
+                    # to ensure sum(w_slave) == 1.0 even if polygon clipping missed small perimeter edges
+                    w_slave_fraction = area_ij / total_clipped_area if total_clipped_area > 1e-12 else area_ij / s_area
                     w_master_fraction = area_ij / m_area_true
-                    w_slave_fraction = area_ij / s_area
+
+                    # # Store pure non-dimensional fractions
+                    # w_master_fraction = area_ij / m_area_true
+                    # w_slave_fraction = area_ij / s_area
 
                     W_slave_to_master[seid][m_eid] = w_slave_fraction
                     W_master_to_slave[m_eid][seid] = w_master_fraction

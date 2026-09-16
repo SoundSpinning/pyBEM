@@ -2,6 +2,7 @@ import sys
 import os
 import gc
 import time
+import constants
 from tqdm import tqdm
 import numpy as np
 from numba import set_num_threads
@@ -33,7 +34,6 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     args = sys.argv[1:] # Skip the script name itself
     filename = None
     user_ncpus = None # Default is None, so auto-logic can take over
-    debug_mode = False
 
     for arg in args:
         if "=" in arg:
@@ -46,11 +46,11 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 except ValueError:
                     print(f" [!] Warning: Invalid cpus value '{val}'. Using auto-parallel.")
             elif clean_key == "debug":
-                debug_mode = val.lower() in ("true", "1", "yes")
+                constants.debug_mode = val.lower() in ("true", "1", "yes")
             else:
                 raise RuntimeError(f" [!] ERROR: Unknown parameter '{key}'. Valid options are 'cpus=N' or 'debug=yes'.")
         elif arg.lower() in ("--debug", "-debug"):
-            debug_mode = True
+            constants.debug_mode = True
         else:
             # If it doesn't have an '=', treat as input file
             filename = arg.strip()
@@ -85,7 +85,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         for f in [log_f, log_f_debug]:
             if os.path.exists(f):
                 os.remove(f)
-        logger, file_logger = setup_logger(log_f, debug_mode=debug_mode)
+        logger, file_logger = setup_logger(log_f, debug_mode=constants.debug_mode)
 
         # --- 5. MULTI-ZONE GEOMETRY EXTRACTION ---
         # 5.1 Global Sort (Ensures index maps and arrays match input sequentially)
@@ -107,7 +107,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         logger.info(__solver__.strip())
         logger.info(parser.print_model_summary())
 
-        if debug_mode:
+        if constants.debug_mode:
             logger.info("-" * 80)
             logger.info(f"[DEBUG MODE ACTIVATED] Writing some diagnostics to file: '{parser.model_name}_debug.log'")
             logger.info("-" * 80)
@@ -564,7 +564,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             with ProcessPoolExecutor(
                 max_workers = num_workers,
                 initializer = init_worker,
-                initargs = (shm_static_data, threads_per_worker, log_f, debug_mode)
+                initargs = (shm_static_data, threads_per_worker, log_f, constants.debug_mode)
             ) as executor:
                 
                 # Submit all multi-zone frequency calculations to the pool
@@ -675,7 +675,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         # DEBUG
         # If --debug: plot all Gauss / integration points in pyBEM
-        if debug_mode:
+        if constants.debug_mode:
             poster_path = "pyBEM_integration_GPs.png"
             if os.path.exists(poster_path):
                 logger.debug(
