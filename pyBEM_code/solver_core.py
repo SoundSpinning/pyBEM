@@ -381,6 +381,10 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         file_logger.debug(f"Completely empty rows: {list(zero_rows)}")
         file_logger.debug(f"Completely empty columns: {list(zero_cols)}")
 
+        # Compute matrix condition number (using 1-norm for speed)
+        cond_A = np.linalg.cond(A_global, p=1)
+        logger.debug(f"[SOLVER] Freq: {f} Hz | Global Matrix cond(A): {cond_A:.3e}")
+
         # 2. Text-Based Sparsity Map (Shows where numbers vs zeros are)
         if N_all <= 100:
             file_logger.debug("\n[A_global Structural Layout Map] (X = Non-zero, . = Pure Zero):")
@@ -413,7 +417,16 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         file_logger.debug(f"\n{'='*60}\nCONSTRAINT BLOCK [C] DIAGNOSTIC (N_all: {N_all}, N_slave: {N_slave})")
 
         # Slice out the constraint rows: shape is (N_slave, total_matrix_size)
+        BEM_matrix = A_global[:N_all, :N_all]
         C_matrix = A_global[N_all:, :]
+        max_bem_val = np.max(np.abs(BEM_matrix))
+        max_lagrange_val = np.max(np.abs(C_matrix))
+        file_logger.debug(
+            f"\n[MATRIX SCALING] Freq: {f} Hz | "
+            f"Max BEM Entry: {max_bem_val:.3e} | "
+            f"Max Lagrange Entry: {max_lagrange_val:.3e} | "
+            f"Ratio BEM / Lagrange: {max_bem_val / max_lagrange_val:.3e}"
+        )
 
         # 1. Sparsity / Structure Map of [C] only
         file_logger.debug("\n[C Matrix Layout Map] (X = non-zero, . = zero):")

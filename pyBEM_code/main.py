@@ -113,16 +113,16 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             logger.info("-" * 80)
 
         # DEBUG
-        logger.debug("\nDEBUG: === PARSER RAW MICS ===")
-        logger.debug(f"Total entries in parser.mics_elements: {len(parser.mics_elements)}")
-        if parser.mics_elements:
-            sample_eids = list(parser.mics_elements.keys())[:5]
-            logger.debug(f"Sample MICS element IDs from parser: {sample_eids}")
+            logger.debug("\nDEBUG: === PARSER RAW MICS ===")
+            logger.debug(f"Total entries in parser.mics_elements: {len(parser.mics_elements)}")
+            if parser.mics_elements:
+                sample_eids = list(parser.mics_elements.keys())[:5]
+                logger.debug(f"Sample MICS element IDs from parser: {sample_eids}")
 
-        # Check if element_to_zone holds the microphone elements
-        mic_eids_in_zone_map = [eid for eid in parser.mics_elements if eid in parser.element_to_zone]
-        logger.debug(f"Number of MICS elements successfully registered in element_to_zone: {len(mic_eids_in_zone_map)}\n")
-        logger.debug(zones_mesh)
+            # Check if element_to_zone holds the microphone elements
+            mic_eids_in_zone_map = [eid for eid in parser.mics_elements if eid in parser.element_to_zone]
+            logger.debug(f"Number of MICS elements successfully registered in element_to_zone: {len(mic_eids_in_zone_map)}\n")
+            logger.debug(zones_mesh)
         # DEBUG_end
 
         log_top = ''
@@ -141,14 +141,14 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # Optional scale factor flag (e.g., set to 1.0 for default, > 1.0 to force higher order)
         # order_scale_factor = 10.0  
         order_scale_factor = 1.0  # Default
-
-        # Scaled dictionary
-        global_order_lengths = {
-            zone: val * order_scale_factor 
-            for zone, val in global_order_lengths.items()
-        }
-        logger.debug(f"\nDEBUG: global_order_lengths")
-        logger.debug(global_order_lengths)
+        if constants.debug_mode:
+            # Scaled dictionary
+            global_order_lengths = {
+                zone: val * order_scale_factor 
+                for zone, val in global_order_lengths.items()
+            }
+            logger.debug(f"\nDEBUG: global_order_lengths")
+            logger.debug(global_order_lengths)
         # DEBUG_end
 
         # --- 7. SETUP GLOBAL EXPORTER PACKAGE (ParaView) ---
@@ -679,7 +679,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             poster_path = "pyBEM_integration_GPs.png"
             if os.path.exists(poster_path):
                 logger.debug(
-                    f"DEBUG: Poster '{poster_path}' already exists. Skipping plot generation."
+                    f"\nDEBUG: Poster '{poster_path}' already exists. Skipping plot generation."
                 )
             else:
                 logger.debug(
