@@ -407,7 +407,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                 file_logger.debug(A_global)
                 file_logger.debug("\n[B_global Raw Values]:")
                 file_logger.debug(B_global)
-        file_logger.debug(f"{'='*60}\n")
+        file_logger.debug(f"{'='*60}")
     # DEBUG_end
 
     # DEBUG
@@ -422,7 +422,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         max_bem_val = np.max(np.abs(BEM_matrix))
         max_lagrange_val = np.max(np.abs(C_matrix))
         file_logger.debug(
-            f"\n[MATRIX SCALING] Freq: {f} Hz | "
+            f"[MATRIX SCALING] Freq: {f} Hz | "
             f"Max BEM Entry: {max_bem_val:.3e} | "
             f"Max Lagrange Entry: {max_lagrange_val:.3e} | "
             f"Ratio BEM / Lagrange: {max_bem_val / max_lagrange_val:.3e}"
@@ -432,7 +432,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         file_logger.debug("\n[C Matrix Layout Map] (X = non-zero, . = zero):")
         for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
             row_str = "".join(["X " if abs(C_matrix[local_r, c]) > 1e-15 else ". " for c in range(total_matrix_size)])
-            file_logger.debug(f"Constraint Row {global_r:02d} (Slave local {local_r:02d}) | {row_str}")
+            file_logger.debug(f"[C] Row {global_r:02d} (Slave local {local_r:02d}) | {row_str}")
 
         # 2. Detailed Index & Value Extraction
         file_logger.debug("\n[C Matrix Explicit Coupling Pairs]:")
@@ -454,7 +454,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
             row_sum = np.sum(C_matrix[local_r, :])
             file_logger.debug(f"Row {global_r:02d} total row sum: {row_sum:.6f}")
 
-        file_logger.debug(f"{'='*60}\n")
+        file_logger.debug(f"{'='*60}")
     # DEBUG_end
 
     # ==================================================================
@@ -691,7 +691,7 @@ def pre_assembly(element_nodes, centers, areas, normals):
                 # 2. Distance math
                 r2 = rx*rx + ry*ry + rz*rz
                 r = np.sqrt(r2)
-                if r2 < 1e-12:
+                if r2 < constants.tol:
                     # If a receiver centroid lands on an adjacent element's GP
                     R_map[i, idx] = 0.0
                     G_static_map[i, idx] = 0.0
@@ -819,7 +819,7 @@ def split_quads_pre_assembly(element_nodes, centers, areas, normals):
                 # 2. Distance math
                 r2 = rx*rx + ry*ry + rz*rz
                 r = np.sqrt(r2)
-                if r2 < 1e-12:
+                if r2 < constants.tol:
                     # If a receiver centroid lands on an adjacent element's GP
                     R_map[i, idx] = 0.0
                     G_static_map[i, idx] = 0.0

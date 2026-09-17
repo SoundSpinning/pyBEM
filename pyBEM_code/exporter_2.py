@@ -2,14 +2,13 @@ import os
 import shutil
 import numpy as np
 import pyvista as pv
-from constants import P_REF
+import constants
 
 class PVExporter:
     def __init__(self, model_name, nodes, sorted_node_ids, nodal_id_map, all_elements, sorted_el_ids, group_ids):
         self.model_name = model_name
         self.sorted_node_ids = sorted_node_ids
         self.pv_dir = f"PV_{model_name}"
-        self.P_REF = P_REF
         
         # 1. Clean and create the directory
         self._prepare_directory()
@@ -50,8 +49,8 @@ class PVExporter:
         num_mesh_pts = snapshot.n_points
 
         # 2. Calculate SPL
-        p_mag = np.maximum(np.abs(nodal_pressures), 2e-30)
-        spl = 20 * np.log10(p_mag / self.P_REF)
+        p_mag = np.maximum(np.abs(nodal_pressures), constants.log_floor)
+        spl = 20 * np.log10(p_mag / constants.Pref)
 
         # 3. Build the Pressure Vector (Real, Imag, 0.0)
         # Ensure we use float32 for ParaView compatibility/speed

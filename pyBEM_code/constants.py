@@ -1,6 +1,15 @@
 debug_mode = False  # --debug CLI flag
 
-P_REF = 2e-11   # dB reference for MPa, mm models for air @20C
+Pref = 2.0e-11   # SPL dB reference in MPa, mm models for air @20C
+Wref = 1.0e-9    # SWL dB reference in mili-Watts, mm models
+
+# System-wide floating-point tolerances for double precision (float64 / complex128)
+eps = 1e-15  
+# eps = Numerical machine noise, active/rigid status checks, preventing divide-by-zero in log10 or matrix scaling
+tol = 1e-12  
+# tol= Physical & geometric tolerances (coordinates, phase alignment, distance cutoffs, volume enclosed checks, near-zero pressure/flux, coplanar geometries)
+log_floor = 1e-30  
+# Floor for log10 dB calculations to prevent -inf/NaN warnings
 
 # List of all supported Abaqus/PrePoMax keywords for pyBEM
 SUPPORTED_KEYWORDS = [

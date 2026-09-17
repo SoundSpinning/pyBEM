@@ -1,3 +1,4 @@
+import argparse
 import sys
 import os
 import gc
@@ -9,7 +10,8 @@ from numba import set_num_threads
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Version & Core Imports
-from version import __solver__
+# from version import __solver__
+import version
 from pmx_parser import PMXParser
 from solver_core import (
     global_shm_cleanup, promote_to_shm, init_worker, 
@@ -30,30 +32,64 @@ gc.disable()  # Disable automatic garbage collection
 
 # MAIN APP
 def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
-    # --- 1. COLLECT ARGUMENTS ---
-    args = sys.argv[1:] # Skip the script name itself
-    filename = None
-    user_ncpus = None # Default is None, so auto-logic can take over
+    # --- 1.1 CONFIGURE CLI PARSER ---
+    parser = argparse.ArgumentParser(
+        description = f"pyBEM - V{version.__version__} | BEM Acoustics Solver", exit_on_error=False
+    )
 
-    for arg in args:
-        if "=" in arg:
+    # Positional input filename (optional at CLI level to allow interactive prompt)
+    parser.add_argument("filename", nargs="?", default=None, help="PrePoMax *.inp input file")
+
+    # Optional key-value flags
+    parser.add_argument(
+        "--cpus", 
+        type=int, default=None, 
+        help="Number of CPUs to use for parallel Freqs solve.  Defaults: 1 CPU but multi-thread for matrix solve. pyBEM sets this automatically per machine specs, in order to minimise racing conditions."
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=constants.debug_mode,
+        help="Enable debug logging to '*_debug.log' file",
+    )
+    parser.add_argument(
+        "--Pref",
+        type=float,
+        default=constants.Pref,
+        help=f"dB PRESSURE reference (default: {constants.Pref}MPa)",
+    )
+    parser.add_argument(
+        "--Wref",
+        type=float,
+        default=constants.Wref,
+        help=f"dB POWER reference (default: {constants.Wref}mW)",
+    )
+
+    # Pre-process arguments to support key=value formats (e.g., debug=yes or cpus=4)
+    processed_args = []
+    for arg in sys.argv[1:]:
+        if "=" in arg and not arg.startswith("--"):
             key, val = arg.split("=", 1)
-            clean_key = key.lstrip("-").lower()
-            
-            if clean_key == "cpus":
-                try:
-                    user_ncpus = int(val)
-                except ValueError:
-                    print(f" [!] Warning: Invalid cpus value '{val}'. Using auto-parallel.")
-            elif clean_key == "debug":
-                constants.debug_mode = val.lower() in ("true", "1", "yes")
-            else:
-                raise RuntimeError(f" [!] ERROR: Unknown parameter '{key}'. Valid options are 'cpus=N' or 'debug=yes'.")
-        elif arg.lower() in ("--debug", "-debug"):
-            constants.debug_mode = True
+            processed_args.append(f"--{key}={val}")
         else:
-            # If it doesn't have an '=', treat as input file
-            filename = arg.strip()
+            processed_args.append(arg)
+
+    try:
+        args = parser.parse_args(processed_args)
+    except argparse.ArgumentError as err:
+        print(f" [!] ERROR: {err}")
+        return
+
+    # --- 1.2 UPDATE CONSTANTS & RUNTIME VARS ---
+    constants.debug_mode = args.debug
+    constants.Pref = args.Pref
+    constants.Wref = args.Wref
+    user_ncpus = args.cpus
+    filename = args.filename
+
+    # Handle boolean text conversions if passed as --debug=yes or --debug=1
+    if isinstance(args.debug, str):
+        constants.debug_mode = args.debug.lower() in ("true", "1", "yes")
 
     # --- 2. FALLBACK TO INTERACTIVE ---
     if not filename:
@@ -104,7 +140,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         parser.n_mics_nodes = n_mics_nodes 
 
         # 5.4 Write solver banner and model summary to log & terminal
-        logger.info(__solver__.strip())
+        logger.info(version.__solver__.strip())
         logger.info(parser.print_model_summary())
 
         if constants.debug_mode:
@@ -147,7 +183,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 zone: val * order_scale_factor 
                 for zone, val in global_order_lengths.items()
             }
-            logger.debug(f"\nDEBUG: global_order_lengths")
+            logger.debug(f"\nDEBUG: === global_order_lengths ===")
             logger.debug(global_order_lengths)
         # DEBUG_end
 
@@ -277,7 +313,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         zone_offsets, total_matrix_size = get_global_offsets(zones_mesh, tie_registry)
         
         # DEBUG
-        logger.debug(f"\nDEBUG: zone_offsets")
+        logger.debug(f"\nDEBUG: === zone_offsets ===")
         logger.debug(zone_offsets)
         logger.debug(f"\n")
         # DEBUG_end
@@ -335,6 +371,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         global_mics_elements_conn = {}
         mic_node_counter = 0
     
+        logger.debug(f"DEBUG: PRE static checks")
+        logger.debug(f"========================")
         for zone_name, z_mesh in zones_mesh.items():
             t_pre_0 = time.time()
             logger.info(f" --> Pre-assembling BEM Geometric Static Kernels for Zone: [ {zone_name} ]")
@@ -348,15 +386,14 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             # )
             # logger.debug(f"DEBUG: PRE static checks")
             # logger.debug(f"========================")
-            # logger.debug(f" BASELINE: pre_assembly():")
-            # logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
-            # logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
-            # logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
-            # logger.debug(f"[PRE CHECK] z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
-            # logger.debug(f"[PRE CHECK] z_h_diag: \n{z_h_diag}")
-            # logger.debug(f"[PRE CHECK] z_g_diag: \n{z_g_diag}")
-            # logger.debug(f"[PRE CHECK] z_R: \n{z_R}")
-            # # logger.debug(f" gp_per_element: {z_gp}")
+            # logger.debug(f"BASELINE: pre_assembly():")
+            # logger.debug(f"z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
+            # logger.debug(f"z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
+            # logger.debug(f"z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
+            # logger.debug(f"z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
+            # logger.debug(f"z_h_diag: \n{z_h_diag}")
+            # logger.debug(f"z_g_diag: \n{z_g_diag}")
+            # logger.debug(f"z_R: \n{z_R}")
             
             # logger.debug(f" Baseline 'z_h_diag' sum: {np.sum(z_h_diag)}")
             # max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
@@ -368,23 +405,19 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 z_nodes, z_centers, z_areas, z_normals
             )
 
-            logger.debug(f"DEBUG: PRE static checks")
-            logger.debug(f"========================")
-            logger.debug(f" NEW: split_quads_pre_assembly() | ZONE - '{zone_name}'")
-            logger.debug(f"[PRE CHECK] z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
-            logger.debug(f"[PRE CHECK] z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
-            logger.debug(f"[PRE CHECK] z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
-            logger.debug(f"[PRE CHECK] z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
-            logger.debug(f"[PRE CHECK] z_h_diag: \n{z_h_diag}")
-            logger.debug(f"[PRE CHECK] z_g_diag: \n{z_g_diag}")
-            logger.debug(f"[PRE CHECK] z_R: \n{z_R}")
-            # logger.debug(f" gp_per_element: {z_gp}")
+            logger.debug(f"NEW: split_quads_pre_assembly() | ZONE - '{zone_name}'")
+            logger.debug(f"z_G_stat non-finite: {np.logical_not(np.isfinite(z_G_stat)).sum()} of {z_G_stat.size}")
+            logger.debug(f"z_H_stat non-finite: {np.logical_not(np.isfinite(z_H_stat)).sum()} of {z_H_stat.size}")
+            logger.debug(f"z_g_diag non-finite: {np.logical_not(np.isfinite(z_g_diag)).sum()} of {z_g_diag.size}")
+            logger.debug(f"z_h_diag non-finite: {np.logical_not(np.isfinite(z_h_diag)).sum()} of {z_h_diag.size}")
+            logger.debug(f"z_h_diag: \n{z_h_diag}")
+            logger.debug(f"z_g_diag: \n{z_g_diag}")
+            logger.debug(f"z_R: \n{z_R}")
 
             logger.debug(f" Split    'z_h_diag' sum: {np.sum(z_h_diag)}")
             # Currently failing!
             max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
             logger.debug(f" Max split 'z_H_stat' residual:   {max_res}")  
-            logger.debug(f"\n")
 
             # STOP_RUN()
             
@@ -551,7 +584,11 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         global_v_mics_x = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
         global_v_mics_y = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
         global_v_mics_z = np.zeros((num_freqs, n_mics_nodes), dtype=np.complex128)
-        
+
+        logger.debug(f"\n=====================")
+        logger.debug(f"DEBUG [SOLVER] STARTS")
+        logger.debug(f"=====================")
+
         # ==================================================================
         # --- 13. THE PARALLEL SWEEP POOL INTERFACE ---
         # ==================================================================
@@ -631,6 +668,9 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         t_exp_0 = time.time()
 
+        logger.debug(f"===================")
+        logger.debug(f"DEBUG [SOLVER] ENDS")
+        logger.debug(f"===================")
         # ==================================================================
         # --- 13.6 COMPUTE AND EXPORT TOTAL SURFACE SOUND POWER ---
         # ==================================================================

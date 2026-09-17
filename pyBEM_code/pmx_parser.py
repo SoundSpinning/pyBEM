@@ -1,6 +1,7 @@
 import os
 import numpy as np
-from constants import SUPPORTED_KEYWORDS, SUB_KEYWORDS, TOP_LOG_LINES
+import constants
+# from constants import SUPPORTED_KEYWORDS, SUB_KEYWORDS, TOP_LOG_LINES
 from version import __solver__
 
 class PMXParser:
@@ -54,8 +55,8 @@ class PMXParser:
             if line.startswith('*') and not line.startswith('**'):
                 # Check if the command (first word) is in our supported list
                 cmd = line.split(',')[0].upper()
-                if cmd in SUPPORTED_KEYWORDS:
-                    if cmd in SUB_KEYWORDS:
+                if cmd in constants.SUPPORTED_KEYWORDS:
+                    if cmd in constants.SUB_KEYWORDS:
                         continue
                     else:
                         key_indices.append(idx)
@@ -453,7 +454,8 @@ class PMXParser:
             f.write(self.model_str)
 
     def print_model_summary(self):
-        self.top_log = TOP_LOG_LINES(self)
-        self.write_debug_inp()
+        self.top_log = constants.TOP_LOG_LINES(self)
+        if constants.debug_mode:
+            self.write_debug_inp()
         model_summary = self.header_comments + self.top_log
         return model_summary

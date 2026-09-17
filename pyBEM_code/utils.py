@@ -195,7 +195,7 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(z_elements, bem_centers, bem_areas, bem_normals)
         
         log_info += f"\n--> ZONE: [ {zone_name} ]"
-        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.6} L**2 )"
+        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.6g} L**2 )"
         log_info += f"\n    CoG of BEM zone:            [ {bem_CoG[0]:.2f}, {bem_CoG[1]:.2f}, {bem_CoG[2]:.2f} ] L"
         log_info += f"\n    Max Element Aspect Ratio:   ( {np.max(elem_ratio):.2f} )"
         log_info += f"\n    Element Size (approx):      ( {order_length:.2f} L )"
@@ -213,16 +213,16 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
             _write_and_fail(log_f, log_top, log_info)
             
         # Rule 3: Detect Interior vs Exterior via Signed Volume orientation
-        if bem_total_vol > 1e-9:
+        if bem_total_vol > constants.tol:
             global_h_signs[zone_name] = -1.0
             log_info += f"""
-    Closed (+) Volume detected: ( {bem_total_vol:.6} L**3 )
+    Closed (+) Volume detected: ( {bem_total_vol:.6g} L**3 )
     -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
 """
-        elif bem_total_vol < -1e-9:
+        elif bem_total_vol < -constants.tol:
             global_h_signs[zone_name] = 1.0
             log_info += f"""
-    Closed (-) Volume detected: ( {bem_total_vol:.6} L**3 )
+    Closed (-) Volume detected: ( {bem_total_vol:.6g} L**3 )
     -> Normals point INWARDS ==> Assuming EXTERIOR Analysis
 """
         else:
@@ -344,43 +344,6 @@ def evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
     # Swap if slave is strictly finer (h_slave < h_master)
     is_swapped = h_slave < h_master
     # is_swapped = False  ## for debugging only
-
-    return is_swapped, h_slave, h_master
-
-def old_evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
-    """
-    Evaluates characteristic lengths (h_bar) of both candidate surfaces.
-    Forces the side with larger h_bar (COARSER mesh) to be the SLAVE 
-    for point-collocation sound power conservation.
-    """
-    def calc_surface_hbar(eids):
-        total_area = 0.0
-        weighted_h = 0.0
-        for z_name, z_mesh in zones_mesh.items():
-            for idx, eid in enumerate(z_mesh['elements'].keys()):
-                if eid in eids:
-                    # Retrieve element nodes and max edge length (h)
-                    conn = z_mesh['elements'][eid]
-                    coords = np.array([sorted_nodes[nid] for nid in conn])
-                    # Simple h_char estimate via maximum bounding distance or edge length
-                    h_elem = max(np.linalg.norm(coords[i] - coords[j]) 
-                                 for i in range(len(coords)) for j in range(i+1, len(coords)))
-                    
-                    # Area calculation for weighting
-                    _, _, area, _, _, _ = get_element_properties(sorted_nodes, conn)
-                    total_area += area
-                    weighted_h += area * h_elem
-        return weighted_h / total_area if total_area > 0 else 0.0
-
-    h_slave = calc_surface_hbar(slave_eids)
-    h_master = calc_surface_hbar(master_eids)
-
-    # FOR POINT-COLLOCATION: Force COARSE mesh to be the SLAVE.
-    # If the user-defined slave is FINER than the master (h_slave < h_master),
-    # swap so the coarser side (larger h_bar) becomes the slave.
-    is_swapped = False
-    if h_slave * 1.05 < h_master:  # 5% hysteresis buffer
-        is_swapped = True
 
     return is_swapped, h_slave, h_master
 
@@ -528,7 +491,7 @@ def clip_polygon_2d(poly1, poly2):
         dc = [cp1[0] - cp2[0], cp1[1] - cp2[1]]
         dp = [s[0] - e[0], s[1] - e[1]]
         denom = dc[0] * dp[1] - dc[1] * dp[0]
-        if abs(denom) < 1e-12:
+        if abs(denom) < constants.tol:
             return s
         n1 = cp1[0] * cp2[1] - cp1[1] * cp2[0]
         n2 = s[0] * e[1] - s[1] * e[0]
@@ -663,7 +626,7 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
             s_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in s_vertices_3d]
             s_area = compute_polygon_area_2d(s_vertices_2d)
             
-            if s_area < 1e-12:
+            if s_area < constants.tol:
                 continue
             
             overlapping_masters = []
@@ -699,9 +662,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                 W_slave_to_master[seid] = {}
                 tie_slave_area += s_area
 
-                # # Compute sum of clipped areas for this slave element
-                # total_clipped_area = sum(weights_raw)
-                
                 for m_eid, area_ij in zip(overlapping_masters, weights_raw):
                     if m_eid not in W_master_to_slave:
                         W_master_to_slave[m_eid] = {}
@@ -719,7 +679,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
 
                     # Safe normalization: normalize w_slave_fraction against total_clipped_area 
                     # to ensure sum(w_slave) == 1.0 even if polygon clipping missed small perimeter edges
-                    # w_slave_fraction = area_ij / total_clipped_area if total_clipped_area > 1e-12 else area_ij / s_area
                     w_slave_fraction = area_ij / s_area
                     w_master_fraction = area_ij / m_area_true
 
@@ -791,12 +750,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
         log_pre_ties += f"\n   Raw Geometric Intersected Area: {tie_intersected_area:.6} L^2 (Sliver clipping loss: {tie_slave_area - tie_intersected_area:.6} L^2)"
         log_pre_ties += f"\n   Effective Mapped Area (Post):   {tie_intersected_area_post:.6} L^2"
         log_pre_ties += f"\n   Area Conservation Error:        {post_area_error:.6} L^2\n"
-
-        # # Append per-tie diagnostics to log_pre_ties
-        # log_pre_ties += f"\n TIE: [{tie_name}] | Master: '{tie_info.get('master_surface', 'N/A')}' <---> Slave: '{tie_info.get('slave_surface', 'N/A')}'"
-        # log_pre_ties += f"\n   Total Slave Surface Area:  {tie_slave_area:.6} L^2"
-        # log_pre_ties += f"\n   Total Intersected Area:    {tie_intersected_area:.6} L^2"
-        # log_pre_ties += f"\n   Area Conservation Error:   {abs(tie_slave_area - tie_intersected_area):.6} L^2\n"
 
     log_pre_ties += ("="*70 + "\n")
                     
@@ -1066,7 +1019,469 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, elem_id_map, ordered_mi
     return nodal_pressures
 
 # ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
-def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs, 
+def calculate_total_sound_power(
+    model_name,
+    surfaces,
+    surface_elements,
+    freqs,
+    global_p_surf,
+    global_v_surf,
+    global_p_mics,
+    global_v_mics_x,
+    global_v_mics_y,
+    global_v_mics_z,
+    global_bem_elements_map,
+    global_mics_nodes_map,
+    global_bem_areas,
+    global_mics_areas,
+    global_mics_normals,
+    global_mics_elements_conn,
+    tie_registry=None,
+):
+    """Computes total sound power passing through BEM and MICS surfaces across all frequencies.
+
+    Outputs net acoustic power transmission values to a single model_name_power.csv file.
+    Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
+    If TIED pairs present, it also calculates the Active power for slave and master surfaces.
+    """
+
+    # 1. Create extended surface dictionary to incorporate active tied sub-patches
+    all_surface_elements = dict(surface_elements)
+
+    if tie_registry:
+        for tie_name, info in tie_registry.items():
+            master_active_key = f"{tie_name}_Master"
+            slave_active_key = f"{tie_name}_Slave"
+
+            # Map active element sets saved during PRE mesh alignment
+            all_surface_elements[master_active_key] = info["active_master_eids"]
+            all_surface_elements[slave_active_key] = info["active_slave_eids"]
+
+    # Initialize container tracking for active (real), reactive (imag), and apparent (mag) powers
+    surface_power_results = {
+        surf_name: {"real": [], "imag": [], "mag": []}
+        for surf_name in all_surface_elements.keys()
+    }
+    surface_metrics = {
+        surf_name: {"area": 0.0, "total_energy_sum": 0.0}
+        for surf_name in all_surface_elements.keys()
+    }
+
+    # 2. Compute Surface Areas (BEM vs MICS)
+    for surf_name, surf_elements in all_surface_elements.items():
+        if len(surf_elements) == 0:
+            continue
+        first_eid = surf_elements[0]
+
+        # Sum areas depending on BEM or MICS type
+        if first_eid in global_bem_elements_map:
+            surface_metrics[surf_name]["area"] = sum(
+                global_bem_areas[eid]
+                for eid in surf_elements
+                if eid in global_bem_areas
+            )
+        elif first_eid in global_mics_elements_conn:
+            surface_metrics[surf_name]["area"] = sum(
+                global_mics_areas[meid]
+                for meid in surf_elements
+                if meid in global_mics_areas
+            )
+
+    # 3. Frequency Integration Loop
+    file_logger.debug("\nDEBUG: TIED pairs power checks:")
+    file_logger.debug("       ========================")
+    file_logger.debug(
+        "       Calculate Net Interface Flux Leakage & Mean Phase Offsets"
+    )
+    for f_idx, freq in enumerate(freqs):
+        p_surf_f = global_p_surf[f_idx, :]
+        v_surf_f = global_v_surf[f_idx, :]
+
+        p_mics_f = global_p_mics[f_idx, :]
+        vx_mics_f = global_v_mics_x[f_idx, :]
+        vy_mics_f = global_v_mics_y[f_idx, :]
+        vz_mics_f = global_v_mics_z[f_idx, :]
+
+        # --- DEBUG: Track Tie Surface Interface Flux & Phase Balance ---
+        if tie_registry and constants.debug_mode:
+            for tie_name, info in tie_registry.items():
+                master_key = f"{tie_name}_Master"
+                slave_key = f"{tie_name}_Slave"
+
+                master_eids = all_surface_elements.get(master_key, [])
+                slave_eids = all_surface_elements.get(slave_key, [])
+
+                # Integrate Complex Acoustic Volume Velocity (Flux: Q = integral(v * dA))
+                q_master_complex = 0.0 + 0.0j
+                q_slave_complex = 0.0 + 0.0j
+
+                # Arrays for phase angle checks
+                master_phases = []
+                slave_phases = []
+
+                # Accumulate Master Flux
+                for eid in master_eids:
+                    if eid in global_bem_elements_map:
+                        g_idx = global_bem_elements_map[eid]
+                        P_el = p_surf_f[g_idx]
+                        V_el = v_surf_f[g_idx]
+                        q_master_complex += V_el * global_bem_areas[eid]
+
+                        # Phase difference phi_p - phi_v
+                        if abs(P_el) > 1e-12 and abs(V_el) > 1e-12:
+                            master_phases.append(np.angle(P_el) - np.angle(V_el))
+
+                # Accumulate Slave Flux
+                for eid in slave_eids:
+                    if eid in global_bem_elements_map:
+                        g_idx = global_bem_elements_map[eid]
+                        P_el = p_surf_f[g_idx]
+                        V_el = v_surf_f[g_idx]
+                        q_slave_complex += V_el * global_bem_areas[eid]
+
+                        if abs(P_el) > 1e-12 and abs(V_el) > 1e-12:
+                            slave_phases.append(np.angle(P_el) - np.angle(V_el))
+
+                # Calculate Net Interface Flux Leakage & Mean Phase Offsets
+                q_m_abs = abs(q_master_complex)
+                q_s_abs = abs(q_slave_complex)
+                q_net_err = abs(
+                    q_master_complex - q_slave_complex
+                )  # Continuous boundary: Q_m + Q_s = 0
+                q_rel_err = (q_net_err / (q_s_abs + 1e-15)) * 100.0
+
+                mean_phi_m = (
+                    np.degrees(np.mean(master_phases)) if master_phases else 0.0
+                )
+                mean_phi_s = (
+                    np.degrees(np.mean(slave_phases)) if slave_phases else 0.0
+                )
+
+                file_logger.debug(
+                    f"Freq: {freq:6.1f} Hz | Tie: [{tie_name}]:\n"
+                    f"Q_master: {q_m_abs:.4e} | Q_slave: {q_s_abs:.4e} | "
+                    f"Flux Mismatch: {q_net_err:.4e} ({q_rel_err:.2f}%) | "
+                    f"Mean Phase(P-V): Master={mean_phi_m:.1f}deg,"
+                    f" Slave={mean_phi_s:.1f}deg"
+                )
+
+        for surf_name, surf_elements in all_surface_elements.items():
+            if len(surf_elements) == 0:
+                surface_power_results[surf_name]["real"].append(0.0)
+                surface_power_results[surf_name]["imag"].append(0.0)
+                surface_power_results[surf_name]["mag"].append(0.0)
+                continue
+
+            first_eid = surf_elements[0]
+            total_real_pwr = 0.0
+            total_imag_pwr = 0.0
+            total_mag_pwr = 0.0
+
+            # --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
+            if first_eid in global_bem_elements_map:
+                for eid in surf_elements:
+                    if eid not in global_bem_elements_map:
+                        continue
+                    g_idx = global_bem_elements_map[eid]
+                    P_elem = p_surf_f[g_idx]
+                    V_elem = v_surf_f[g_idx]  # Normal velocity scalar component
+                    area_elem = global_bem_areas[eid]
+
+                    # Complex intensity flux vector component: S_n = 0.5 * P * conj(V)
+                    S_elem = 0.5 * P_elem * np.conj(V_elem)
+
+                    total_real_pwr += np.real(S_elem) * area_elem
+                    total_imag_pwr += np.imag(S_elem) * area_elem
+                    total_mag_pwr += np.abs(S_elem) * area_elem
+
+                # Sign inversion for non-tied, inward-driving boundary sources
+                if (
+                    "tied" not in surf_name.lower()
+                    and "[active]" not in surf_name.lower()
+                    and total_real_pwr < 0
+                ):
+                    total_real_pwr = -total_real_pwr
+
+            # --- CASE B: MICS SURFACE (NODAL-TO-ELEMENTAL CENTROID) ---
+            elif first_eid in global_mics_elements_conn:
+                for meid in surf_elements:
+                    if meid not in global_mics_elements_conn:
+                        continue
+                    elem_nodes = global_mics_elements_conn[meid]
+                    area_m_elem = global_mics_areas[meid]
+                    normal_m_elem = global_mics_normals[meid]
+
+                    P_centroid = 0.0 + 0.0j
+                    Vx_centroid = 0.0 + 0.0j
+                    Vy_centroid = 0.0 + 0.0j
+                    Vz_centroid = 0.0 + 0.0j
+
+                    for nid in elem_nodes:
+                        g_n_idx = global_mics_nodes_map[nid]
+                        P_centroid += p_mics_f[g_n_idx]
+                        Vx_centroid += vx_mics_f[g_n_idx]
+                        Vy_centroid += vy_mics_f[g_n_idx]
+                        Vz_centroid += vz_mics_f[g_n_idx]
+
+                    num_nodes = len(elem_nodes)
+                    P_centroid /= num_nodes
+                    Vx_centroid /= num_nodes
+                    Vy_centroid /= num_nodes
+                    Vz_centroid /= num_nodes
+
+                    # Project 3D velocity vector onto MICS element normal unit vector
+                    V_normal_centroid = (
+                        Vx_centroid * normal_m_elem[0]
+                        + Vy_centroid * normal_m_elem[1]
+                        + Vz_centroid * normal_m_elem[2]
+                    )
+
+                    # Complex intensity flux vector component: S_n = 0.5 * P * conj(V)
+                    S_elem = 0.5 * P_centroid * np.conj(V_normal_centroid)
+
+                    total_real_pwr += np.real(S_elem) * area_m_elem
+                    total_imag_pwr += np.imag(S_elem) * area_m_elem
+                    total_mag_pwr += np.abs(S_elem) * area_m_elem
+
+                # Invert external field microphone signs if net active power points inward
+                if total_real_pwr < 0:
+                    total_real_pwr = -total_real_pwr
+
+            # Append step results
+            surface_power_results[surf_name]["real"].append(total_real_pwr)
+            surface_power_results[surf_name]["imag"].append(total_imag_pwr)
+            surface_power_results[surf_name]["mag"].append(total_mag_pwr)
+            surface_metrics[surf_name]["total_energy_sum"] += total_real_pwr
+
+    # 4. Write CSV Export and Assemble Output Labels
+    csv_filename = f"{model_name}_power.csv"
+    all_surf_names = list(all_surface_elements.keys())
+    surf_pwr_labels = []
+
+    with open(csv_filename, mode="w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+
+        headers = ["Freq(Hz)"]
+        for sname in all_surf_names:
+            A_val = surface_metrics[sname]["area"]
+            TSW_val = surface_metrics[sname]["total_energy_sum"]
+
+            # Clean float formatting with :.6g for general auto-formatting
+            hdr_base = f"{sname} | A = {A_val:.6g} L**2 | TSW = {TSW_val:.4g}"
+            surf_pwr_labels.append(hdr_base)
+
+            # Write real, imag, mag, and sound power levels for each surface
+            headers.append(f"{hdr_base} | W_real (W)")
+            headers.append(f"{hdr_base} | W_imag (W)")
+            headers.append(f"{hdr_base} | W_mag (W)")
+            headers.append(f"{hdr_base} | SWL_real (dB)")
+            headers.append(f"{hdr_base} | SWL_imag (dB)")
+            headers.append(f"{hdr_base} | SWL_mag (dB)")
+
+        writer.writerow(headers)
+
+        # Write frequency rows
+        for f_idx, freq in enumerate(freqs):
+            row = [freq]
+            for sname in all_surf_names:
+                w_real = surface_power_results[sname]["real"][f_idx]
+                w_imag = surface_power_results[sname]["imag"][f_idx]
+                w_mag = surface_power_results[sname]["mag"][f_idx]
+
+                # Calculate SWL (dB re Wref) safely using absolute value for log scale
+                swl_real = 10.0 * np.log10(max(abs(w_real), 1e-30) / constants.Wref)
+                swl_imag = 10.0 * np.log10(max(abs(w_imag), 1e-30) / constants.Wref)
+                swl_mag = 10.0 * np.log10(max(abs(w_mag), 1e-30) / constants.Wref)
+
+                row.extend([w_real, w_imag, w_mag, swl_real, swl_imag, swl_mag])
+
+            writer.writerow(row)
+
+    return surf_pwr_labels
+
+
+def generate_power_flux_plot(model_name, suffix=""):
+    """Reads the generated model_name_power.csv file and outputs a clean
+
+    PNG graph showing SWL (dB) for Apparent (Mag), Active (Real), and
+    Reactive (Imag) powers in 3 side-by-side subplots.
+    Uses a headless background rendering engine to minimize overhead.
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        file_logger.warning(
+            " [Warning]: Matplotlib not found. Skipping automated plot generation."
+        )
+        return
+
+    csv_filename = f"{model_name}_power{suffix}.csv"
+    png_filename = f"{model_name}_power{suffix}.png"
+
+    frequencies = []
+    series_dict = {}
+
+    try:
+        with open(csv_filename, mode="r") as csv_file:
+            reader = csv.reader(csv_file)
+            headers = next(reader)
+
+            col_map = []
+            for col_idx, h_text in enumerate(headers[1:], start=1):
+                parts = [p.strip() for p in h_text.split("|")]
+                sname = parts[0]
+                area_str = parts[1] if len(parts) > 1 else ""
+                tsw_str = parts[2] if len(parts) > 2 else ""
+                metric = parts[-1]
+
+                if sname not in series_dict:
+                    series_dict[sname] = {
+                        "area_str": area_str,
+                        "tsw_str": tsw_str,
+                        "tsw_val": 0.0,
+                        "SWL_real": [],
+                        "SWL_imag": [],
+                        "SWL_mag": [],
+                    }
+
+                    # Extract numeric TSW value for activity filtering
+                    if "TSW =" in tsw_str:
+                        try:
+                            series_dict[sname]["tsw_val"] = float(tsw_str.split("=")[1])
+                        except ValueError:
+                            series_dict[sname]["tsw_val"] = 0.0
+
+                if "SWL_real" in metric:
+                    col_map.append((sname, "SWL_real"))
+                elif "SWL_imag" in metric:
+                    col_map.append((sname, "SWL_imag"))
+                elif "SWL_mag" in metric:
+                    col_map.append((sname, "SWL_mag"))
+                else:
+                    col_map.append((None, None))
+
+            for row in reader:
+                if not row or not row[0]:
+                    continue
+                if "freq" in row[0].lower():
+                    continue
+                try:
+                    freq_val = float(row[0])
+                    row_data_vals = [float(val) for val in row[1:]]
+                except ValueError:
+                    continue
+
+                frequencies.append(freq_val)
+                for idx, (sname, metric_key) in enumerate(col_map):
+                    if sname and metric_key:
+                        series_dict[sname][metric_key].append(row_data_vals[idx])
+
+    except FileNotFoundError:
+        file_logger.error(f" [Error]: Power CSV file '{csv_filename}' not found.")
+        return
+
+    if not frequencies:
+        return
+
+    # --- Build 3-Panel Side-by-Side Plot ---
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), dpi=150)
+
+    panels = [
+        ("SWL_mag", "Apparent Power — SWL (Mag)"),
+        ("SWL_real", "Active Power — SWL (Real)"),
+        ("SWL_imag", "Reactive Power — SWL (Imag)"),
+    ]
+
+    for ax_idx, (metric_key, title_str) in enumerate(panels):
+        ax = axes[ax_idx]
+
+        for sname, sdata in series_dict.items():
+            name_lower = sname.lower()
+            area_str = sdata["area_str"]
+            tsw_str = sdata["tsw_str"]
+            tsw_val = sdata["tsw_val"]
+            y_vals = sdata[metric_key]
+
+            full_lbl = f"{sname} | {area_str} | {tsw_str}"
+
+            # Check if surface is virtually inactive (TSW sum ~ 0)
+            if abs(tsw_val) < constants.eps:
+                ax.plot([], [], label=f"{full_lbl} (Rigid)", linestyle="none")
+                continue
+
+            if "tie" in name_lower:
+                if "master" in name_lower:
+                    ax.plot(
+                        frequencies,
+                        y_vals,
+                        label=full_lbl,
+                        linewidth=2.0,
+                        linestyle="--",
+                        color="#d62728",
+                        zorder=2,
+                    )
+                else:
+                    ax.plot(
+                        frequencies,
+                        y_vals,
+                        label=full_lbl,
+                        linewidth=3.0,
+                        linestyle=":",
+                        color="#2ca02c",
+                        zorder=3,
+                    )
+            else:
+                ax.plot(frequencies, y_vals, label=full_lbl, linewidth=2.5, zorder=1)
+
+        ax.set_title(title_str, fontsize=11, fontweight="bold", pad=12)
+        ax.set_xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
+        ax.set_ylabel(
+            f"SWL (dB) - Wref = {constants.Wref}", fontsize=10, labelpad=6
+        )
+
+        ax.set_xscale("log")
+        ax.yaxis.set_tick_params(labelleft=True)
+
+        ax.grid(True, which="both", linestyle=":", color="#cccccc", alpha=0.8)
+        ax.legend(
+            loc="best",
+            frameon=True,
+            facecolor="#ffffff",
+            edgecolor="#cccccc",
+            fontsize=8,
+        )
+
+    fig.suptitle(
+        f"Acoustic Sound Power Levels (SWL) — Model: {model_name}",
+        fontsize=13,
+        fontweight="bold",
+        y=0.98,
+    )
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.88)
+
+    # Attempt normal save with fallback for locked files
+    try:
+        plt.savefig(png_filename, dpi=150)
+    except (PermissionError, OSError):
+        suffix = "_new"
+        alt_filename = f"{model_name}_power{suffix}.png"
+        logger.warning(
+            f"     [Warning]: Could not overwrite '{png_filename}' (file is likely open"
+            f" in a viewer).\n                Saving fallback copy to"
+            f" ( '{alt_filename}' ) instead."
+        )
+        try:
+            plt.savefig(alt_filename, dpi=150)
+        except Exception as fallback_err:
+            logger.error(f" [Error]: Failed to save plot: {fallback_err}")
+    finally:
+        plt.close()
+
+def old_calculate_total_sound_power(model_name, surfaces, surface_elements, freqs, 
                                 global_p_surf, global_v_surf, 
                                 global_p_mics, global_v_mics_x, global_v_mics_y, global_v_mics_z,
                                 global_bem_elements_map, global_mics_nodes_map, 
@@ -1087,14 +1502,10 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
         for tie_name, info in tie_registry.items():
             master_active_key = f"{tie_name}_Master"
             slave_active_key = f"{tie_name}_Slave"
-            # master_active_key = f"{tie_name}_Master [Active]"
-            # slave_active_key = f"{tie_name}_Slave [Active]"
 
             # Map active element sets saved during PRE mesh alignment
             all_surface_elements[master_active_key] = info['active_master_eids']
             all_surface_elements[slave_active_key] = info['active_slave_eids']
-            # all_surface_elements[master_active_key] = info['active_master_eids']
-            # all_surface_elements[slave_active_key] = info['active_slave_eids']
 
     # Initialize container tracking
     surface_power_results = {surf_name: [] for surf_name in all_surface_elements.keys()}
@@ -1113,6 +1524,9 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
             surface_metrics[surf_name]['area'] = sum(global_mics_areas[meid] for meid in surf_elements if meid in global_mics_areas)
 
     # 3. Frequency Integration Loop
+    file_logger.debug("\nDEBUG: TIED pairs power checks:")
+    file_logger.debug("       ========================")
+    file_logger.debug("       Calculate Net Interface Flux Leakage & Mean Phase Offsets")
     for f_idx, freq in enumerate(freqs):
         p_surf_f = global_p_surf[f_idx, :]
         v_surf_f = global_v_surf[f_idx, :]
@@ -1122,7 +1536,7 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
         vy_mics_f = global_v_mics_y[f_idx, :]
         vz_mics_f = global_v_mics_z[f_idx, :]
 
-        # --- DIAGNOSTIC: Track Tie Surface Interface Flux & Phase Balance ---
+        # --- DEBUG: Track Tie Surface Interface Flux & Phase Balance ---
         if tie_registry and constants.debug_mode:
             for tie_name, info in tie_registry.items():
                 master_key = f"{tie_name}_Master"
@@ -1172,8 +1586,8 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
                 mean_phi_s = np.degrees(np.mean(slave_phases)) if slave_phases else 0.0
 
                 file_logger.debug(
-                    f"[TIE DIAGNOSTIC] Freq: {freq:6.1f} Hz | Tie: [{tie_name}]:\n"
-                    f"|Q_master|: {q_m_abs:.4e} | |Q_slave|: {q_s_abs:.4e} | "
+                    f"Freq: {freq:6.1f} Hz | Tie: [{tie_name}]:\n"
+                    f"Q_master: {q_m_abs:.4e} | Q_slave: {q_s_abs:.4e} | "
                     f"Flux Mismatch: {q_net_err:.4e} ({q_rel_err:.2f}%) | "
                     f"Mean Phase(P-V): Master={mean_phi_m:.1f}deg, Slave={mean_phi_s:.1f}deg"
                 )
@@ -1281,7 +1695,7 @@ def calculate_total_sound_power(model_name, surfaces, surface_elements, freqs,
 
     return surf_pwr_labels
 
-def generate_power_flux_plot(model_name, suffix):
+def old_generate_power_flux_plot(model_name, suffix):
     """
     Reads the generated model_name_power.csv file and outputs a clean
     PNG graph tracking energy flux across all imported surfaces.
@@ -1557,8 +1971,8 @@ def split_quad_get_quad_points_3x3(v1, v2, v3, v4):
     area2 = 0.5 * np.linalg.norm(np.cross(v4 - v1, v3 - v1))
     total_area = area1 + area2
 
-    frac1 = 0.5 if total_area < 1e-14 else area1 / total_area
-    frac2 = 0.5 if total_area < 1e-14 else area2 / total_area
+    frac1 = 0.5 if total_area < constants.tol else area1 / total_area
+    frac2 = 0.5 if total_area < constants.tol else area2 / total_area
 
     sum_w = 0.0
     for i in range(7):
