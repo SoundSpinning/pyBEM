@@ -10,7 +10,6 @@ from numba import set_num_threads
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Version & Core Imports
-# from version import __solver__
 import version
 from pmx_parser import PMXParser
 from solver_core import (
@@ -29,8 +28,9 @@ from utils import (
 np.set_printoptions(threshold=100) # limit terminal prints size
 gc.disable()  # Disable automatic garbage collection
 
-
+##########
 # MAIN APP
+##########
 def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     # --- 1.1 CONFIGURE CLI PARSER ---
     parser = argparse.ArgumentParser(

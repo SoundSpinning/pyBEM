@@ -131,34 +131,34 @@ def format_section_header(title: str, indent: str = "    ") -> str:
     border = "=" * len(header_text)
     return f"{indent}{border}\n{indent}{header_text}\n{indent}{border}"
 
-# if constants.debug_mode:
-#     file_logger.debug(format_debug_dict(tie_data, name="Tie Coupling Data"))
+# # if constants.debug_mode:
+# #     file_logger.debug(format_debug_dict(tie_data, name="Tie Coupling Data"))
 
-def format_debug_dict(d, name="Debug Dict", max_items=5):
-    """Returns a cleanly formatted multi-line string summarizing dictionary values."""
-    lines = [f"\n--- {name} (Keys: {len(d)}) ---"]
+# def format_debug_dict(d, name="Debug Dict", max_items=5):
+#     """Returns a cleanly formatted multi-line string summarizing dictionary values."""
+#     lines = [f"\n--- {name} (Keys: {len(d)}) ---"]
 
-    for k, v in d.items():
-        summary = _truncate_value(v, max_items)
-        lines.append(f"  '{k}': {summary}")
+#     for k, v in d.items():
+#         summary = _truncate_value(v, max_items)
+#         lines.append(f"  '{k}': {summary}")
 
-    lines.append("-" * (len(name) + 12))
-    return "\n".join(lines)
+#     lines.append("-" * (len(name) + 12))
+#     return "\n".join(lines)
 
-def _truncate_value(val, max_items=5):
-    if isinstance(val, np.ndarray):
-        if val.size > max_items:
-            return f"ndarray shape={val.shape} dtype={val.dtype} -> {np.array2string(val, threshold=max_items)}"
-        return val
-    elif isinstance(val, (list, tuple)):
-        if len(val) > max_items:
-            head = [_truncate_value(x, max_items) for x in val[:2]]
-            tail = [_truncate_value(x, max_items) for x in val[-2:]]
-            return f"[{head[0]}, {head[1]}, ... ({len(val)} items) ..., {tail[0]}, {tail[1]}]"
-        return [_truncate_value(x, max_items) for x in val]
-    elif isinstance(val, dict):
-        return {k: _truncate_value(v, max_items) for k, v in val.items()}
-    return val
+# def _truncate_value(val, max_items=5):
+#     if isinstance(val, np.ndarray):
+#         if val.size > max_items:
+#             return f"ndarray shape={val.shape} dtype={val.dtype} -> {np.array2string(val, threshold=max_items)}"
+#         return val
+#     elif isinstance(val, (list, tuple)):
+#         if len(val) > max_items:
+#             head = [_truncate_value(x, max_items) for x in val[:2]]
+#             tail = [_truncate_value(x, max_items) for x in val[-2:]]
+#             return f"[{head[0]}, {head[1]}, ... ({len(val)} items) ..., {tail[0]}, {tail[1]}]"
+#         return [_truncate_value(x, max_items) for x in val]
+#     elif isinstance(val, dict):
+#         return {k: _truncate_value(v, max_items) for k, v in val.items()}
+#     return val
 
 def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top):
     """
