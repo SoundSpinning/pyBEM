@@ -676,8 +676,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # ==================================================================
         if len(parser.surfaces) > 0:
             log_post = f"""
- --> Calculating TOTAL SOUND POWER for all input surfaces:
-     A = surface Area | TSW = Total Sound Power, from all frequencies"""
+ --> Calculating SWL(dB) & TOTAL SOUND POWER for all input surfaces:
+     A = surface Area | TSW = Total Sound Power sum from all frequencies"""
             logger.info(log_post)
             # ----------------------------------
             # ELEMENT-CENTROID POWER CALCULATION
@@ -707,10 +707,10 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
             csv_filename = f"{parser.model_name}_power.csv"
             png_filename = f"{parser.model_name}_power.png"
-            log_post = f"\n     Freq / Power results file written to: ( '{csv_filename}' )"
+            log_post = f"\n     Freq / Power results written to: ( '{csv_filename}' )"
             # Trigger the headless plot generation right after the CSV writes out
             generate_power_flux_plot(model_name = parser.model_name, suffix="")
-            log_post += f"\n     Freq / Power graph plotted to: ( '{png_filename}' )"
+            log_post += f"\n     Freq / Power graphs plotted to: ( '{png_filename}' )"
             logger.info(log_post)
 
         # DEBUG

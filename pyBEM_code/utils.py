@@ -1038,11 +1038,12 @@ def calculate_total_sound_power(
     global_mics_elements_conn,
     tie_registry=None,
 ):
-    """Computes total sound power passing through BEM and MICS surfaces across all frequencies.
+    """
+    Computes SWL(dB) & total sound power (TSW) passing through BEM and MICS surfaces.
 
-    Outputs net acoustic power transmission values to a single model_name_power.csv file.
+    Outputs net acoustic power transmission values (mag, real, imag) to a single model_name_power.csv file.
     Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
-    If TIED pairs present, it also calculates the Active power for slave and master surfaces.
+    If TIED pairs present, it also calculates the Active (area clipped) power for slave and master surfaces.
     """
 
     # 1. Create extended surface dictionary to incorporate active tied sub-patches
@@ -1063,7 +1064,7 @@ def calculate_total_sound_power(
         for surf_name in all_surface_elements.keys()
     }
     surface_metrics = {
-        surf_name: {"area": 0.0, "total_energy_sum": 0.0}
+        surf_name: {"area": 0.0, "total_energy_sum_real": 0.0, "total_energy_sum_imag": 0.0, "total_energy_sum_mag": 0.0}
         for surf_name in all_surface_elements.keys()
     }
 
@@ -1192,7 +1193,8 @@ def calculate_total_sound_power(
 
                     total_real_pwr += np.real(S_elem) * area_elem
                     total_imag_pwr += np.imag(S_elem) * area_elem
-                    total_mag_pwr += np.abs(S_elem) * area_elem
+                    # total_mag_pwr += np.abs(S_elem) * area_elem
+                total_mag_pwr += np.sqrt(total_real_pwr**2 + total_imag_pwr**2)
 
                 # Sign inversion for non-tied, inward-driving boundary sources
                 if (
@@ -1241,7 +1243,8 @@ def calculate_total_sound_power(
 
                     total_real_pwr += np.real(S_elem) * area_m_elem
                     total_imag_pwr += np.imag(S_elem) * area_m_elem
-                    total_mag_pwr += np.abs(S_elem) * area_m_elem
+                    # total_mag_pwr += np.abs(S_elem) * area_m_elem
+                total_mag_pwr += np.sqrt(total_real_pwr**2 + total_imag_pwr**2)
 
                 # Invert external field microphone signs if net active power points inward
                 if total_real_pwr < 0:
@@ -1251,7 +1254,9 @@ def calculate_total_sound_power(
             surface_power_results[surf_name]["real"].append(total_real_pwr)
             surface_power_results[surf_name]["imag"].append(total_imag_pwr)
             surface_power_results[surf_name]["mag"].append(total_mag_pwr)
-            surface_metrics[surf_name]["total_energy_sum"] += total_real_pwr
+            surface_metrics[surf_name]["total_energy_sum_real"] += total_real_pwr
+            surface_metrics[surf_name]["total_energy_sum_imag"] += total_imag_pwr
+            surface_metrics[surf_name]["total_energy_sum_mag"] += total_mag_pwr
 
     # 4. Write CSV Export and Assemble Output Labels
     csv_filename = f"{model_name}_power.csv"
@@ -1264,19 +1269,22 @@ def calculate_total_sound_power(
         headers = ["Freq(Hz)"]
         for sname in all_surf_names:
             A_val = surface_metrics[sname]["area"]
-            TSW_val = surface_metrics[sname]["total_energy_sum"]
+            TSW_val_real = surface_metrics[sname]["total_energy_sum_real"]
+            TSW_val_imag = surface_metrics[sname]["total_energy_sum_imag"]
+            TSW_val_mag = surface_metrics[sname]["total_energy_sum_mag"]
 
             # Clean float formatting with :.6g for general auto-formatting
-            hdr_base = f"{sname} | A = {A_val:.6g} L**2 | TSW = {TSW_val:.4g}"
-            surf_pwr_labels.append(hdr_base)
+            hdr_base = f"{sname} | A = {A_val:.6g} L**2"
+            hdr_log = f"{sname} | A = {A_val:.6g} L**2 | TSW_real = {TSW_val_real:.4g} | TSW_imag = {TSW_val_imag:.4g} | TSW_mag = {TSW_val_mag:.4g}"
+            surf_pwr_labels.append(hdr_log)
 
             # Write real, imag, mag, and sound power levels for each surface
-            headers.append(f"{hdr_base} | W_real (W)")
-            headers.append(f"{hdr_base} | W_imag (W)")
-            headers.append(f"{hdr_base} | W_mag (W)")
-            headers.append(f"{hdr_base} | SWL_real (dB)")
-            headers.append(f"{hdr_base} | SWL_imag (dB)")
-            headers.append(f"{hdr_base} | SWL_mag (dB)")
+            headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g}")
+            headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g}")
+            headers.append(f"{hdr_base} | TSW_mag (mW) = {TSW_val_mag:.4g}")
+            headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g} | SWL_real (dB)")
+            headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g} | SWL_imag (dB)")
+            headers.append(f"{hdr_base} | TSW_mag (mW) = {TSW_val_mag:.4g} | SWL_mag (dB)")
 
         writer.writerow(headers)
 
@@ -1299,13 +1307,12 @@ def calculate_total_sound_power(
 
     return surf_pwr_labels
 
-
 def generate_power_flux_plot(model_name, suffix=""):
     """Reads the generated model_name_power.csv file and outputs a clean
 
     PNG graph showing SWL (dB) for Apparent (Mag), Active (Real), and
-    Reactive (Imag) powers in 3 side-by-side subplots.
-    Uses a headless background rendering engine to minimize overhead.
+    Reactive (Imag) powers in 3 side-by-side subplots. Matches legends
+    with exact TSW components per metric type.
     """
     try:
         import matplotlib
@@ -1314,7 +1321,8 @@ def generate_power_flux_plot(model_name, suffix=""):
         import matplotlib.pyplot as plt
     except ImportError:
         file_logger.warning(
-            " [Warning]: Matplotlib not found. Skipping automated plot generation."
+            " [Warning]: Matplotlib not found. Skipping automated plot"
+            " generation."
         )
         return
 
@@ -1322,47 +1330,77 @@ def generate_power_flux_plot(model_name, suffix=""):
     png_filename = f"{model_name}_power{suffix}.png"
 
     frequencies = []
+    # Structure:
+    # series_dict[surface_name] = {
+    #     'area_str': 'A = 2500 L**2',
+    #     'components': {
+    #         'real': {'tsw_str': 'TSW_real (mW) = ...', 'tsw_val': float, 'SWL': []},
+    #         'imag': {'tsw_str': 'TSW_imag (mW) = ...', 'tsw_val': float, 'SWL': []},
+    #         'mag':  {'tsw_str': 'TSW_mag (mW) = ...',  'tsw_val': float, 'SWL': []}
+    #     }
+    # }
     series_dict = {}
+    col_map = []  # List of tuples: (surface_name, component_type)
 
     try:
         with open(csv_filename, mode="r") as csv_file:
             reader = csv.reader(csv_file)
             headers = next(reader)
 
-            col_map = []
+            # Parse each header column (ignoring column 0: Freq(Hz))
             for col_idx, h_text in enumerate(headers[1:], start=1):
                 parts = [p.strip() for p in h_text.split("|")]
-                sname = parts[0]
-                area_str = parts[1] if len(parts) > 1 else ""
-                tsw_str = parts[2] if len(parts) > 2 else ""
-                metric = parts[-1]
+                if len(parts) < 4:
+                    col_map.append((None, None))
+                    continue
 
+                sname = parts[0]
+                area_str = parts[1]
+                tsw_part = parts[2]
+                swl_part = parts[3]
+
+                # Identify metric component type (real, imag, mag)
+                comp_type = None
+                if "real" in swl_part.lower():
+                    comp_type = "real"
+                elif "imag" in swl_part.lower():
+                    comp_type = "imag"
+                elif "mag" in swl_part.lower():
+                    comp_type = "mag"
+
+                if not comp_type:
+                    col_map.append((None, None))
+                    continue
+
+                # Initialize surface entry if new
                 if sname not in series_dict:
                     series_dict[sname] = {
                         "area_str": area_str,
-                        "tsw_str": tsw_str,
-                        "tsw_val": 0.0,
-                        "SWL_real": [],
-                        "SWL_imag": [],
-                        "SWL_mag": [],
+                        "components": {
+                            "real": {"tsw_str": "", "tsw_val": 0.0, "SWL": []},
+                            "imag": {"tsw_str": "", "tsw_val": 0.0, "SWL": []},
+                            "mag": {"tsw_str": "", "tsw_val": 0.0, "SWL": []},
+                        },
                     }
 
-                    # Extract numeric TSW value for activity filtering
-                    if "TSW =" in tsw_str:
-                        try:
-                            series_dict[sname]["tsw_val"] = float(tsw_str.split("=")[1])
-                        except ValueError:
-                            series_dict[sname]["tsw_val"] = 0.0
+                # Store TSW text string and parse numeric value
+                series_dict[sname]["components"][comp_type][
+                    "tsw_str"
+                ] = tsw_part
+                if "=" in tsw_part:
+                    try:
+                        val_str = tsw_part.split("=")[1].strip()
+                        series_dict[sname]["components"][comp_type][
+                            "tsw_val"
+                        ] = float(val_str)
+                    except ValueError:
+                        series_dict[sname]["components"][comp_type][
+                            "tsw_val"
+                        ] = 0.0
 
-                if "SWL_real" in metric:
-                    col_map.append((sname, "SWL_real"))
-                elif "SWL_imag" in metric:
-                    col_map.append((sname, "SWL_imag"))
-                elif "SWL_mag" in metric:
-                    col_map.append((sname, "SWL_mag"))
-                else:
-                    col_map.append((None, None))
+                col_map.append((sname, comp_type))
 
+            # Read frequency data rows
             for row in reader:
                 if not row or not row[0]:
                     continue
@@ -1375,9 +1413,12 @@ def generate_power_flux_plot(model_name, suffix=""):
                     continue
 
                 frequencies.append(freq_val)
-                for idx, (sname, metric_key) in enumerate(col_map):
-                    if sname and metric_key:
-                        series_dict[sname][metric_key].append(row_data_vals[idx])
+
+                for idx, (sname, comp_type) in enumerate(col_map):
+                    if sname and comp_type:
+                        series_dict[sname]["components"][comp_type][
+                            "SWL"
+                        ].append(row_data_vals[idx])
 
     except FileNotFoundError:
         file_logger.error(f" [Error]: Power CSV file '{csv_filename}' not found.")
@@ -1390,28 +1431,34 @@ def generate_power_flux_plot(model_name, suffix=""):
     fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), dpi=150)
 
     panels = [
-        ("SWL_mag", "Apparent Power — SWL (Mag)"),
-        ("SWL_real", "Active Power — SWL (Real)"),
-        ("SWL_imag", "Reactive Power — SWL (Imag)"),
+        ("mag", "Apparent Power — SWL (Mag)"),
+        ("real", "Active Power — SWL (Real)"),
+        ("imag", "Reactive Power — SWL (Imag)"),
     ]
 
-    for ax_idx, (metric_key, title_str) in enumerate(panels):
+    for ax_idx, (comp_type, title_str) in enumerate(panels):
         ax = axes[ax_idx]
 
         for sname, sdata in series_dict.items():
             name_lower = sname.lower()
             area_str = sdata["area_str"]
-            tsw_str = sdata["tsw_str"]
-            tsw_val = sdata["tsw_val"]
-            y_vals = sdata[metric_key]
+            comp_data = sdata["components"][comp_type]
 
+            tsw_str = comp_data["tsw_str"]
+            y_vals = comp_data["SWL"]
+
+            # Always use Apparent Power (mag) magnitude to assess global rigid status
+            tsw_mag_val = sdata["components"]["mag"]["tsw_val"]
+
+            # Construct base legend string
             full_lbl = f"{sname} | {area_str} | {tsw_str}"
 
             # Check if surface is virtually inactive (TSW sum ~ 0)
-            if abs(tsw_val) < constants.eps:
+            if abs(tsw_mag_val) < constants.eps:
                 ax.plot([], [], label=f"{full_lbl} (Rigid)", linestyle="none")
                 continue
 
+            # Plot active surfaces
             if "tie" in name_lower:
                 if "master" in name_lower:
                     ax.plot(
@@ -1434,13 +1481,17 @@ def generate_power_flux_plot(model_name, suffix=""):
                         zorder=3,
                     )
             else:
-                ax.plot(frequencies, y_vals, label=full_lbl, linewidth=2.5, zorder=1)
+                ax.plot(
+                    frequencies,
+                    y_vals,
+                    label=full_lbl,
+                    linewidth=2.5,
+                    zorder=1,
+                )
 
         ax.set_title(title_str, fontsize=11, fontweight="bold", pad=12)
         ax.set_xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
-        ax.set_ylabel(
-            f"SWL (dB) - Wref = {constants.Wref}", fontsize=10, labelpad=6
-        )
+        ax.set_ylabel("SWL (dB)", fontsize=10, labelpad=6)
 
         ax.set_xscale("log")
         ax.yaxis.set_tick_params(labelleft=True)
@@ -1467,12 +1518,13 @@ def generate_power_flux_plot(model_name, suffix=""):
     try:
         plt.savefig(png_filename, dpi=150)
     except (PermissionError, OSError):
-        suffix = "_new"
-        alt_filename = f"{model_name}_power{suffix}.png"
+        suffix_alt = "_new"
+        alt_filename = f"{model_name}_power{suffix_alt}.png"
         logger.warning(
-            f"     [Warning]: Could not overwrite '{png_filename}' (file is likely open"
-            f" in a viewer).\n                Saving fallback copy to"
-            f" ( '{alt_filename}' ) instead."
+            f"     [Warning]: Could not overwrite '{png_filename}' (file is"
+            " likely open in a viewer).\n"
+            f"                Saving fallback copy to ( '{alt_filename}' )"
+            " instead."
         )
         try:
             plt.savefig(alt_filename, dpi=150)
@@ -1480,303 +1532,6 @@ def generate_power_flux_plot(model_name, suffix=""):
             logger.error(f" [Error]: Failed to save plot: {fallback_err}")
     finally:
         plt.close()
-
-def old_calculate_total_sound_power(model_name, surfaces, surface_elements, freqs, 
-                                global_p_surf, global_v_surf, 
-                                global_p_mics, global_v_mics_x, global_v_mics_y, global_v_mics_z,
-                                global_bem_elements_map, global_mics_nodes_map, 
-                                global_bem_areas, global_mics_areas, 
-                                global_mics_normals, global_mics_elements_conn, 
-                                tie_registry=None):
-    """
-    Computes total sound power passing through BEM and MICS surfaces across all frequencies.
-    Outputs net acoustic power transmission values to a single model_name_power.csv file.
-    Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
-    If TIED pairs present, it also calculates the Active power for slave and master surfaces.
-    """
-
-    # 1. Create extended surface dictionary to incorporate active tied sub-patches
-    all_surface_elements = dict(surface_elements)
-
-    if tie_registry:
-        for tie_name, info in tie_registry.items():
-            master_active_key = f"{tie_name}_Master"
-            slave_active_key = f"{tie_name}_Slave"
-
-            # Map active element sets saved during PRE mesh alignment
-            all_surface_elements[master_active_key] = info['active_master_eids']
-            all_surface_elements[slave_active_key] = info['active_slave_eids']
-
-    # Initialize container tracking
-    surface_power_results = {surf_name: [] for surf_name in all_surface_elements.keys()}
-    surface_metrics = {surf_name: {'area': 0.0, 'total_energy_sum': 0.0} for surf_name in all_surface_elements.keys()}
-
-    # 2. Compute Surface Areas (BEM vs MICS)
-    for surf_name, surf_elements in all_surface_elements.items():
-        if len(surf_elements) == 0:
-            continue
-        first_eid = surf_elements[0]
-        
-        # Sum areas depending on BEM or MICS type
-        if first_eid in global_bem_elements_map:
-            surface_metrics[surf_name]['area'] = sum(global_bem_areas[eid] for eid in surf_elements if eid in global_bem_areas)
-        elif first_eid in global_mics_elements_conn:
-            surface_metrics[surf_name]['area'] = sum(global_mics_areas[meid] for meid in surf_elements if meid in global_mics_areas)
-
-    # 3. Frequency Integration Loop
-    file_logger.debug("\nDEBUG: TIED pairs power checks:")
-    file_logger.debug("       ========================")
-    file_logger.debug("       Calculate Net Interface Flux Leakage & Mean Phase Offsets")
-    for f_idx, freq in enumerate(freqs):
-        p_surf_f = global_p_surf[f_idx, :]
-        v_surf_f = global_v_surf[f_idx, :]
-        
-        p_mics_f = global_p_mics[f_idx, :]
-        vx_mics_f = global_v_mics_x[f_idx, :]
-        vy_mics_f = global_v_mics_y[f_idx, :]
-        vz_mics_f = global_v_mics_z[f_idx, :]
-
-        # --- DEBUG: Track Tie Surface Interface Flux & Phase Balance ---
-        if tie_registry and constants.debug_mode:
-            for tie_name, info in tie_registry.items():
-                master_key = f"{tie_name}_Master"
-                slave_key = f"{tie_name}_Slave"
-
-                master_eids = all_surface_elements.get(master_key, [])
-                slave_eids = all_surface_elements.get(slave_key, [])
-
-                # Integrate Complex Acoustic Volume Velocity (Flux: Q = integral(v * dA))
-                q_master_complex = 0.0 + 0.0j
-                q_slave_complex = 0.0 + 0.0j
-                
-                # Arrays for phase angle checks
-                master_phases = []
-                slave_phases = []
-
-                # Accumulate Master Flux
-                for eid in master_eids:
-                    if eid in global_bem_elements_map:
-                        g_idx = global_bem_elements_map[eid]
-                        P_el = p_surf_f[g_idx]
-                        V_el = v_surf_f[g_idx]
-                        q_master_complex += V_el * global_bem_areas[eid]
-                        
-                        # Phase difference phi_p - phi_v
-                        if abs(P_el) > 1e-12 and abs(V_el) > 1e-12:
-                            master_phases.append(np.angle(P_el) - np.angle(V_el))
-
-                # Accumulate Slave Flux
-                for eid in slave_eids:
-                    if eid in global_bem_elements_map:
-                        g_idx = global_bem_elements_map[eid]
-                        P_el = p_surf_f[g_idx]
-                        V_el = v_surf_f[g_idx]
-                        q_slave_complex += V_el * global_bem_areas[eid]
-                        
-                        if abs(P_el) > 1e-12 and abs(V_el) > 1e-12:
-                            slave_phases.append(np.angle(P_el) - np.angle(V_el))
-
-                # Calculate Net Interface Flux Leakage & Mean Phase Offsets
-                q_m_abs = abs(q_master_complex)
-                q_s_abs = abs(q_slave_complex)
-                q_net_err = abs(q_master_complex - q_slave_complex)  # Continuous boundary: Q_m + Q_s = 0
-                q_rel_err = (q_net_err / (q_s_abs + 1e-15)) * 100.0
-
-                mean_phi_m = np.degrees(np.mean(master_phases)) if master_phases else 0.0
-                mean_phi_s = np.degrees(np.mean(slave_phases)) if slave_phases else 0.0
-
-                file_logger.debug(
-                    f"Freq: {freq:6.1f} Hz | Tie: [{tie_name}]:\n"
-                    f"Q_master: {q_m_abs:.4e} | Q_slave: {q_s_abs:.4e} | "
-                    f"Flux Mismatch: {q_net_err:.4e} ({q_rel_err:.2f}%) | "
-                    f"Mean Phase(P-V): Master={mean_phi_m:.1f}deg, Slave={mean_phi_s:.1f}deg"
-                )
-
-        for surf_name, surf_elements in all_surface_elements.items():
-            if len(surf_elements) == 0:
-                surface_power_results[surf_name].append(0.0)
-                continue
-                
-            first_eid = surf_elements[0]
-            total_surf_power = 0.0
-
-            # --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
-            if first_eid in global_bem_elements_map:
-                for eid in surf_elements:
-                    if eid not in global_bem_elements_map:
-                        continue
-                    g_idx = global_bem_elements_map[eid]
-                    P_elem = p_surf_f[g_idx]
-                    V_elem = v_surf_f[g_idx]  # Normal velocity scalar component
-                    area_elem = global_bem_areas[eid]
-
-                    # Real active normal intensity flux: 0.5 * Re{P * conj(V)}
-                    # intensity_n = 0.5 * np.real(P_elem * np.conj(V_elem))
-                    # intensity_n = 0.5 * np.imag(P_elem * np.conj(V_elem))
-                    intensity_n = 0.5 * np.abs(P_elem * np.conj(V_elem))
-                    total_surf_power += intensity_n * area_elem
-
-                # Sign inversion for non-tied, inward-driving boundary sources
-                if "tied" not in surf_name.lower() and "[active]" not in surf_name.lower() and total_surf_power < 0:
-                    total_surf_power = -total_surf_power
-
-            # --- CASE B: MICS SURFACE (NODAL-TO-ELEMENTAL CENTROID) ---
-            elif first_eid in global_mics_elements_conn:
-                for meid in surf_elements:
-                    if meid not in global_mics_elements_conn:
-                        continue
-                    elem_nodes = global_mics_elements_conn[meid]
-                    area_m_elem = global_mics_areas[meid]
-                    normal_m_elem = global_mics_normals[meid]
-
-                    P_centroid = 0.0 + 0.0j
-                    Vx_centroid = 0.0 + 0.0j
-                    Vy_centroid = 0.0 + 0.0j
-                    Vz_centroid = 0.0 + 0.0j
-
-                    for nid in elem_nodes:
-                        g_n_idx = global_mics_nodes_map[nid]
-                        P_centroid += p_mics_f[g_n_idx]
-                        Vx_centroid += vx_mics_f[g_n_idx]
-                        Vy_centroid += vy_mics_f[g_n_idx]
-                        Vz_centroid += vz_mics_f[g_n_idx]
-
-                    num_nodes = len(elem_nodes)
-                    P_centroid /= num_nodes
-                    Vx_centroid /= num_nodes
-                    Vy_centroid /= num_nodes
-                    Vz_centroid /= num_nodes
-
-                    # Project 3D velocity vector onto MICS element normal unit vector
-                    V_normal_centroid = (Vx_centroid * normal_m_elem[0] + 
-                                         Vy_centroid * normal_m_elem[1] + 
-                                         Vz_centroid * normal_m_elem[2])
-
-                    # Real active normal intensity flux: 0.5 * Re{P * conj(V)}
-                    # intensity_n = 0.5 * np.real(P_centroid * np.conj(V_normal_centroid))
-                    # Imag reactive
-                    # intensity_n = 0.5 * np.imag(P_centroid * np.conj(V_normal_centroid))
-                    # MAG intensity
-                    intensity_n = 0.5 * np.abs(P_centroid * np.conj(V_normal_centroid))
-                    total_surf_power += intensity_n * area_m_elem
-
-                # Invert external field microphone signs if net power vector points inward
-                if total_surf_power < 0:
-                    total_surf_power = -total_surf_power
-
-            # Append step results
-            surface_power_results[surf_name].append(total_surf_power)
-            surface_metrics[surf_name]['total_energy_sum'] += total_surf_power
-
-    # 4. Write CSV Export and Assemble Output Labels
-    csv_filename = f"{model_name}_power.csv"
-    all_surf_names = list(all_surface_elements.keys())
-    surf_pwr_labels = []
-
-    with open(csv_filename, mode='w', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        
-        headers = ["Freq(Hz)"]
-        for sname in all_surf_names:
-            A_val = surface_metrics[sname]['area']
-            TSW_val = surface_metrics[sname]['total_energy_sum']
-            
-            # Formatted column header and log string
-            hdr_str = f"{sname} | A = {A_val:.4} L**2 | TSW = {TSW_val:.4}"
-            headers.append(hdr_str)
-            surf_pwr_labels.append(hdr_str)
-
-        writer.writerow(headers)
-        
-        # Write frequency rows
-        for f_idx, freq in enumerate(freqs):
-            row = [freq] + [surface_power_results[sname][f_idx] for sname in all_surf_names]
-            writer.writerow(row)
-
-    return surf_pwr_labels
-
-def old_generate_power_flux_plot(model_name, suffix):
-    """
-    Reads the generated model_name_power.csv file and outputs a clean
-    PNG graph tracking energy flux across all imported surfaces.
-    Uses a headless background rendering engine to minimize overhead.
-    """
-    try:
-        import matplotlib
-        matplotlib.use('Agg')
-        import matplotlib.pyplot as plt
-    except ImportError:
-        logger.warning(" [Warning]: Matplotlib not found. Skipping automated plot generation.")
-        return
-
-    csv_filename = f"{model_name}_power{suffix}.csv"
-    png_filename = f"{model_name}_power{suffix}.png"
-    
-    frequencies = []
-    plot_series = []  # List of dicts holding label, data, and parsed name
-    
-    with open(csv_filename, mode='r') as csv_file:
-        reader = csv.reader(csv_file)
-        headers = next(reader)
-        
-        raw_headers = headers[1:]
-        for h_text in raw_headers:
-            plot_series.append({
-                'full_label': h_text,
-                'clean_name': h_text.split('|')[0].strip(),
-                'data': []
-            })
-            
-        for row in reader:
-            if not row or not row[0]:
-                continue
-            # If a duplicate header row slipped in, skip it cleanly instead of crashing
-            if "freq" in row[0].lower():
-                continue
-            try:
-                freq_val = float(row[0])
-                # Double check that we actually have corresponding data entries to match columns
-                row_data_vals = [float(val) for val in row[1:]]
-            except ValueError:
-                # Catch any other corrupted string lines safely
-                continue
-
-            frequencies.append(freq_val)
-            for idx, series in enumerate(plot_series):
-                series['data'].append(row_data_vals[idx])
-
-    # --- Build Extended Plot ---
-    plt.figure(figsize=(9, 5.5), dpi=150)
-    
-    for series in plot_series:
-        name_lower = series['clean_name'].lower()
-        full_lbl = series['full_label']
-        
-        if "tie" in name_lower:
-            if "master" in name_lower:
-                plt.plot(frequencies, series['data'], label=full_lbl, 
-                         linewidth=2.0, linestyle='--', color='#d62728', zorder=2)
-            else:
-                plt.plot(frequencies, series['data'], label=full_lbl, 
-                         linewidth=3.0, linestyle=':', color='#2ca02c', zorder=3)
-        else:
-            plt.plot(frequencies, series['data'], label=full_lbl, linewidth=2.5, zorder=1)
-
-    plt.title(f"Acoustic Sound Power (Surfaces) — Model: {model_name}", fontsize=11, fontweight='bold', pad=12)
-    plt.xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
-    plt.ylabel("Sound Power", fontsize=10, labelpad=6)
-    
-    plt.grid(True, which="both", linestyle=":", color="#cccccc", alpha=0.8)
-    plt.axhline(0, color="#333333", linewidth=1.0, linestyle="-", alpha=0.5)
-    
-    plt.gca().yaxis.set_major_formatter(plt.FormatStrFormatter('%.2e'))
-    
-    # Place the decorated legend neatly
-    plt.legend(loc="best", frameon=True, facecolor="#ffffff", edgecolor="#cccccc", fontsize=8)
-    plt.tight_layout()
-    
-    plt.savefig(png_filename, dpi=150)
-    plt.close()
 
 
 # ---------------------------------

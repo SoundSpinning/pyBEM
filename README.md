@@ -29,8 +29,10 @@ python main.py model.inp [optional: --cpus --debug --Pref --Wref]
 
 * **Direct Collocation Engine:** Solves independent acoustic zones at element centroids utilizing adaptive Gauss-point integration (TRIA 3/7 GP, QUAD 4/9/14 GP) based on source-to-receiver element distances.
 * **TIED Pair Surface Coupling:** Enables simultaneous interior and exterior acoustic analysis by non-conforming mesh tying across zone interfaces via Lagrange collocation constraint logic.
-* **Boundary Conditions (BCs):** Native support for Dirichlet (`PRES`), Neumann (`VELO`), Impedance (`IMPE`), and combined Robin `VELO + IMPE` conditions, fully compatible with frequency-dependent *AMPLITUDE curves and material damping.
-* **Acoustic Power Calculator:** Calculates Sound Power Level (SWL - dB) and Total Sound Power (TSW) sums on all model surfaces, providing interface power balance checks across TIED pairs.
+* **Boundary Conditions (BCs):** Native support for Dirichlet (`PRES`), Neumann (`VELO`), Impedance (`IMPE`), and combined Robin (`VELO + IMPE`) conditions, fully compatible with frequency-dependent *AMPLITUDE curves and material damping.
+* **Acoustic Power Calculator:** Calculates Sound Power Level (SWL - dB) and Total Sound Power (TSW) sums on all model *SURFACEs. It also provides interface power balance checks across TIED pairs (debug mode).
+  * SWL & TSW power plots allow for fast comparisons across different design variants.
+  * It is a very useful sanity check at all zone interfaces (TIED pairs), and for interior vs exterior power checks; i.e. conservation of energy checks.
 * **ParaView Post-Processing:** Translates elemental solution vectors to nodal averages (`averaged_at_nodes()`) for display on both BEM and microphone (`MICS`) shell elements in ParaView.
 * **UX:** Significant effort has been injected on the solver side UX via comprehensive `.log` & `_debug.log` files, in order to inform the user as much as possible.
 
