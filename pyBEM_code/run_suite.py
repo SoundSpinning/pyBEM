@@ -33,6 +33,12 @@ def run_test_suite():
         "--Wref", type=float, default=constants.Wref, 
         help=f"dB POWER reference (default: {constants.Wref}mW)",
     )
+    parser.add_argument(
+        "--results",
+        type = str,
+        default = constants.results_type,
+        help = f"Results output (default: {constants.results_type}), set to None to turn off.",
+    )
 
     args = parser.parse_args()
 
@@ -54,6 +60,7 @@ def run_test_suite():
         f"--cpus={args.cpus}",
         f"--Pref={args.Pref}",
         f"--Wref={args.Wref}",
+        f"--results={args.results}",
     ]
     if args.debug:
         common_flags.append("--debug")

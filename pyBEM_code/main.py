@@ -44,7 +44,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     parser.add_argument(
         "--cpus", 
         type=int, default=None, 
-        help="Number of CPUs to use for parallel Freqs solve.  Defaults: 1 CPU but multi-thread for matrix solve. pyBEM sets this automatically per machine specs, in order to minimise racing conditions."
+        help="Number of CPUs to use for parallel Freqs solve. Defaults to 1 CPU, while still multi-threading for matrix solve. pyBEM sets this automatically at the start based on machine specs, in order to minimise race conditions."
     )
     parser.add_argument(
         "--debug",
@@ -63,6 +63,12 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         type=float,
         default=constants.Wref,
         help=f"dB POWER reference (default: {constants.Wref}mW)",
+    )
+    parser.add_argument(
+        "--results",
+        type = str,
+        default = constants.results_type,
+        help = f"Results output (default: {constants.results_type}), set to None to turn off.",
     )
 
     # Pre-process arguments to support key=value formats (e.g., debug=yes or cpus=4)
@@ -84,6 +90,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     constants.debug_mode = args.debug
     constants.Pref = args.Pref
     constants.Wref = args.Wref
+    constants.results_type = args.results
     user_ncpus = args.cpus
     filename = args.filename
 
@@ -213,7 +220,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                     group_ids[node_id] = 2
         
         # 7.4 Setup EXPORTER for PV results
-        exporter = PVExporter(
+        if constants.results_type == "paraview":
+            exporter = PVExporter(
             parser.model_name, sorted_nodes, sorted_node_ids, 
             nodal_id_map, sorted_all_els, sorted_all_el_ids, group_ids
         )
@@ -642,7 +650,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                     solve_RAM = meta['solve_RAM']
                     
                     # 13.2 Pass results to ParaView exporter in RAM
-                    exporter.add_frequency_step(f_done, nodal_pressures)
+                    if constants.results_type == "paraview":
+                        exporter.add_frequency_step(f_done, nodal_pressures)
                     
                     # 13.3 Update UI progress bars
                     pbar.update(1)
@@ -662,29 +671,48 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         print(f"{'=' * 80}")
 
         # 13.5 Finalize and write complete VTU outputs to disk
-        logger.info(f"\n --> Writing {num_freqs} binary frequency steps")
-        exporter.finalise()
-        logger.info(f"     Export Complete. PV results file written to: ( '{parser.model_name}_Results.pvd' )")
+        if constants.results_type == "paraview":
+            logger.info(f"\n --> Writing {num_freqs} binary frequency steps")
+            exporter.finalise()
+            logger.info(f"     Export Complete. PV results file written to: ( '{parser.model_name}_Results.pvd' )")
+        else:
+            logger.info(f"\n --> Results output was turned off. Set --results=paraview if required")
 
         t_exp_0 = time.time()
 
         logger.debug(f"===================")
         logger.debug(f"DEBUG [SOLVER] ENDS")
         logger.debug(f"===================")
+
         # ==================================================================
         # --- 13.6 COMPUTE AND EXPORT TOTAL SURFACE SOUND POWER ---
         # ==================================================================
         if len(parser.surfaces) > 0:
-            log_post = f"""
- --> Calculating SWL(dB) & TOTAL SOUND POWER for all input surfaces:
+            from utils import (
+                calculate_total_sound_power,
+                generate_power_flux_plot,
+                get_writable_filepath,
+            )
+
+            log_post = """
+--> Calculating SWL(dB) & TOTAL SOUND POWER for all input surfaces:
      A = surface Area | TSW = Total Sound Power sum from all frequencies"""
             logger.info(log_post)
+
+            # Determine safe, unlocked file paths BEFORE running post-processing
+            csv_filename = get_writable_filepath(
+                f"{parser.model_name}_power.csv"
+            )
+            png_filename = get_writable_filepath(
+                f"{parser.model_name}_power.png"
+            )
+
             # ----------------------------------
             # ELEMENT-CENTROID POWER CALCULATION
             # ----------------------------------
             from utils import calculate_total_sound_power, generate_power_flux_plot
             surf_pwr_labels = calculate_total_sound_power(
-                model_name = parser.model_name,
+                csv_filepath = csv_filename,
                 surfaces = parser.surfaces,
                 surface_elements = surface_to_elements,
                 freqs = parser.frequencies,
@@ -705,13 +733,16 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             for label in surf_pwr_labels:
                 logger.info(f"     {label}")
 
-            csv_filename = f"{parser.model_name}_power.csv"
-            png_filename = f"{parser.model_name}_power.png"
-            log_post = f"\n     Freq / Power results written to: ( '{csv_filename}' )"
-            # Trigger the headless plot generation right after the CSV writes out
-            generate_power_flux_plot(model_name = parser.model_name, suffix="")
-            log_post += f"\n     Freq / Power graphs plotted to: ( '{png_filename}' )"
-            logger.info(log_post)
+            logger.info(f"\n     Freq / Power results written to: ( '{csv_filename}' )")
+
+            # ----------------------------------
+            # HEADLESS AUTOMATED POWER PLOTTING
+            # ----------------------------------
+            generate_power_flux_plot(
+                model_name = parser.model_name,
+                csv_filepath = csv_filename,
+                png_filepath = png_filename,
+            )
 
         # DEBUG
         # If --debug: plot all Gauss / integration points in pyBEM

@@ -246,12 +246,12 @@ class PMXParser:
                 self.model_str += line+'\n'
                 p = self._split(line)
                 # PRES is index 3 in *Boundary entries
-                if r_i == '1':
+                if r_i == '1' or r_i == 'real':
                     if amp != None:
                         self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3])), 'AMP_real': amp})
                     else:
                         self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3]))})
-                elif r_i == '2':
+                elif r_i == '2' or r_i == 'imaginary':
                     if amp != None:
                         self.bc_data.append({'type': 'PRES', 'set': p[0], 'val': complex(float(p[3])*1j), 'AMP_imag': amp})
                     else:
@@ -293,12 +293,12 @@ class PMXParser:
                 self.model_str += line+'\n'
                 p = self._split(line)
                 # VELO is index 2 in *Cload
-                if r_i == '1':
+                if r_i == '1' or r_i == 'real':
                     if amp != None:
                         self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2])), 'AMP_real': amp})
                     else:
                         self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2]))})
-                elif r_i == '2':
+                elif r_i == '2' or r_i == 'imaginary':
                     if amp != None:
                         self.bc_data.append({'type': 'VELO', 'set': p[0], 'val': complex(float(p[2])*1j), 'AMP_imag': amp})
                     else:
@@ -316,12 +316,12 @@ class PMXParser:
                 self.model_str += line+'\n'
                 p = self._split(line)
                 # IMPE is index 1 in *Impedance
-                if r_i == '1':
+                if r_i == '1' or r_i == 'real':
                     if amp != None:
                         self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1])), 'AMP_real': amp})
                     else:
                         self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1]))})
-                elif r_i == '2':
+                elif r_i == '2' or r_i == 'imaginary':
                     if amp != None:
                         self.bc_data.append({'type': 'IMPE', 'set': p[0], 'val': complex(float(p[1])*1j), 'AMP_imag': amp})
                     else:

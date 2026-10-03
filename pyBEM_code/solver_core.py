@@ -341,7 +341,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     B_global[start_row : start_row + n_elements] -= G_local[:, local_j] * bc['VELO'] * (1j * rho_omega)
                     # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
                     if 'IMPE' in bc:
-                        z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                        z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
                         A_global[start_row : start_row + n_elements, p_col] += G_local[:, local_j] * (1j * rho_omega / z_val)
                 # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
                 elif 'PRES' in bc:
@@ -349,7 +349,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     B_global[start_row : start_row + n_elements] -= H_local[:, local_j] * bc['PRES']
                 # Case 3: Impedance (Absorbent material)
                 elif 'IMPE' in bc and 'VELO' not in bc:
-                    z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                    z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
                     A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j] + (G_local[:, local_j] * (1j * rho_omega / z_val))
                 # Case 4: Rigid Wall, v=0 (Default)
                 else:
@@ -391,7 +391,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
             for r in range(total_matrix_size):
                 row_str = ""
                 for c in range(total_matrix_size):
-                    if abs(A_global[r, c]) > 1e-15:
+                    if abs(A_global[r, c]) > constants.eps:
                         row_str += "X "
                     else:
                         row_str += ". "
@@ -431,13 +431,13 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         # 1. Sparsity / Structure Map of [C] only
         file_logger.debug("\n[C Matrix Layout Map] (X = non-zero, . = zero):")
         for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
-            row_str = "".join(["X " if abs(C_matrix[local_r, c]) > 1e-15 else ". " for c in range(total_matrix_size)])
+            row_str = "".join(["X " if abs(C_matrix[local_r, c]) > constants.eps else ". " for c in range(total_matrix_size)])
             file_logger.debug(f"[C] Row {global_r:02d} (Slave local {local_r:02d}) | {row_str}")
 
         # 2. Detailed Index & Value Extraction
         file_logger.debug("\n[C Matrix Explicit Coupling Pairs]:")
         for local_r, global_r in enumerate(range(N_all, total_matrix_size)):
-            non_zero_cols = np.where(np.abs(C_matrix[local_r, :]) > 1e-15)[0]
+            non_zero_cols = np.where(np.abs(C_matrix[local_r, :]) > constants.eps)[0]
             couplings = []
             for c in non_zero_cols:
                 val = C_matrix[local_r, c]
@@ -503,14 +503,14 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     p_val = solved_val
                     v_val = bc['VELO']
                     if 'IMPE' in bc:
-                        z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                        z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
                         v_val += solved_val / z_val
                 elif 'PRES' in bc:
                     p_val = bc['PRES']
                     v_val = solved_val
                 elif 'IMPE' in bc and 'VELO' not in bc:
                     p_val = solved_val
-                    z_val = bc['IMPE'] if abs(bc['IMPE']) > 1e-12 else 1e-12
+                    z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
                     v_val = solved_val / z_val
                 else:
                     p_val = solved_val
