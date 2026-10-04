@@ -1089,7 +1089,7 @@ def calculate_total_sound_power(
     surface_power_results = {
         surf_name: {
             "real": [], "imag": [], "mag": [],
-            "p_rms": [], "v_mag": [], "spl": []
+            "p_rms": [], "v_complex": [], "spl": []
         }
         for surf_name in all_surface_elements.keys()
     }
@@ -1205,7 +1205,7 @@ def calculate_total_sound_power(
                 surface_power_results[surf_name]["imag"].append(0.0)
                 surface_power_results[surf_name]["mag"].append(0.0)
                 surface_power_results[surf_name]["p_rms"].append(0.0)
-                surface_power_results[surf_name]["v_mag"].append(0.0)
+                surface_power_results[surf_name]["v_complex"].append(0.0)
                 surface_power_results[surf_name]["spl"].append(0.0)
                 continue
 
@@ -1300,7 +1300,8 @@ def calculate_total_sound_power(
 
             # --- AVERAGE METRICS & SPL CALCULATION ---
             p_rms_val = np.sqrt(max(surf_p_sq_accum / total_surf_area, 0.0))
-            v_mag_val = np.abs(surf_v_accum / total_surf_area)
+            v_complex_val = surf_v_accum / total_surf_area
+            # v_mag_val = np.abs(surf_v_accum / total_surf_area)
             surf_spl_db = 20.0 * np.log10(max(p_rms_val, constants.log_floor) / constants.Pref)
 
             # Append step results
@@ -1308,7 +1309,7 @@ def calculate_total_sound_power(
             surface_power_results[surf_name]["imag"].append(surf_imag_pwr)
             surface_power_results[surf_name]["mag"].append(surf_mag_pwr)
             surface_power_results[surf_name]["p_rms"].append(p_rms_val)
-            surface_power_results[surf_name]["v_mag"].append(v_mag_val)
+            surface_power_results[surf_name]["v_complex"].append(v_complex_val)
             surface_power_results[surf_name]["spl"].append(surf_spl_db)
 
             surface_metrics[surf_name]["total_energy_sum_real"] += surf_real_pwr
@@ -1358,7 +1359,7 @@ def calculate_total_sound_power(
                 w_mag = surface_power_results[sname]["mag"][f_idx]
 
                 p_rms = surface_power_results[sname]["p_rms"][f_idx]
-                v_mag = surface_power_results[sname]["v_mag"][f_idx]
+                v_complex = surface_power_results[sname]["v_complex"][f_idx]
                 spl_db = surface_power_results[sname]["spl"][f_idx]
 
                 # Calculate SWL (dB re Wref) safely using absolute value for log scale
@@ -1366,7 +1367,7 @@ def calculate_total_sound_power(
                 swl_imag = 10.0 * np.log10(max(abs(w_imag), constants.log_floor) / constants.Wref)
                 swl_mag = 10.0 * np.log10(max(abs(w_mag), constants.log_floor) / constants.Wref)
 
-                row.extend([w_real, w_imag, w_mag, swl_real, swl_imag, swl_mag, p_rms, v_mag, spl_db])
+                row.extend([w_real, w_imag, w_mag, swl_real, swl_imag, swl_mag, p_rms, v_complex, spl_db])
 
             writer.writerow(row)
 
@@ -1669,7 +1670,6 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
     """
     try:
         import matplotlib
-
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -1679,15 +1679,6 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
         return
 
     frequencies = []
-    # Structure:
-    # series_dict[surface_name] = {
-    #     'area_str': 'A = 2500 L**2',
-    #     'components': {
-    #         'real': {'tsw_str': 'TSW_real (mW) = ...', 'tsw_val': float, 'SWL': []},
-    #         'imag': {'tsw_str': 'TSW_imag (mW) = ...', 'tsw_val': float, 'SWL': []},
-    #         'mag':  {'tsw_str': 'TSW_mag (mW) = ...',  'tsw_val': float, 'SWL': []}
-    #     }
-    # }
     series_dict = {}
     col_map = []  # List of tuples: (surface_name, component_type)
 
@@ -1699,7 +1690,8 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
             # Parse each header column (ignoring column 0: Freq(Hz))
             for col_idx, h_text in enumerate(headers[1:], start=1):
                 parts = [p.strip() for p in h_text.split("|")]
-                if len(parts) < 4 or "swl" not in parts[3].lower():
+                # print(parts)
+                if len(parts) < 4 or "swl_" not in parts[3].lower():
                     col_map.append((None, None))
                     continue
 
@@ -1755,25 +1747,57 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                     continue
                 if "freq" in row[0].lower():
                     continue
+                
+                # 1. Parse frequency safely
                 try:
                     freq_val = float(row[0])
-                    row_data_vals = [float(val) for val in row[1:]]
                 except ValueError:
                     continue
 
-                frequencies.append(freq_val)
+                # 2. Extract only mapped SWL columns
+                row_swl_data = []
+                has_parse_error = False
 
                 for idx, (sname, comp_type) in enumerate(col_map):
                     if sname and comp_type:
-                        series_dict[sname]["components"][comp_type][
-                            "SWL"
-                        ].append(row_data_vals[idx])
+                        try:
+                            # row[1:] maps directly to col_map index
+                            val = float(row[idx + 1])
+                            series_dict[sname]["components"][comp_type]["SWL"].append(val)
+                        except (ValueError, IndexError):
+                            has_parse_error = True
+                            break
+
+                # Only append frequency if row parsed successfully
+                if not has_parse_error:
+                    frequencies.append(freq_val)
+            
+            # # Read frequency data rows
+            # for row in reader:
+            #     if not row or not row[0]:
+            #         continue
+            #     if "freq" in row[0].lower():
+            #         continue
+            #     try:
+            #         freq_val = float(row[0])
+            #         row_data_vals = [float(val) for val in row[1:]]
+            #     except ValueError:
+            #         continue
+
+            #     frequencies.append(freq_val)
+
+            #     for idx, (sname, comp_type) in enumerate(col_map):
+            #         if sname and comp_type:
+            #             series_dict[sname]["components"][comp_type][
+            #                 "SWL"
+            #             ].append(row_data_vals[idx])
 
     except FileNotFoundError:
         file_logger.error(f" [Error]: Power CSV file '{csv_filepath}' not found.")
         return
 
     if not frequencies:
+        file_logger.error(f" [Error]: Plotter exited early because 'frequencies' list is empty! Check CSV header format.")
         return
 
     # --- Build 3-Panel Side-by-Side Plot ---
@@ -1862,12 +1886,12 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
     )
     plt.tight_layout()
     plt.subplots_adjust(top=0.88)
-    # plt.savefig(png_filepath, dpi=150)
-    # plt.close("all")
 
     # Attempt normal save with fallback for locked files
     try:
+        # print("\n [DEBUG]: Before PNG")
         plt.savefig(png_filepath, dpi=150)
+        # print("\n [DEBUG]: After PNG")
     except (PermissionError, OSError):
         suffix_alt = "_new"
         alt_filename = f"{model_name}_power{suffix_alt}.png"
@@ -1876,8 +1900,10 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
             f"                Saving fallback copy to ( '{alt_filename}' ) instead."
         )
         try:
+            # print("\n [DEBUG]: Before PNG")
             plt.savefig(alt_filename, dpi=150)
             png_filepath = alt_filename
+            # print("\n [DEBUG]: After PNG_alt")
         except Exception as fallback_err:
             logger.error(f" [Error]: Failed to save plot: {fallback_err}")
     finally:

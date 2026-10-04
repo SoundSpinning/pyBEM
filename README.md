@@ -1,6 +1,6 @@
 # pyBEM: Multi-Zone Acoustic Solver
 
-![pyBEM Version](https://img.shields.io/badge/pyBEM-v0.4.7--alpha-blue)
+![pyBEM Version](https://img.shields.io/badge/pyBEM-v0.4.8--alpha-blue)
 
 `pyBEM` is a Python-based Boundary Element Method (BEM) solver designed for direct collocation acoustic analysis in the frequency domain. Powered by **NumPy** and **Numba**, `pyBEM` supports complex multi-zone acoustics, frequency-dependent boundary conditions, field microphone evaluations, and surface coupling across zones via TIED pairs.
 

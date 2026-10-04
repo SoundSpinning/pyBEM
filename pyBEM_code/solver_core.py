@@ -181,7 +181,8 @@ def reconstruct_master_velocity(global_solution, master_eid, W_slave_to_master, 
     """
     Reconstructs master element normal velocity v_master from slave Lagrange multipliers (lambda_s)
     by averaging acoustic flux over the master element area:
-    v_master = sum( w_m2s * lambda_s )
+    v_master = -sum( w_m2s * lambda_s )
+    Note the negative sign: n_master = -n_slave, so v_n,master = -v_n,slave.
     """
     if master_eid not in W_master_to_slave:
         raise ValueError(f"\n [!] ERROR Master element {master_eid} not found in W_master_to_slave.")
@@ -196,6 +197,8 @@ def reconstruct_master_velocity(global_solution, master_eid, W_slave_to_master, 
             
             # w_m2s = A_intersection / A_master
             v_master += v_slave * w_m2s
+            # Invert sign because n_master = -n_slave
+            # v_master -= v_slave * w_m2s
 
     return v_master
 
@@ -309,9 +312,8 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
         rho_zone = static_data['global_rho'][zone_name]
         k_zone = omega / c_zone
         if damping_f != 0:
-            # We assume damping input is Damping Ratio (DR)
+            # We assume damping input is Damping Ratio (DR); i.e. NOT Loss Factor (LF) = DR * 2
             k_zone = k_zone * (1.0 - (1j * damping_f))
-            # k_zone = k_zone * (1.0 - (1j * damping_f * 0.5))
             
         rho_omega = rho_zone * omega
 
@@ -342,6 +344,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     # Case 1.1 Simultaneous VELO + IMPE (Robin BC)
                     if 'IMPE' in bc:
                         z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
+                        # A_global[start_row : start_row + n_elements, p_col] -= G_local[:, local_j] * (1j * rho_omega / z_val)
                         A_global[start_row : start_row + n_elements, p_col] += G_local[:, local_j] * (1j * rho_omega / z_val)
                 # Case 2: Pressure is known (Open end / Source) - (Dirichlet BC)
                 elif 'PRES' in bc:
@@ -350,6 +353,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                 # Case 3: Impedance (Absorbent material)
                 elif 'IMPE' in bc and 'VELO' not in bc:
                     z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
+                    # A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j] - (G_local[:, local_j] * (1j * rho_omega / z_val))
                     A_global[start_row : start_row + n_elements, p_col] += H_local[:, local_j] + (G_local[:, local_j] * (1j * rho_omega / z_val))
                 # Case 4: Rigid Wall, v=0 (Default)
                 else:
@@ -496,7 +500,8 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                 p_val = global_solution[p_col]
                 # 2. Slave Velocity: Read directly from Lagrange multiplier trailing column
                 l_col = slave_lagrange_col_map[eid]
-                v_val = global_solution[l_col]
+                v_val = -1.0 * global_solution[l_col]
+                # v_val = global_solution[l_col]
 
             else:
                 if 'VELO' in bc:
@@ -507,7 +512,8 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                         v_val += solved_val / z_val
                 elif 'PRES' in bc:
                     p_val = bc['PRES']
-                    v_val = solved_val
+                    v_val = -1.0 * solved_val
+                    # v_val = solved_val
                 elif 'IMPE' in bc and 'VELO' not in bc:
                     p_val = solved_val
                     z_val = bc['IMPE'] if abs(bc['IMPE']) > constants.tol else constants.tol
@@ -545,8 +551,9 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
                     c_zone = static_data['global_c'][zone_name]
                     rho_zone = static_data['global_rho'][zone_name]
                     k_zone = omega / c_zone
+                    # We assume damping input is Damping Ratio (DR); i.e. NOT Loss Factor (LF) = DR * 2
                     if damping_f != 0:
-                        k_zone = k_zone * (1.0 - (1j * damping_f * 0.5))
+                        k_zone = k_zone * (1.0 - (1j * damping_f))
                     rho_omega_zone = rho_zone * omega
                     H_sign_zone = static_data['global_h_signs'][zone_name]
                     
@@ -866,7 +873,6 @@ def split_quads_pre_assembly(element_nodes, centers, areas, normals):
 
     return gp_per_element, GP_start_idx, R_map, G_static_map, H_static_map, G_diag_static, H_diag_static
 
-
 @njit(parallel=True, cache=True)
 def pre_mics(mics_nodes, bem_centers, bem_normals):
     """
@@ -995,11 +1001,12 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy,
     v_mics_z = np.zeros(num_mics, dtype=np.complex128)
     
     # Scaling factor for velocities
-    v_surf = v_surf * (1j * rho_omega)
+    v_surf_scaled = v_surf * (1j * rho_omega)
     
     # Pre-compute wave number squares and coefficients for efficiency
     k2 = k * k
-    inv_rho_omega = -1.0 / (1j * rho_omega)
+    inv_rho_omega = 1.0 / (1j * rho_omega)   # CHECK sign in the future for mics vels
+    # inv_rho_omega = -1.0 / (1j * rho_omega)
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
@@ -1012,9 +1019,13 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy,
             inv_r = 1.0 / r
             inv_r2 = inv_r * inv_r
             
-            dx = pre_mics_dx[i, j]
-            dy = pre_mics_dy[i, j]
-            dz = pre_mics_dz[i, j]
+            # Unit vector direction components (dx / r)
+            dx_norm = pre_mics_dx[i, j] * inv_r
+            dy_norm = pre_mics_dy[i, j] * inv_r
+            dz_norm = pre_mics_dz[i, j] * inv_r
+            # dx = pre_mics_dx[i, j]
+            # dy = pre_mics_dy[i, j]
+            # dz = pre_mics_dz[i, j]
             
             r_dot_n = pre_mics_H[i, j]
             nx = bem_normals[j, 0]
@@ -1031,25 +1042,25 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy,
             h_val = H_sign * g_val * jk_minus_inv_r * r_dot_n
             
             # Integrate Pressure
-            sum_p += (g_val * v_surf[j] + h_val * p_surf[j]) * bem_areas[j]
+            sum_p += (g_val * v_surf_scaled[j] + h_val * p_surf[j]) * bem_areas[j]
             
             # --- Velocity Kernel Calculations ---
             # Monopole analytical gradient components
-            dg_dx = g_val * jk_minus_inv_r * dx
-            dg_dy = g_val * jk_minus_inv_r * dy
-            dg_dz = g_val * jk_minus_inv_r * dz
+            dg_dx = g_val * jk_minus_inv_r * dx_norm
+            dg_dy = g_val * jk_minus_inv_r * dy_norm
+            dg_dz = g_val * jk_minus_inv_r * dz_norm
             
             # Dipole analytical gradient components (Quadrupole terms)
             quad_term = (-k2 - 3.0 * 1j * k * inv_r + 3.0 * inv_r2) * r_dot_n
             
-            dh_dx = H_sign * g_val * (quad_term * dx + jk_minus_inv_r * nx * inv_r)
-            dh_dy = H_sign * g_val * (quad_term * dy + jk_minus_inv_r * ny * inv_r)
-            dh_dz = H_sign * g_val * (quad_term * dz + jk_minus_inv_r * nz * inv_r)
+            dh_dx = H_sign * g_val * (quad_term * dx_norm + jk_minus_inv_r * nx * inv_r)
+            dh_dy = H_sign * g_val * (quad_term * dy_norm + jk_minus_inv_r * ny * inv_r)
+            dh_dz = H_sign * g_val * (quad_term * dz_norm + jk_minus_inv_r * nz * inv_r)
             
             # Integrate Pressure Gradient components over the element area
-            sum_grad_px += (dg_dx * v_surf[j] + dh_dx * p_surf[j]) * bem_areas[j]
-            sum_grad_py += (dg_dy * v_surf[j] + dh_dy * p_surf[j]) * bem_areas[j]
-            sum_grad_pz += (dg_dz * v_surf[j] + dh_dz * p_surf[j]) * bem_areas[j]
+            sum_grad_px += (dg_dx * v_surf_scaled[j] + dh_dx * p_surf[j]) * bem_areas[j]
+            sum_grad_py += (dg_dy * v_surf_scaled[j] + dh_dy * p_surf[j]) * bem_areas[j]
+            sum_grad_pz += (dg_dz * v_surf_scaled[j] + dh_dz * p_surf[j]) * bem_areas[j]
             
         p_mics[i] = sum_p
         
