@@ -691,7 +691,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             from utils import (
                 calculate_total_sound_power,
                 generate_power_flux_plot,
-                get_writable_filepath,
+                get_writeable_filepath,
             )
 
             log_post = """
@@ -700,10 +700,10 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             logger.info(log_post)
 
             # Determine safe, unlocked file paths BEFORE running post-processing
-            csv_filename = get_writable_filepath(
+            csv_filename = get_writeable_filepath(
                 f"{parser.model_name}_power.csv"
             )
-            png_filename = get_writable_filepath(
+            png_filename = get_writeable_filepath(
                 f"{parser.model_name}_power.png"
             )
 

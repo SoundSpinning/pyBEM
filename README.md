@@ -1,6 +1,6 @@
 # pyBEM: Multi-Zone Acoustic Solver
 
-![pyBEM Version](https://img.shields.io/badge/pyBEM-v0.4.8--alpha-blue)
+![pyBEM Version](https://img.shields.io/badge/pyBEM-v0.5.0--alpha-blue)
 
 `pyBEM` is a Python-based Boundary Element Method (BEM) solver designed for direct collocation acoustic analysis in the frequency domain. Powered by **NumPy** and **Numba**, `pyBEM` supports complex multi-zone acoustics, frequency-dependent boundary conditions, field microphone evaluations, and surface coupling across zones via TIED pairs.
 
@@ -14,7 +14,7 @@
 * **Acoustic Power & Energy Conservation Diagnostics:** Calculates Apparent ($S$), Active ($P$), and Reactive ($Q$) Sound Power Levels (SWL in dB) alongside Total Sound Power ($\text{TSW}$) across all model `*SURFACE` sets.
 * **TIED Interface Validation:** Verifies flux and energy conservation across non-conformal master/slave interfaces down to four significant figures.
 * **Automated 3-Panel Plotting:** Generates headless frequency-sweep plots (`*_power.png`) for Apparent, Active, and Reactive power with logarithmic axes. Inactive surfaces ($<\varepsilon$) are dynamically flagged as `(Rigid)`.
-* **OS File-Lock Resiliency:** Employs non-destructive binary file access checking (`get_writable_filepath`) to dynamically detect locked files (e.g., `.csv` open in Excel or `.png` open in an image viewer) and route outputs to safe fallback paths (`_new.csv`, `_new.png`) without interrupting solver execution.
+* **OS File-Lock Resiliency:** Employs non-destructive binary file access checking (`get_writeable_filepath`) to dynamically detect locked files (e.g., `.csv` open in Excel or `.png` open in an image viewer) and route outputs to safe fallback paths (`_new.csv`, `_new.png`) without interrupting solver execution.
 * **ParaView Post-Processing:** Translates elemental solution vectors to nodal averages (`averaged_at_nodes()`) for display on both BEM and microphone (`MICS`) shell elements in ParaView.
 * **UX & Logging:** Comprehensive `.log` & `_debug.log` output files keep the user informed on model topology at PRE-processing, system matrix dimensions, and solve times, RAM (estimates) and matrix diagnostics.
 
@@ -115,15 +115,22 @@ Upon completion of an analysis, `pyBEM` generates the following structured outpu
 
 ---
 
-## Repository Structure
+## Main Solver Structure
 
 ```text
-pyBEM/
+pyBEM_code/
 ├── main.py            # Main entry point, CLI parsing, and solve orchestration
-├── utils.py           # Post-processing, OS file-lock management, and SWL plotting routines
-├── assembly.py        # Dense G & H matrix assembly and Numba-accelerated Gauss routines
-├── solver.py          # Multi-zone direct collocation system solver and TIED constraints
-├── parser.py          # PrePoMax INP deck parser (nodes, elements, materials, sets, ties)
+├── pmx_parser.py      # PrePoMax INP deck parser (nodes, elements, materials, sets, surfaces, ties, etc)
+├── solver_core.py     # Multi-zone direct collocation system solver, TIED constraints, and more
+├                      # Dense G & H matrix assembly and Numpy/Numba-accelerated Gauss routines
+├── utils.py           # Pre / Post-processing, OS file-lock management, and power plotting routines
+├── exporter_2.py      # Results writer in ParaView format
 └── constants.py       # Physical constants, default reference values, and precision thresholds
-
+└── run_suite.py       # Script to batch run all *.inp files in a given folder
 ```
+
+---
+
+[See How-To & access Examples](how-to_examples/README.md)
+
+---

@@ -1,0 +1,342 @@
+================================================================================
+                  pyBEM - V0.4.8-alpha | BEM Acoustics Solver
+                     Standard Collocation - Direct Method
+                              Multi-Zone Analysis
+================================================================================
+*Heading
+Hash: FU7FqNXE, Date: 09/16/2026, Unit system: MM_TON_S_C
+zones_pipe_1m.pmx
+Check split_QUADs method
+pyBEM tests | multi-zone implementation:
+circular pipe with surfaces for BCs (vels & impedance)
+Generic test model to calc open ends and
+CASE 2: PRES @ INLET & OUTLET | OPen pipe both ends; i.e. no resonant peaks expected.
+----------------------------------------
+
+    =====================
+    *** MODEL SUMMARY ***
+    =====================
+    INPUT FILE:   "D:\GitHub\BEM\pyBEM\how-to_examples\1m_pipe\02_zones_pipe_1m.inp"
+    MODEL NAME:   "02_zones_pipe_1m"
+
+    [ MESH | SETS | SURFACES ]
+      NODES:       848    = BEM: 506    + MICS: 342    
+      ELEMENTS:    802    = BEM: 509    + MICS: 293    
+      NSETS  ( 4 ):   'inlet', 'outlet', 'Tie-1_Master', 'Tie-1_Slave'
+      ELSETS ( 8 ):   'z1_bem', 'z2_bem', 'z1_mics', 'z2_mics', 'inlet_S2', 'outlet_S2'
+        'Tie-1_Master_S2', 'Tie-1_Slave_S2'
+      SURFACES ( 4 ):
+        * 'inlet': elset = 'inlet_S2'
+        * 'outlet': elset = 'outlet_S2'
+        * 'Tie-1_Master': elset = 'Tie-1_Master_S2'
+        * 'Tie-1_Slave': elset = 'Tie-1_Slave_S2'
+
+    [ BCs | TIED PAIRS | AMPLITUDES ]
+      BCs ( 2 ):
+        * Type: PRES  | Set: 'inlet' | Value: (2e-11+0j)
+        * Type: PRES  | Set: 'outlet' | Value: (2e-11+0j)
+
+      TIED PAIRS ( 1 ):
+        * [Tie-1] Master: 'Tie-1_Master' <---> Slave: 'Tie-1_Slave' (Tol: 1.0)
+
+      AMPLITUDES ( 0 ):  None
+
+    [ MATERIALS | ZONES ]
+      MATERIALS ( 2 ):
+        * 'z1_Air': rho = 1.210e-12, c = 343053.86
+        * 'z2_Air': rho = 1.210e-12, c = 343053.86
+
+      BEM ZONES ( 2 ):
+        * Zone 'z1_Air': elsets = ['z1_bem', 'z1_mics']
+        * Zone 'z2_Air': elsets = ['z2_bem', 'z2_mics']
+
+    [ ANALYSIS ]
+      FREQUENCIES: 119 steps [20.0 Hz --> 1200.0 Hz]
+      DAMPING:     Damping Ratio (DR) = 0.01
+                   Solver uses Damping Ratio (DR)
+                   In structures is Loss Factor (LF) = DR * 2
+                   Abaqus uses Volumetric Drag (gamma) = 2 * DR * rho * omega (Freq curve)
+
+
+    ==============================
+    *** INPUT MESH DIAGNOSTICS ***
+    ==============================
+    Found a total of ( 2 ) Acoustic ZONES as follows:
+    
+--> ZONE: [ z1_Air ]
+    BEM Surface Area:           ( 170288 L**2 )
+    CoG of BEM zone:            [ 250.00, -0.01, 0.01 ] L
+    Max Element Aspect Ratio:   ( 1.88 )
+    Element Size (approx):      ( 27.61 L )
+    Suggested Max Freq:         ( 1553.1 Hz )
+    Closed (+) Volume detected: ( 3.74701e+06 L**3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> ZONE: [ z2_Air ]
+    BEM Surface Area:           ( 170281 L**2 )
+    CoG of BEM zone:            [ 750.00, -0.00, -0.07 ] L
+    Max Element Aspect Ratio:   ( 1.77 )
+    Element Size (approx):      ( 29.50 L )
+    Suggested Max Freq:         ( 1453.6 Hz )
+    Closed (+) Volume detected: ( 3.74906e+06 L**3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> BC-PROCESSING: BC resolution complete ==> ( 34 ) elements have active BCs.
+
+    ==========================
+    *** SURFACE TIED PAIRS ***
+    ==========================
+    Found a total of ( 1 ) TIED pair constraint(s).
+    [i] It is recommended equal mesh, or that the slave side has a coarser mesh vs the master one.
+        This is to ensure stable area-weighted polygon clipping and mortar flux integration 
+        across overlapping patches. However, this is automatically handled by pyBEM during PRE, 
+        which shows as '[ Auto-Swap ]'.
+
+     TIED INTERFACE AREAS
+    ======================
+     TIE: [Tie-1] | Master: 'Tie-1_Slave' <---> Slave: 'Tie-1_Master'
+       Total Slave Surface Area:       7497.6 L**2
+       Raw Geometric Intersected Area: 7457.71 L**2 (Sliver clipping loss: 39.8843 L**2)
+       Effective Mapped Area (Post):   7497.6 L**2
+       Area Conservation Error:        0.0 L**2
+    ======================================================================
+
+     MORTAR INTERFACE WEIGHTS: [ Tie-1 ]
+     Master Surface: 'Tie-1_Slave' <---> Slave Surface: 'Tie-1_Master'
+    ======================================================================
+    [ SLAVE -> MASTER (Area Fractions) ]
+    Slave EID  | Master EIDs & Weights                      | Sum   
+    -----------------------------------------------------------------
+    265        | M13:0.023, M14:0.977                       | 1.0000
+    266        | M13:0.542, M15:0.458                       | 1.0000
+    267        | M12:0.019, M13:0.072, M15:0.622, M16:0.287 | 1.0000
+    268        | M11:0.781, M12:0.111, M16:0.109            | 1.0000
+    269        | M13:0.990, M14:0.010                       | 1.0000
+    270        | M13:0.173, M14:0.823, M15:0.004            | 1.0000
+    271        | M11:0.015, M16:0.985                       | 1.0000
+    272        | M12:0.735, M13:0.254, M16:0.012            | 1.0000
+    274        | M19:0.933, M20:0.039, M24:0.028, M27:0.000 | 1.0000
+    275        | M20:0.000, M24:0.691, M25:0.051, M27:0.116, M28:0.142 | 1.0000
+    276        | M23:0.066, M25:0.111, M26:0.358, M28:0.465 | 1.0000
+    277        | M20:0.091, M21:0.468, M22:0.073, M25:0.072, M27:0.296 | 1.0000
+    278        | M22:0.366, M23:0.468, M25:0.157, M26:0.009 | 1.0000
+    279        | M26:1.000                                  | 1.0000
+    280        | M20:0.973, M21:0.027                       | 1.0000
+
+    [ MASTER -> SLAVE (Flux Distribution) ]
+    Master EID | Slave EIDs & Weights                       | Sum   
+    -----------------------------------------------------------------
+    11         | S268:0.992, S271:0.008                     | 1.0000
+    12         | S267:0.023, S268:0.148, S272:0.828         | 1.0000
+    13         | S265:0.010, S266:0.347, S267:0.039, S269:0.431, S270:0.044, S272:0.129 | 1.0000
+    14         | S265:0.675, S269:0.007, S270:0.318         | 1.0000
+    15         | S266:0.464, S267:0.534, S270:0.002         | 1.0000
+    16         | S267:0.329, S268:0.139, S271:0.520, S272:0.012 | 1.0000
+    19         | S274:1.000                                 | 1.0000
+    20         | S274:0.061, S275:0.000, S277:0.172, S280:0.767 | 1.0000
+    21         | S277:0.976, S280:0.024                     | 1.0000
+    22         | S277:0.162, S278:0.838                     | 1.0000
+    23         | S276:0.127, S278:0.873                     | 1.0000
+    24         | S274:0.040, S275:0.960                     | 1.0000
+    25         | S275:0.104, S276:0.300, S277:0.183, S278:0.413 | 1.0000
+    26         | S276:0.485, S278:0.012, S279:0.504         | 1.0000
+    27         | S274:0.000, S275:0.238, S277:0.762         | 1.0000
+    28         | S275:0.186, S276:0.814                     | 1.0000
+    ======================================================================
+
+    --> TIE: [ Tie-1 ]
+        [ Auto-Swap ] Master/Slave roles inverted: Slave designated as the coarser mesh surface; i.e. higher 'h_avg'.
+        Master Surface 'Tie-1_Slave': 16 total elements | Active Sub-Patch: 16 elements (h_avg = 23.8767)
+        Slave Surface 'Tie-1_Master': 15 total elements | Active Sub-Patch: 15 elements (h_avg = 25.1608)
+        Mapping Search Tolerance: 1.0 L
+        Area-Weighted Collocation Mapped Pairs: 46 element intersections
+
+
+======================================================================
+*** ACOUSTICS multi-zone job started at:  Mon Oct  5 14:04:26 2026 ***
+======================================================================
+
+--> SOLVING 119 Frequencies [20.0Hz --> 1200.0Hz | delta_Hz = 10.00] (Steady State Direct) <--
+
+ Number of CPUs found on this machine: ( 6 ) |  Number of threads: ( 12 )
+ MAX number of CPUs assigned to Numba parallel loops in PRE is: ( 6 )
+ Available RAM found at job start:     ( 49.82 GB )
+ Global Multi-Zone Matrix Structure:   ( 709 x 709 ) DOF
+
+ [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
+     Hold tight, it gets faster after, see times per Freq table in '02_zones_pipe_1m.log'.
+ --> Zone [ z1_Air       ]: Matrix Index Range [    0 -> 263  ] ( 264 elements )
+ --> Zone [ z2_Air       ]: Matrix Index Range [  264 -> 508  ] ( 245 elements )
+
+ --> Pre-assembling BEM Geometric Static Kernels for Zone: [ z1_Air ]
+     Pre-calculating MICS distances for Zone: [ z1_Air ]
+ --> Pre-assembling BEM Geometric Static Kernels for Zone: [ z2_Air ]
+     Pre-calculating MICS distances for Zone: [ z2_Air ]
+
+ [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( 0.56s )
+     BEM: ( 0.472s ) | MICS: ( 0.090s ) | RAM ( 0.202GB )
+     
+ Heuristic estimates for Frequency Sweep based on RAM available ( 49.82GB ):
+ Estimated (+)RAM per Freq: ( 0.53 GB ) | Parallel Frequency Workers: ( 1 )
+ [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( 6 )
+     Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
+     which already does parallel solving. MAX CPUs for Numpy is set to ( 6 )
+
+ [i] Promoting heavy arrays to Shared Memory ...
+
+==================================================================================================
+ Freq (Hz) | Assembly | Solve All:   BEM    +   Mics   |  RAM (MB)  | Results file       | Status
+==================================================================================================
+ 20.0   Hz |  0.293 s |   0.035s :  0.016   +  0.019   |   210.1    | In Memory          |   OK  
+ 30.0   Hz |  0.015 s |   0.018s :  0.016   +  0.002   |   211.7    | In Memory          |   OK  
+ 40.0   Hz |  0.016 s |   0.017s :  0.015   +  0.002   |   211.9    | In Memory          |   OK  
+ 50.0   Hz |  0.016 s |   0.017s :  0.014   +  0.002   |   212.0    | In Memory          |   OK  
+ 60.0   Hz |  0.015 s |   0.016s :  0.013   +  0.002   |   212.2    | In Memory          |   OK  
+ 70.0   Hz |  0.014 s |   0.017s :  0.015   +  0.002   |   212.4    | In Memory          |   OK  
+ 80.0   Hz |  0.014 s |   0.017s :  0.015   +  0.002   |   212.5    | In Memory          |   OK  
+ 90.0   Hz |  0.018 s |   0.016s :  0.013   +  0.002   |   212.6    | In Memory          |   OK  
+ 100.0  Hz |  0.017 s |   0.022s :  0.020   +  0.002   |   212.7    | In Memory          |   OK  
+ 110.0  Hz |  0.019 s |   0.022s :  0.019   +  0.002   |   212.8    | In Memory          |   OK  
+ 120.0  Hz |  0.014 s |   0.018s :  0.015   +  0.003   |   213.0    | In Memory          |   OK  
+ 130.0  Hz |  0.015 s |   0.015s :  0.012   +  0.002   |   213.2    | In Memory          |   OK  
+ 140.0  Hz |  0.021 s |   0.017s :  0.015   +  0.002   |   213.3    | In Memory          |   OK  
+ 150.0  Hz |  0.021 s |   0.021s :  0.018   +  0.002   |   213.4    | In Memory          |   OK  
+ 160.0  Hz |  0.015 s |   0.016s :  0.014   +  0.002   |   213.5    | In Memory          |   OK  
+ 170.0  Hz |  0.020 s |   0.015s :  0.013   +  0.002   |   213.6    | In Memory          |   OK  
+ 180.0  Hz |  0.017 s |   0.015s :  0.014   +  0.002   |   213.8    | In Memory          |   OK  
+ 190.0  Hz |  0.015 s |   0.021s :  0.019   +  0.003   |   214.0    | In Memory          |   OK  
+ 200.0  Hz |  0.017 s |   0.018s :  0.016   +  0.002   |   214.1    | In Memory          |   OK  
+ 210.0  Hz |  0.015 s |   0.021s :  0.018   +  0.003   |   214.2    | In Memory          |   OK  
+ 220.0  Hz |  0.020 s |   0.017s :  0.015   +  0.003   |   214.3    | In Memory          |   OK  
+ 230.0  Hz |  0.020 s |   0.018s :  0.015   +  0.003   |   214.4    | In Memory          |   OK  
+ 240.0  Hz |  0.023 s |   0.022s :  0.020   +  0.003   |   214.6    | In Memory          |   OK  
+ 250.0  Hz |  0.021 s |   0.023s :  0.021   +  0.003   |   214.7    | In Memory          |   OK  
+ 260.0  Hz |  0.018 s |   0.019s :  0.017   +  0.003   |   214.9    | In Memory          |   OK  
+ 270.0  Hz |  0.021 s |   0.022s :  0.020   +  0.002   |   215.0    | In Memory          |   OK  
+ 280.0  Hz |  0.019 s |   0.016s :  0.014   +  0.003   |   215.1    | In Memory          |   OK  
+ 290.0  Hz |  0.021 s |   0.016s :  0.014   +  0.003   |   215.2    | In Memory          |   OK  
+ 300.0  Hz |  0.015 s |   0.016s :  0.014   +  0.003   |   215.3    | In Memory          |   OK  
+ 310.0  Hz |  0.018 s |   0.024s :  0.021   +  0.003   |   215.5    | In Memory          |   OK  
+ 320.0  Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   215.6    | In Memory          |   OK  
+ 330.0  Hz |  0.018 s |   0.020s :  0.018   +  0.003   |   215.8    | In Memory          |   OK  
+ 340.0  Hz |  0.018 s |   0.022s :  0.020   +  0.003   |   215.9    | In Memory          |   OK  
+ 350.0  Hz |  0.021 s |   0.020s :  0.017   +  0.003   |   216.0    | In Memory          |   OK  
+ 360.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.0    | In Memory          |   OK  
+ 370.0  Hz |  0.017 s |   0.020s :  0.017   +  0.003   |   216.0    | In Memory          |   OK  
+ 380.0  Hz |  0.015 s |   0.016s :  0.013   +  0.003   |   216.0    | In Memory          |   OK  
+ 390.0  Hz |  0.018 s |   0.018s :  0.016   +  0.003   |   216.2    | In Memory          |   OK  
+ 400.0  Hz |  0.020 s |   0.015s :  0.012   +  0.003   |   216.3    | In Memory          |   OK  
+ 410.0  Hz |  0.016 s |   0.020s :  0.017   +  0.003   |   216.3    | In Memory          |   OK  
+ 420.0  Hz |  0.018 s |   0.018s :  0.016   +  0.003   |   216.3    | In Memory          |   OK  
+ 430.0  Hz |  0.018 s |   0.018s :  0.015   +  0.003   |   216.3    | In Memory          |   OK  
+ 440.0  Hz |  0.020 s |   0.020s :  0.018   +  0.003   |   216.3    | In Memory          |   OK  
+ 450.0  Hz |  0.022 s |   0.020s :  0.018   +  0.002   |   216.3    | In Memory          |   OK  
+ 460.0  Hz |  0.021 s |   0.019s :  0.017   +  0.002   |   216.3    | In Memory          |   OK  
+ 470.0  Hz |  0.021 s |   0.022s :  0.019   +  0.003   |   216.3    | In Memory          |   OK  
+ 480.0  Hz |  0.021 s |   0.022s :  0.019   +  0.003   |   216.3    | In Memory          |   OK  
+ 490.0  Hz |  0.019 s |   0.024s :  0.021   +  0.003   |   216.4    | In Memory          |   OK  
+ 500.0  Hz |  0.023 s |   0.023s :  0.021   +  0.003   |   216.4    | In Memory          |   OK  
+ 510.0  Hz |  0.018 s |   0.021s :  0.018   +  0.003   |   216.4    | In Memory          |   OK  
+ 520.0  Hz |  0.019 s |   0.017s :  0.014   +  0.003   |   216.4    | In Memory          |   OK  
+ 530.0  Hz |  0.020 s |   0.021s :  0.018   +  0.003   |   216.4    | In Memory          |   OK  
+ 540.0  Hz |  0.022 s |   0.017s :  0.015   +  0.002   |   216.4    | In Memory          |   OK  
+ 550.0  Hz |  0.017 s |   0.016s :  0.014   +  0.003   |   216.4    | In Memory          |   OK  
+ 560.0  Hz |  0.016 s |   0.016s :  0.014   +  0.003   |   216.4    | In Memory          |   OK  
+ 570.0  Hz |  0.016 s |   0.015s :  0.013   +  0.002   |   216.5    | In Memory          |   OK  
+ 580.0  Hz |  0.015 s |   0.017s :  0.015   +  0.002   |   216.5    | In Memory          |   OK  
+ 590.0  Hz |  0.018 s |   0.022s :  0.019   +  0.003   |   216.5    | In Memory          |   OK  
+ 600.0  Hz |  0.018 s |   0.016s :  0.014   +  0.003   |   216.5    | In Memory          |   OK  
+ 610.0  Hz |  0.019 s |   0.017s :  0.015   +  0.003   |   216.5    | In Memory          |   OK  
+ 620.0  Hz |  0.022 s |   0.024s :  0.022   +  0.002   |   216.5    | In Memory          |   OK  
+ 630.0  Hz |  0.017 s |   0.020s :  0.018   +  0.003   |   216.5    | In Memory          |   OK  
+ 640.0  Hz |  0.016 s |   0.015s :  0.012   +  0.003   |   216.5    | In Memory          |   OK  
+ 650.0  Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.5    | In Memory          |   OK  
+ 660.0  Hz |  0.022 s |   0.019s :  0.016   +  0.003   |   216.5    | In Memory          |   OK  
+ 670.0  Hz |  0.015 s |   0.015s :  0.012   +  0.003   |   216.5    | In Memory          |   OK  
+ 680.0  Hz |  0.022 s |   0.018s :  0.016   +  0.003   |   216.5    | In Memory          |   OK  
+ 690.0  Hz |  0.020 s |   0.016s :  0.013   +  0.003   |   216.5    | In Memory          |   OK  
+ 700.0  Hz |  0.016 s |   0.016s :  0.013   +  0.003   |   216.6    | In Memory          |   OK  
+ 710.0  Hz |  0.022 s |   0.018s :  0.016   +  0.002   |   216.6    | In Memory          |   OK  
+ 720.0  Hz |  0.022 s |   0.023s :  0.020   +  0.003   |   216.6    | In Memory          |   OK  
+ 730.0  Hz |  0.019 s |   0.016s :  0.014   +  0.003   |   216.6    | In Memory          |   OK  
+ 740.0  Hz |  0.016 s |   0.017s :  0.014   +  0.003   |   216.6    | In Memory          |   OK  
+ 750.0  Hz |  0.016 s |   0.017s :  0.015   +  0.002   |   216.6    | In Memory          |   OK  
+ 760.0  Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
+ 770.0  Hz |  0.016 s |   0.016s :  0.014   +  0.003   |   216.6    | In Memory          |   OK  
+ 780.0  Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
+ 790.0  Hz |  0.017 s |   0.016s :  0.013   +  0.003   |   216.6    | In Memory          |   OK  
+ 800.0  Hz |  0.017 s |   0.017s :  0.014   +  0.003   |   216.6    | In Memory          |   OK  
+ 810.0  Hz |  0.019 s |   0.020s :  0.017   +  0.003   |   216.6    | In Memory          |   OK  
+ 820.0  Hz |  0.016 s |   0.021s :  0.018   +  0.003   |   216.6    | In Memory          |   OK  
+ 830.0  Hz |  0.016 s |   0.016s :  0.013   +  0.003   |   216.6    | In Memory          |   OK  
+ 840.0  Hz |  0.015 s |   0.018s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
+ 850.0  Hz |  0.020 s |   0.016s :  0.013   +  0.003   |   216.6    | In Memory          |   OK  
+ 860.0  Hz |  0.016 s |   0.017s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
+ 870.0  Hz |  0.022 s |   0.016s :  0.014   +  0.003   |   216.6    | In Memory          |   OK  
+ 880.0  Hz |  0.019 s |   0.022s :  0.020   +  0.003   |   216.6    | In Memory          |   OK  
+ 890.0  Hz |  0.021 s |   0.020s :  0.018   +  0.003   |   216.6    | In Memory          |   OK  
+ 900.0  Hz |  0.021 s |   0.015s :  0.012   +  0.003   |   216.6    | In Memory          |   OK  
+ 910.0  Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   216.6    | In Memory          |   OK  
+ 920.0  Hz |  0.022 s |   0.019s :  0.018   +  0.002   |   216.6    | In Memory          |   OK  
+ 930.0  Hz |  0.019 s |   0.019s :  0.016   +  0.003   |   216.7    | In Memory          |   OK  
+ 940.0  Hz |  0.019 s |   0.022s :  0.019   +  0.003   |   216.7    | In Memory          |   OK  
+ 950.0  Hz |  0.015 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 960.0  Hz |  0.020 s |   0.022s :  0.020   +  0.003   |   216.7    | In Memory          |   OK  
+ 970.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 980.0  Hz |  0.020 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 990.0  Hz |  0.020 s |   0.016s :  0.014   +  0.003   |   216.7    | In Memory          |   OK  
+ 1000.0 Hz |  0.020 s |   0.019s :  0.016   +  0.003   |   216.7    | In Memory          |   OK  
+ 1010.0 Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 1020.0 Hz |  0.020 s |   0.016s :  0.013   +  0.003   |   216.7    | In Memory          |   OK  
+ 1030.0 Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 1040.0 Hz |  0.019 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 1050.0 Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 1060.0 Hz |  0.023 s |   0.022s :  0.020   +  0.003   |   216.7    | In Memory          |   OK  
+ 1070.0 Hz |  0.021 s |   0.020s :  0.018   +  0.003   |   216.7    | In Memory          |   OK  
+ 1080.0 Hz |  0.016 s |   0.016s :  0.013   +  0.003   |   216.7    | In Memory          |   OK  
+ 1090.0 Hz |  0.017 s |   0.016s :  0.013   +  0.003   |   216.7    | In Memory          |   OK  
+ 1100.0 Hz |  0.016 s |   0.021s :  0.018   +  0.003   |   216.7    | In Memory          |   OK  
+ 1110.0 Hz |  0.020 s |   0.022s :  0.020   +  0.003   |   216.7    | In Memory          |   OK  
+ 1120.0 Hz |  0.020 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 1130.0 Hz |  0.017 s |   0.015s :  0.012   +  0.003   |   216.7    | In Memory          |   OK  
+ 1140.0 Hz |  0.020 s |   0.022s :  0.020   +  0.003   |   216.7    | In Memory          |   OK  
+ 1150.0 Hz |  0.019 s |   0.017s :  0.015   +  0.002   |   216.7    | In Memory          |   OK  
+ 1160.0 Hz |  0.021 s |   0.020s :  0.017   +  0.003   |   216.7    | In Memory          |   OK  
+ 1170.0 Hz |  0.019 s |   0.019s :  0.016   +  0.003   |   216.7    | In Memory          |   OK  
+ 1180.0 Hz |  0.020 s |   0.018s :  0.015   +  0.003   |   216.8    | In Memory          |   OK  
+ 1190.0 Hz |  0.017 s |   0.016s :  0.014   +  0.003   |   216.8    | In Memory          |   OK  
+ 1200.0 Hz |  0.018 s |   0.020s :  0.017   +  0.003   |   216.8    | In Memory          |   OK  
+==================================================================================================
+
+ --> Results output was turned off. Set --results=paraview if required
+
+--> Calculating SWL(dB) & TOTAL SOUND POWER for all input surfaces:
+     A = surface Area | TSW = Total Sound Power sum from all frequencies
+     inlet | A = 7498.88 L**2 | TSW_real = 4.123e-10 | TSW_imag = 6.587e-11 | TSW_mag = 9.532e-10
+     outlet | A = 7496.42 L**2 | TSW_real = 4.171e-10 | TSW_imag = 6.59e-11 | TSW_mag = 9.621e-10
+     Tie-1_Master | A = 7498.47 L**2 | TSW_real = 9.035e-12 | TSW_imag = 3.972e-11 | TSW_mag = 4.079e-11
+     Tie-1_Slave | A = 7497.6 L**2 | TSW_real = 9.094e-12 | TSW_imag = -3.958e-11 | TSW_mag = 4.067e-11
+
+     Freq / Power results written to: ( '02_zones_pipe_1m_power.csv' )
+     Freq / Power graphs plotted to: ( '02_zones_pipe_1m_power.png' )
+
+
+--> COMPLETED all Multi-Zone Frequency Steps <--
+    Function 'averaged_at_nodes' took: ( 0.40s )
+    Export Write and VTU Processing:   ( 2.15s )
+
+ [i] Shared Memory released.
+
+    ==========================
+    *** SIMULATION SUMMARY ***
+    ==========================
+    Simulation Finished at: Mon Oct  5 14:04:36 2026
+    Total Elapsed Time:     9.89 seconds ( 0.16 minutes )
+    Total Frequencies:      119
+    Avg Time per Freq:      0.083 seconds/Freq: 
+                            Assy ( 0.024s ) + BEM ( 0.016s ) + Mics ( 0.003s ) + Export ( 0.021s )
+
+    Check '02_zones_pipe_1m.log' for more details.
+    Open '02_zones_pipe_1m_Results.pvd' in ParaView.
+==================================================================================================
+
