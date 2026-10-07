@@ -57,8 +57,8 @@ python main.py model.inp --cpus=1 --Pref=2e-11 --Wref=1e-9 --debug=False
 | --- | --- | --- |
 | `None` | *Required* | PrePoMax input deck: `*.inp` model file. |
 | `--cpus` | `1` | Number of CPUs to use for parallel Freqs solve.  Defaults to 1 CPU, while still multi-threading for matrix solve. pyBEM sets this automatically at the start based on machine specs, in order to minimise race conditions. |
-| `--Pref` | `2e-11` (MPa) | Reference acoustic pressure for Sound Pressure Level calculations ($\text{SPL} = 20 \log_{10}(\vert{}p\vert{} / P_{\text{ref}})$). |
-| `--Wref` | `1e-9` (mW) | Reference acoustic power for Sound Power Level calculations ($\text{SWL} = 10 \log_{10}(W / W_{\text{ref}})$). |
+| `--Pref` | `2e-11` (MPa) | Reference acoustic pressure for Sound Pressure Level calculations: $SPL = 20 \log_{10}(\vert{}p\vert{} / P_{\text{ref}})$ |
+| `--Wref` | `1e-9` (mW) | Reference acoustic power for Sound Power Level calculations: $SWL = 10 \log_{10}(W / W_{\text{ref}})$ |
 | `--debug` | `False` | If `True`: Enables extended logging, including solve and TIED pair interface matrix info. |
 
 ---
@@ -109,7 +109,7 @@ Row  0 |                                             |                          
 Upon completion of an analysis, `pyBEM` generates the following structured outputs:
 
 * **ParaView Visualization Files (`*.vtk`):** Nodal-averaged spatial surface pressure ($p$), particle velocity ($v$), and acoustic intensity fields for both BEM zone boundaries and off-mesh `MICS` field point planes.
-* **Sound Power Data File (`*_power.csv`):** Tabulated tabular frequency data detailing surface areas ($A$), sound power levels ($\text{SWL}$), and total power components ($\text{TSW}_{\text{real}}$, $\text{TSW}_{\text{imag}}$, $\text{TSW}_{\text{mag}}$) per frequency step and surface set.
+* **Sound Power Data File (`*_power.csv`):** Tabulated tabular frequency data detailing surface areas ($A$), sound power levels ($\text{SWL}$) and total power components ($TSW_{\text{real}}$, $TSW_{\text{imag}}$, $TSW_{\text{mag}}$) per frequency step and surface set.
 * **3-Panel Power Spectrum Plot (`*_power.png`):** High-resolution comparative plots for Apparent Power (SWL Mag), Active Power (SWL Real), and Reactive Power (SWL Imag).
 * **Execution & Debug Logs (`*.log`, `*_debug.log`):** Detailed execution logging containing model statistics, mesh topology validation, zone boundary setups, matrix dimensions, and frequency solve timing.
 
