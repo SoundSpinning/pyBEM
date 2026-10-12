@@ -108,7 +108,9 @@ class PMXParser:
             self.model_str += f'***\n{header}\n'
             # Extract type (e.g., *ELEMENT, TYPE=S3, ELSET=Pipe)
             el_type = self._get_param(header, 'TYPE').upper()
-            is_mic = el_type.startswith('MICS_')
+            is_mic = False
+            if el_type.startswith('MICS_') or el_type.startswith('M3'):
+                is_mic = True
             
             for line in data:
                 if line.startswith('**') or not line: 

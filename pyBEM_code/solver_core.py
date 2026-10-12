@@ -1005,8 +1005,10 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy,
     
     # Pre-compute wave number squares and coefficients for efficiency
     k2 = k * k
-    inv_rho_omega = 1.0 / (1j * rho_omega)   # CHECK sign in the future for mics vels
-    # inv_rho_omega = -1.0 / (1j * rho_omega)
+    # inv_rho_omega = 1.0 / (1j * rho_omega)   # CHECK sign in the future for mics vels
+    # [i] CHECKED: the -1.0 version is the correct term vs theory
+    # Euler relation: v = -(1 / j*rho*omega) * grad(p)
+    inv_rho_omega = -1.0 / (1j * rho_omega)
 
     for i in prange(num_mics):
         sum_p = 0.0 + 0.0j
@@ -1019,43 +1021,47 @@ def calculate_mics(pre_mics_G, pre_mics_H, pre_mics_R, pre_mics_dx, pre_mics_dy,
             inv_r = 1.0 / r
             inv_r2 = inv_r * inv_r
             
-            # Unit vector direction components (dx / r)
-            dx_norm = pre_mics_dx[i, j] * inv_r
-            dy_norm = pre_mics_dy[i, j] * inv_r
-            dz_norm = pre_mics_dz[i, j] * inv_r
-            # dx = pre_mics_dx[i, j]
-            # dy = pre_mics_dy[i, j]
-            # dz = pre_mics_dz[i, j]
+            # Unit vector direction components e_r = (x_mic - y_surf) / r
+            dx_norm = pre_mics_dx[i, j]
+            dy_norm = pre_mics_dy[i, j]
+            dz_norm = pre_mics_dz[i, j]
             
+            # Directional cosine cos(theta) = e_r . n
             r_dot_n = pre_mics_H[i, j]
+
             nx = bem_normals[j, 0]
             ny = bem_normals[j, 1]
             nz = bem_normals[j, 2]
 
-            # Base Green's Function (G) value
+            # Base Green's Function G = exp(j*k*r) / (4*pi*r)
             g_val = np.exp(1j * k * r) * pre_mics_G[i, j]
 
             # Common spatial terms
             jk_minus_inv_r = 1j * k - inv_r
             
-            # Pressure Kernel: Derivative of Green's Function (H)
+            # Pressure Kernel: H = dG/dn - Derivative of Green's Function (H)
             h_val = H_sign * g_val * jk_minus_inv_r * r_dot_n
             
             # Integrate Pressure
             sum_p += (g_val * v_surf_scaled[j] + h_val * p_surf[j]) * bem_areas[j]
             
             # --- Velocity Kernel Calculations ---
-            # Monopole analytical gradient components
+            # Monopole analytical gradient components - grad(G)
             dg_dx = g_val * jk_minus_inv_r * dx_norm
             dg_dy = g_val * jk_minus_inv_r * dy_norm
             dg_dz = g_val * jk_minus_inv_r * dz_norm
             
-            # Dipole analytical gradient components (Quadrupole terms)
+            # Dipole analytical gradient components (Quadrupole terms) - grad(H)
             quad_term = (-k2 - 3.0 * 1j * k * inv_r + 3.0 * inv_r2) * r_dot_n
+            tang_factor = jk_minus_inv_r * inv_r
             
-            dh_dx = H_sign * g_val * (quad_term * dx_norm + jk_minus_inv_r * nx * inv_r)
-            dh_dy = H_sign * g_val * (quad_term * dy_norm + jk_minus_inv_r * ny * inv_r)
-            dh_dz = H_sign * g_val * (quad_term * dz_norm + jk_minus_inv_r * nz * inv_r)
+            dh_dx = H_sign * g_val * (quad_term * dx_norm + tang_factor * (nx - r_dot_n * dx_norm))
+            dh_dy = H_sign * g_val * (quad_term * dy_norm + tang_factor * (ny - r_dot_n * dy_norm))
+            dh_dz = H_sign * g_val * (quad_term * dz_norm + tang_factor * (nz - r_dot_n * dz_norm))
+            
+            # dh_dx = H_sign * g_val * (quad_term * dx_norm + jk_minus_inv_r * nx * inv_r)
+            # dh_dy = H_sign * g_val * (quad_term * dy_norm + jk_minus_inv_r * ny * inv_r)
+            # dh_dz = H_sign * g_val * (quad_term * dz_norm + jk_minus_inv_r * nz * inv_r)
             
             # Integrate Pressure Gradient components over the element area
             sum_grad_px += (dg_dx * v_surf_scaled[j] + dh_dx * p_surf[j]) * bem_areas[j]
