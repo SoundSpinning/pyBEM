@@ -68,7 +68,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         "--results",
         type = str,
         default = constants.results_type,
-        help = f"Results output (default: {constants.results_type}), set to None to turn off.",
+        help = f"Results output (default: {constants.results_type}). Set to None to turn off, Power results still get output.",
     )
 
     # Pre-process arguments to support key=value formats (e.g., debug=yes or cpus=4)

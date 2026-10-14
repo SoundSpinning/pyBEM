@@ -1378,7 +1378,7 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
 393, 301, 302, 419
 403, 323, 324, 420
 404, 325, 326, 421
-*Element, Type=mics_S4, Elset=mics_z1
+*Element, Type=M3D4, Elset=mics_z1
 510, 517, 507, 536, 608
 511, 508, 517, 608, 518
 512, 519, 518, 608, 609
@@ -1519,10 +1519,10 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
 649, 523, 669, 670, 522
 650, 521, 671, 672, 520
 651, 518, 519, 673, 658
-*Element, Type=mics_S3, Elset=mics_z1
+*Element, Type=M3D3, Elset=mics_z1
 570, 530, 531, 629
 581, 532, 533, 660
-*Element, Type=mics_S4, Elset=mics_z2
+*Element, Type=M3D4, Elset=mics_z2
 652, 674, 684, 780, 702
 653, 684, 675, 704, 780
 654, 676, 685, 781, 703
@@ -1668,7 +1668,7 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
 800, 696, 695, 842, 843
 801, 698, 697, 844, 845
 802, 699, 698, 845, 846
-*Element, Type=mics_S3, Elset=mics_z2
+*Element, Type=M3D3, Elset=mics_z2
 690, 838, 691, 690
 692, 764, 765, 836
 696, 802, 689, 688

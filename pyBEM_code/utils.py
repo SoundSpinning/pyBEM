@@ -6,6 +6,9 @@ import sys
 import argparse
 import constants
 import logging
+# KDTree is a spatial indexing data structure in SciPy 
+# that organizes points in a multi-dimensional space.
+from scipy.spatial import KDTree
 
 # Module-level loggers (automatically connected to setup_logger from main.py)
 logger = logging.getLogger("pyBEM")           # Dual output (Terminal + Log file)
@@ -139,6 +142,7 @@ def set_hardware_limits(threads_per_worker):
     # However, see in main code we take control of this part via set_num_threads()
     # os.environ["NUMBA_NUM_THREADS"] = t_str
 
+# [i] Do NOT move these 2 lines from here; coz above.
 import numpy as np
 from numba import njit
 
@@ -147,6 +151,35 @@ def format_section_header(title: str, indent: str = "    ") -> str:
     header_text = f"*** {title} ***"
     border = "=" * len(header_text)
     return f"{indent}{border}\n{indent}{header_text}\n{indent}{border}"
+
+def calculate_centroid_element_size(bem_centers):
+    """
+    Calculate the characteristic element size based on average 
+    nearest-neighbor distances between element centroids.
+    
+    Parameters:
+    - bem_centers: numpy array or list of shape (N, 3) with centroid coordinates.
+    
+    Returns:
+    - h_centroid: float representing the average local spacing.
+    """
+    centers = np.array(bem_centers)
+    n_elements = len(centers)
+    
+    if n_elements < 2:
+        return 0.0
+    
+    # Build a spatial KD-Tree for fast neighbor lookup
+    tree = KDTree(centers)
+    
+    # Query the 2 nearest neighbors for each point 
+    # (the 1st nearest neighbor is the point itself at distance 0.0, so we take the 2nd)
+    distances, _ = tree.query(centers, k=2)
+    nearest_distances = distances[:, 1]
+    
+    # Return the mean nearest-neighbor distance
+    # return float(np.mean(nearest_distances))
+    return nearest_distances
 
 def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top):
     """
@@ -174,20 +207,24 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         
         # 1. Local Geometry Preps (Centers, Areas, Normals)
         nodal_coords, bem_centers, bem_areas, bem_normals, elem_ratio, max_el_length = prepare_geometry(sorted_nodes, z_elements)
+
+        centroid_distances = calculate_centroid_element_size(bem_centers)
         
         # Compute order characteristic distance length (95th percentile)
-        order_length = np.percentile(max_el_length, 95)
+        edge_length = np.percentile(max_el_length, 95)
+        order_length = np.percentile(centroid_distances, 95)
         global_order_lengths[zone_name] = order_length
         
         # 2. Run Single-Domain checks (Volume, Free Edges, Conflicts) via Divergence Theorem
         bem_total_vol, bem_total_area, bem_CoG, conflicts, free_edges = get_geo_info(z_elements, bem_centers, bem_areas, bem_normals)
         
         log_info += f"\n--> ZONE: [ '{zone_name}' ]"
-        log_info += f"\n    BEM Surface Area:           ( {bem_total_area:.6g} L^2 )"
-        log_info += f"\n    CoG of BEM zone:            [ {bem_CoG[0]:.2f}, {bem_CoG[1]:.2f}, {bem_CoG[2]:.2f} ] L"
-        log_info += f"\n    Max Element Aspect Ratio:   ( {np.max(elem_ratio):.2f} )"
-        log_info += f"\n    Element Size (approx):      ( {order_length:.2f} L )"
-        log_info += f"\n    Suggested Max Freq:         ( {c_local / (8 * order_length):.1f} Hz )"
+        log_info += f"\n    BEM Surface Area:              ( {bem_total_area:.6g} L^2 )"
+        log_info += f"\n    CoG of BEM zone:               [ {bem_CoG[0]:.2f}, {bem_CoG[1]:.2f}, {bem_CoG[2]:.2f} ] L"
+        log_info += f"\n    Max Element Aspect Ratio:      ( {np.max(elem_ratio):.2f} )"
+        log_info += f"\n    Element Edge Size (approx):    ( {edge_length:.2f} L )"
+        log_info += f"\n    Element CoG Distance (approx): ( {order_length:.2f} L )"
+        log_info += f"\n    Suggested Max Freq:            ( {c_local / (10 * order_length):.1f} Hz )"
         
         # --- STRICT GOLDEN RULES ENFORCEMENT ---
         # Rule 1: Every single zone must be water-tight
@@ -204,13 +241,13 @@ def validate_and_log_zones(zone_mesh_data, sorted_nodes, parser, log_f, log_top)
         if bem_total_vol > constants.tol:
             global_h_signs[zone_name] = -1.0
             log_info += f"""
-    Closed (+) Volume detected: ( {bem_total_vol:.6g} L^3 )
+    Closed (+) Volume detected:    ( {bem_total_vol:.6g} L^3 )
     -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
 """
         elif bem_total_vol < -constants.tol:
             global_h_signs[zone_name] = 1.0
             log_info += f"""
-    Closed (-) Volume detected: ( {bem_total_vol:.6g} L^3 )
+    Closed (-) Volume detected:    ( {bem_total_vol:.6g} L^3 )
     -> Normals point INWARDS ==> Assuming EXTERIOR Analysis
 """
         else:
@@ -335,7 +372,6 @@ def evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
 
     return is_swapped, h_slave, h_master
 
-from scipy.spatial import cKDTree
 def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3):
     """
     Normal-Projection Gap Resolver for Constant BEM.
@@ -445,8 +481,6 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
             }
     return tie_registry
 
-# NEW TIED pairs weighting method, area overlap approach 
-# for better accuracy across zones interfaces
 def ensure_ccw_2d(poly):
     """Ensures a 2D polygon is wound counter-clockwise."""
     if len(poly) < 3:
@@ -538,6 +572,8 @@ def element_touches_free_edge(eid, elements, free_nodes):
         return False
     return any(nid in free_nodes for nid in elem_nodes)
 
+# NEW TIED pairs weighting method, area overlap approach & slivers detector
+# for better accuracy across zones interfaces.
 def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
     """
     Geometric Area-Overlap Weight Calculator for Point-Collocation Tie Constraints.
@@ -568,7 +604,7 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
     log_pre_ties = (" TIED INTERFACE AREAS")
     log_pre_ties += ("\n" + "="*22)
 
-    TIE_SLIVER_TOLERANCE = 0.03          # Free-edge 3% threshold (0.97 <= sum < 1.0)
+    EDGE_SLIVER_TOLERANCE = 0.03         # Free-edge 3% threshold (0.97 <= sum < 1.0)
     INTERNAL_SLIVER_TOLERANCE = 0.03     # Internal-edge 3% threshold for sliver noise
     WEIGHT_PRUNE_THRESHOLD = 0.01        # Drop intersection weights below 1% to purge ghost slivers
 
@@ -714,59 +750,39 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                     tie_intersected_area += area_ij
 
         # --- Dual Free-Edge Check & Normalization Pass ---
+        # --- Sliver Normalization Pass ---
         # 1. Normalize Slave-to-Master (Pressure Mapping)
         for seid, m_dict in W_slave_to_master.items():
             if seid not in current_tie_slave_eids:
                 continue
-            s_touches_free = element_touches_free_edge(seid, s_elements_full, s_free_nodes)
             row_sum = sum(m_dict.values())
-            
-            # Relaxed condition: if slave touches free edge at a boundary transition, normalize it
-            if s_touches_free:
-                if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
+            if row_sum > 0 and row_sum < 1.0:
+                s_touches_free = element_touches_free_edge(seid, s_elements_full, s_free_nodes)
+                tolerance = EDGE_SLIVER_TOLERANCE if s_touches_free else INTERNAL_SLIVER_TOLERANCE
+                if (1.0 - tolerance) <= row_sum:
+                    scale = 1.0 / row_sum
                     for meid in m_dict:
-                        m_dict[meid] /= row_sum
+                        m_dict[meid] *= scale
 
         # 2. Normalize Master-to-Slave (Flux Distribution)
         for meid, s_dict in W_master_to_slave.items():
             if meid not in current_tie_master_eids:
                 continue
-            m_touches_free = element_touches_free_edge(meid, m_elements_full, m_free_nodes)
             row_sum = sum(s_dict.values())
-            
-            if m_touches_free:
-                if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
+            if row_sum > 0 and row_sum < 1.0:
+                m_touches_free = element_touches_free_edge(meid, m_elements_full, m_free_nodes)
+                tolerance = EDGE_SLIVER_TOLERANCE if m_touches_free else INTERNAL_SLIVER_TOLERANCE
+                if (1.0 - tolerance) <= row_sum:
+                    scale = 1.0 / row_sum
                     for seid in s_dict:
-                        s_dict[seid] /= row_sum
+                        s_dict[seid] *= scale
 
-        # --- Internal-Edge Sliver Elimination Pass (Separate 2nd Pass) ---
-        # 1. Normalize Internal Slave Elements
-        for seid, m_dict in list(W_slave_to_master.items()):
-            if seid not in current_tie_slave_eids:
-                continue
-            s_touches_free = element_touches_free_edge(seid, s_elements_full, s_free_nodes)
-            if not s_touches_free:
-                row_sum = sum(m_dict.values())
-                if (1.0 - INTERNAL_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                    for meid in m_dict:
-                        m_dict[meid] /= row_sum
-
-        # 2. Normalize Internal Master Elements
-        for meid, s_dict in list(W_master_to_slave.items()):
-            if meid not in current_tie_master_eids:
-                continue
-            m_touches_free = element_touches_free_edge(meid, m_elements_full, m_free_nodes)
-            if not m_touches_free:
-                row_sum = sum(s_dict.values())
-                if (1.0 - INTERNAL_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                    for seid in s_dict:
-                        s_dict[seid] /= row_sum
-
-        # --- Universal Normalization Safety Net (Unconditional for any row under 1.0 down to 0.90) ---
+        # --- Universal Normalization Safety Net ---
+        # Catches minor drift just below the explicit tolerances down to a hard floor (e.g. 0.90)
         for seid, m_dict in W_slave_to_master.items():
             if seid in current_tie_slave_eids:
                 row_sum = sum(m_dict.values())
-                if (1.0 - TIE_SLIVER_TOLERANCE * 3) <= row_sum < 1.0 and row_sum > 0:
+                if 0.90 <= row_sum < (1.0 - INTERNAL_SLIVER_TOLERANCE):
                     scale = 1.0 / row_sum
                     for meid in m_dict:
                         m_dict[meid] *= scale
@@ -774,12 +790,12 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
         for meid, s_dict in W_master_to_slave.items():
             if meid in current_tie_master_eids:
                 row_sum = sum(s_dict.values())
-                if (1.0 - TIE_SLIVER_TOLERANCE * 3) <= row_sum < 1.0 and row_sum > 0:
+                if 0.90 <= row_sum < (1.0 - INTERNAL_SLIVER_TOLERANCE):
                     scale = 1.0 / row_sum
                     for seid in s_dict:
                         s_dict[seid] *= scale
 
-        # --- Prune Ghost Slivers Pass (Purge Step) ---
+        # --- Prune Ghost Slivers Pass ---
         for seid in list(current_tie_slave_eids):
             if seid in W_slave_to_master:
                 W_slave_to_master[seid] = {meid: w for meid, w in W_slave_to_master[seid].items() if w >= WEIGHT_PRUNE_THRESHOLD}
@@ -788,7 +804,7 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                 else:
                     # Post-pruning renormalization: force surviving valid weights to sum to exactly 1.0
                     row_sum = sum(W_slave_to_master[seid].values())
-                    if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
+                    if (1.0 - EDGE_SLIVER_TOLERANCE) <= row_sum < 1.0:
                         scale = 1.0 / row_sum
                         for meid in W_slave_to_master[seid]:
                             W_slave_to_master[seid][meid] *= scale
@@ -800,12 +816,12 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                     del W_master_to_slave[meid]
                 else:
                     row_sum = sum(W_master_to_slave[meid].values())
-                    if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
+                    if (1.0 - EDGE_SLIVER_TOLERANCE) <= row_sum < 1.0:
                         scale = 1.0 / row_sum
                         for seid in W_master_to_slave[meid]:
                             W_master_to_slave[meid][seid] *= scale
 
-        # --- Compute Post-Normalization Effective Intersected Area Directly ---
+        # --- Compute Post-Normalization Effective Intersected Area ---
         tie_intersected_area_post = 0.0
         for seid in active_slave_eids:
             if seid in W_slave_to_master:
@@ -815,448 +831,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
 
         # Calculate true active master surface area (strictly active participating elements)
         tie_master_area = sum(m_geom[meid]['area'] for meid in active_master_eids)
-
-        # Calculate actual post-normalization conservation error (sliver trimming loss)
-        post_area_error = abs(tie_intersected_area - tie_intersected_area_post)
-
-        # Store calculated physical areas directly on tie_info for build_tie_summary_log
-        tie_info['total_slave_area'] = tie_slave_area
-        tie_info['total_master_area'] = tie_master_area
-        tie_info['intersected_area'] = tie_intersected_area_post
-        tie_info['area_conservation_error'] = post_area_error
-
-    return W_slave_to_master, W_master_to_slave, list(master_eids_set), list(slave_eids_set), log_pre_ties
-
-def old_compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
-    """
-    Geometric Area-Overlap Weight Calculator for Point-Collocation Tie Constraints.
-
-    Calculates 2D planar polygon intersection areas between non-conforming interface 
-    elements and normalizes them into scalar area fractions.
-
-    Mathematical Note:
-        This is an Area-Weighted Point-Collocation mapping, NOT a variational 
-        Dual-Mortar integration formulation. Because constraint equations are 
-        evaluated at single element centroids (point-collocation), exact power 
-        conservation across non-conforming interfaces requires the coarse surface 
-        to be designated as the Slave surface.
-
-    Returns:
-        W_slave_to_master (dict): 
-            Maps slave element IDs to master element IDs with weight w_s2m = A_ij / A_slave.
-            Used to interpolate Master pressures to Slave centroids.
-        W_master_to_slave (dict): 
-            Maps master element IDs to slave element IDs with weight w_m2s = A_ij / A_master.
-            Used to transfer Slave flux/velocities to Master elements.
-    """
-    W_slave_to_master = {}
-    W_master_to_slave = {}
-    master_eids_set = set()
-    slave_eids_set = set()
-    
-    log_pre_ties = (" TIED INTERFACE AREAS")
-    log_pre_ties += ("\n" + "="*22)
-
-    TIE_SLIVER_TOLERANCE = 0.03  # 3% threshold (0.97 <= sum < 1.0)
-
-    for tie_name, tie_info in tie_registry.items():
-        s_zone = tie_info['slave_zone']
-        m_zone = tie_info['master_zone']
-        tolerance = tie_info['tolerance_used']
-        
-        s_elements_full = zones_mesh[s_zone]['elements']
-        m_elements_full = zones_mesh[m_zone]['elements']
-        
-        target_s_eids_set = {pair[1] for pair in tie_info['element_pairs']}
-        target_m_eids_set = {pair[0] for pair in tie_info['element_pairs']}
-
-        # --- Sub-Patch Filtering: Extract ONLY elements participating in this tie interface ---
-        s_eids_patch = [eid for eid in s_elements_full if eid in target_s_eids_set]
-        m_eids_patch = [eid for eid in m_elements_full if eid in target_m_eids_set]
-
-        s_elements_patch = {eid: s_elements_full[eid] for eid in s_eids_patch}
-        m_elements_patch = {eid: m_elements_full[eid] for eid in m_eids_patch}
-
-        # --- Local Geometry Extraction for Sub-Patch Elements Only ---
-        s_geom = {}
-        for eid, node_ids in s_elements_patch.items():
-            pts = np.array([sorted_nodes[nid] for nid in node_ids])
-            center = np.mean(pts, axis=0)
-            if len(pts) == 3:
-                vec1, vec2 = pts[1] - pts[0], pts[2] - pts[0]
-                cross = np.cross(vec1, vec2)
-                area = 0.5 * np.linalg.norm(cross)
-            else:  # Quad element
-                a1 = 0.5 * np.linalg.norm(np.cross(pts[1] - pts[0], pts[2] - pts[0]))
-                a2 = 0.5 * np.linalg.norm(np.cross(pts[2] - pts[0], pts[3] - pts[0]))
-                area = a1 + a2
-                cross = np.cross(pts[2] - pts[0], pts[3] - pts[1])
-            norm = np.linalg.norm(cross)
-            normal = cross / norm if norm > 1e-14 else np.array([0.0, 0.0, 1.0])
-            s_geom[eid] = {'center': center, 'normal': normal, 'area': area, 'vertices_3d': pts}
-
-        m_geom = {}
-        for eid, node_ids in m_elements_patch.items():
-            pts = np.array([sorted_nodes[nid] for nid in node_ids])
-            center = np.mean(pts, axis=0)
-            if len(pts) == 3:
-                area = 0.5 * np.linalg.norm(np.cross(pts[1] - pts[0], pts[2] - pts[0]))
-            else:  # Quad element
-                a1 = 0.5 * np.linalg.norm(np.cross(pts[1] - pts[0], pts[2] - pts[0]))
-                a2 = 0.5 * np.linalg.norm(np.cross(pts[2] - pts[0], pts[3] - pts[0]))
-                area = a1 + a2
-            m_geom[eid] = {'center': center, 'area': area, 'vertices_3d': pts}
-
-        # --- Extract Free-Edge Topology for Sub-Patches ---
-        s_free_nodes = get_subpatch_free_nodes(target_s_eids_set, s_elements_full)
-        m_free_nodes = get_subpatch_free_nodes(target_m_eids_set, m_elements_full)
-        
-        # Local per-tie tracking for geometry diagnostics
-        tie_slave_area = 0.0
-        tie_intersected_area = 0.0
-        
-        active_slave_eids = set()
-        active_master_eids = set()
-
-        # 1. Main Polygon Clipping Loop across Target Sub-Patch Elements
-        for seid in s_eids_patch:
-            if seid not in s_geom:
-                continue
-
-            s_center = s_geom[seid]['center']
-            s_normal = s_geom[seid]['normal']
-            s_area   = s_geom[seid]['area']
-            
-            if s_area < constants.tol:
-                continue
-            
-            s_vertices_3d = s_geom[seid]['vertices_3d']
-            
-            # Build local 2D coordinate system on the slave element plane
-            ref_vec = np.array([1.0, 0.0, 0.0]) if abs(s_normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-            u_axis = np.cross(s_normal, ref_vec)
-            u_axis /= np.linalg.norm(u_axis)
-            v_axis = np.cross(s_normal, u_axis)
-            
-            # Project Slave to Local 2D Plane
-            s_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in s_vertices_3d]
-            
-            overlapping_masters = []
-            weights_raw = []
-            
-            # 2. Filter & Project Candidate Master Sub-Patch Elements
-            for meid in m_eids_patch:
-                if meid not in m_geom:
-                    continue
-
-                m_center = m_geom[meid]['center']
-                vec = m_center - s_center
-                gap = abs(np.dot(vec, s_normal))
-                
-                # Proximity check acts as the boundary filter
-                if gap <= tolerance:
-                    m_vertices_3d = m_geom[meid]['vertices_3d']
-                    
-                    # Project Master onto the Slave's Local 2D Plane
-                    m_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in m_vertices_3d]
-                    
-                    # 3. Geometric Polygon Clipping
-                    intersection_polygon = clip_polygon_2d(s_vertices_2d, m_vertices_2d)
-                    intersection_area = compute_polygon_area_2d(intersection_polygon)
-                    
-                    if intersection_area > constants.tol:  # Physical overlap found
-                        overlapping_masters.append(meid)
-                        weights_raw.append(intersection_area)
-            
-            # 4. Build Independent Weights for Pressure and Velocity
-            if overlapping_masters:
-                slave_eids_set.add(seid)
-                active_slave_eids.add(seid)
-                tie_slave_area += s_area
-                W_slave_to_master[seid] = {}
-
-                for m_eid, area_ij in zip(overlapping_masters, weights_raw):
-                    if m_eid not in W_master_to_slave:
-                        W_master_to_slave[m_eid] = {}
-                    
-                    m_area_true = m_geom[m_eid]['area']
-
-                    # Safe normalization: normalize w_slave_fraction against total_clipped_area 
-                    # to ensure sum(w_slave) == 1.0 even if polygon clipping missed small perimeter edges
-                    w_slave_fraction = area_ij / s_area
-                    w_master_fraction = area_ij / m_area_true
-
-                    W_slave_to_master[seid][m_eid] = w_slave_fraction
-                    W_master_to_slave[m_eid][seid] = w_master_fraction
-
-                    master_eids_set.add(m_eid)
-                    active_master_eids.add(m_eid)
-                    tie_intersected_area += area_ij
-
-        # --- Dual Free-Edge Check & Normalization Pass ---
-        # 1. Normalize Slave-to-Master (Pressure Mapping)
-        for seid, m_dict in W_slave_to_master.items():
-            s_touches_free = element_touches_free_edge(seid, s_elements_full, s_free_nodes)
-            row_sum = sum(m_dict.values())
-            
-            dual_free_edge = any(
-                element_touches_free_edge(m_eid, m_elements_full, m_free_nodes) 
-                for m_eid in m_dict
-            )
-
-            if s_touches_free and dual_free_edge:
-                if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                    for meid in m_dict:
-                        m_dict[meid] /= row_sum
-
-        # 2. Normalize Master-to-Slave (Flux Distribution)
-        for meid, s_dict in W_master_to_slave.items():
-            m_touches_free = element_touches_free_edge(meid, m_elements_full, m_free_nodes)
-            row_sum = sum(s_dict.values())
-            
-            dual_free_edge = any(
-                element_touches_free_edge(s_eid, s_elements_full, s_free_nodes) 
-                for s_eid in s_dict
-            )
-
-            if m_touches_free and dual_free_edge:
-                if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                    for seid in s_dict:
-                        s_dict[seid] /= row_sum
-
-        # --- Compute Post-Normalization Effective Intersected Area Directly ---
-        tie_intersected_area_post = 0.0
-        for seid in active_slave_eids:
-            s_area = s_geom[seid]['area']
-            w_sum = sum(W_slave_to_master[seid].values())
-            tie_intersected_area_post += s_area * w_sum
-
-        # Calculate true active master surface area (strictly active participating elements)
-        tie_master_area = sum(m_geom[meid]['area'] for meid in active_master_eids)
-
-        # Calculate actual post-normalization conservation error (sliver trimming loss)
-        post_area_error = abs(tie_intersected_area - tie_intersected_area_post)
-
-        # Store calculated physical areas directly on tie_info for build_tie_summary_log
-        tie_info['total_slave_area'] = tie_slave_area
-        tie_info['total_master_area'] = tie_master_area
-        tie_info['intersected_area'] = tie_intersected_area_post
-        tie_info['area_conservation_error'] = post_area_error
-
-    return W_slave_to_master, W_master_to_slave, list(master_eids_set), list(slave_eids_set), log_pre_ties
-
-def old_compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
-    """
-    Geometric Area-Overlap Weight Calculator for Point-Collocation Tie Constraints.
-
-    Calculates 2D planar polygon intersection areas between non-conforming interface 
-    elements and normalizes them into scalar area fractions.
-
-    Mathematical Note:
-        This is an Area-Weighted Point-Collocation mapping, NOT a variational 
-        Dual-Mortar integration formulation. Because constraint equations are 
-        evaluated at single element centroids (point-collocation), exact power 
-        conservation across non-conforming interfaces requires the coarse surface 
-        to be designated as the Slave surface.
-
-    Returns:
-        W_slave_to_master (dict): 
-            Maps slave element IDs to master element IDs with weight w_s2m = A_ij / A_slave.
-            Used to interpolate Master pressures to Slave centroids.
-        W_master_to_slave (dict): 
-            Maps master element IDs to slave element IDs with weight w_m2s = A_ij / A_master.
-            Used to transfer Slave flux/velocities to Master elements.
-    """
-    W_slave_to_master = {}
-    W_master_to_slave = {}
-    master_eids_set = set()
-    slave_eids_set = set()
-    
-    # log_pre_ties = ("\n" + "="*22)
-    log_pre_ties = (" TIED INTERFACE AREAS")
-    log_pre_ties += ("\n" + "="*22)
-
-    TIE_SLIVER_TOLERANCE = 0.03  # 3% threshold (0.97 <= sum < 1.0)
-
-    for tie_name, tie_info in tie_registry.items():
-        s_zone = tie_info['slave_zone']
-        m_zone = tie_info['master_zone']
-        tolerance = tie_info['tolerance_used']
-        
-        s_elements = zones_mesh[s_zone]['elements']
-        m_elements = zones_mesh[m_zone]['elements']
-        
-        # Pull geometric parameters
-        _, s_centers, _, s_normals, _, _ = prepare_geometry(sorted_nodes, s_elements)
-        _, m_centers, _, _, _, _ = prepare_geometry(sorted_nodes, m_elements)
-        
-        s_eids_local = list(s_elements.keys())
-        m_eids_local = list(m_elements.keys())
-        
-        target_s_eids = {pair[1] for pair in tie_info['element_pairs']}
-        target_m_eids = {pair[0] for pair in tie_info['element_pairs']}
-
-        # --- NEW: Extract Free-Edge Topology for both Sub-Patches ---
-        s_free_nodes = get_subpatch_free_nodes(target_s_eids, s_elements)
-        m_free_nodes = get_subpatch_free_nodes(target_m_eids, m_elements)
-        
-        # Local per-tie tracking for geometry diagnostics
-        tie_slave_area = 0.0
-        tie_intersected_area = 0.0
-
-        for s_idx, seid in enumerate(s_eids_local):
-            if seid not in target_s_eids:
-                continue
-                
-            s_center = s_centers[s_idx]
-            s_normal = s_normals[s_idx]
-            
-            # 1. Reconstruct Slave 3D Polygon Vertices from sorted_nodes
-            s_node_ids = s_elements[seid]
-            s_vertices_3d = np.array([sorted_nodes[nid] for nid in s_node_ids])
-            
-            # Build local 2D coordinate system on the slave element plane
-            ref_vec = np.array([1.0, 0.0, 0.0]) if abs(s_normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-            u_axis = np.cross(s_normal, ref_vec)
-            u_axis /= np.linalg.norm(u_axis)
-            v_axis = np.cross(s_normal, u_axis)
-            
-            # Project Slave to Local 2D Plane
-            s_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in s_vertices_3d]
-            s_area = compute_polygon_area_2d(s_vertices_2d)
-            
-            if s_area < constants.tol:
-                continue
-            
-            # Accumulate ALL target slave element areas for total physical slave surface area
-            tie_slave_area += s_area
-            
-            overlapping_masters = []
-            weights_raw = []
-            
-            # 2. Filter & Project Candidate Master Elements
-            for m_idx, meid in enumerate(m_eids_local):
-                if meid not in target_m_eids:
-                    continue
-
-                vec = m_centers[m_idx] - s_center
-                gap = abs(np.dot(vec, s_normal))
-                
-                # Proximity check acts as the boundary filter
-                if gap <= tolerance:
-                    m_node_ids = m_elements[meid]
-                    m_vertices_3d = np.array([sorted_nodes[nid] for nid in m_node_ids])
-                    
-                    # Project Master onto the Slave's Local 2D Plane
-                    m_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in m_vertices_3d]
-                    
-                    # 3. Geometric Polygon Clipping
-                    intersection_polygon = clip_polygon_2d(s_vertices_2d, m_vertices_2d)
-                    intersection_area = compute_polygon_area_2d(intersection_polygon)
-                    
-                    if intersection_area > constants.tol:  # Physical overlap found
-                        overlapping_masters.append(meid)
-                        weights_raw.append(intersection_area)
-            
-            # 4. Build Independent Weights for Pressure and Velocity
-            if overlapping_masters:
-                slave_eids_set.add(seid)
-                W_slave_to_master[seid] = {}
-
-                for m_eid, area_ij in zip(overlapping_masters, weights_raw):
-                    if m_eid not in W_master_to_slave:
-                        W_master_to_slave[m_eid] = {}
-                    
-                    # Calculate true 3D master area
-                    m_node_ids = m_elements[m_eid]
-                    m_vertices_3d = np.array([sorted_nodes[nid] for nid in m_node_ids])
-                    
-                    if len(m_vertices_3d) == 3:
-                        m_area_true = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[1] - m_vertices_3d[0], m_vertices_3d[2] - m_vertices_3d[0]))
-                    else:  # Quad element
-                        area1 = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[1] - m_vertices_3d[0], m_vertices_3d[2] - m_vertices_3d[0]))
-                        area2 = 0.5 * np.linalg.norm(np.cross(m_vertices_3d[2] - m_vertices_3d[0], m_vertices_3d[3] - m_vertices_3d[0]))
-                        m_area_true = area1 + area2
-
-                    # Safe normalization: normalize w_slave_fraction against total_clipped_area 
-                    # to ensure sum(w_slave) == 1.0 even if polygon clipping missed small perimeter edges
-                    w_slave_fraction = area_ij / s_area
-                    w_master_fraction = area_ij / m_area_true
-
-                    W_slave_to_master[seid][m_eid] = w_slave_fraction
-                    W_master_to_slave[m_eid][seid] = w_master_fraction
-
-                    master_eids_set.add(m_eid)
-                    tie_intersected_area += area_ij
-
-        # --- NEW: Dual Free-Edge Check & Normalization Pass ---
-        # 1. Normalize Slave-to-Master (Pressure Mapping)
-        for seid, m_dict in W_slave_to_master.items():
-            s_touches_free = element_touches_free_edge(seid, s_elements, s_free_nodes)
-            row_sum = sum(m_dict.values())
-            
-            dual_free_edge = any(
-                element_touches_free_edge(m_eid, m_elements, m_free_nodes) 
-                for m_eid in m_dict
-            )
-
-            if s_touches_free and dual_free_edge:
-                if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                    for meid in m_dict:
-                        m_dict[meid] /= row_sum
-
-        # 2. Normalize Master-to-Slave (Flux Distribution)
-        for meid, s_dict in W_master_to_slave.items():
-            m_touches_free = element_touches_free_edge(meid, m_elements, m_free_nodes)
-            row_sum = sum(s_dict.values())
-            
-            dual_free_edge = any(
-                element_touches_free_edge(s_eid, s_elements, s_free_nodes) 
-                for s_eid in s_dict
-            )
-
-            if m_touches_free and dual_free_edge:
-                if (1.0 - TIE_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                    for seid in s_dict:
-                        s_dict[seid] /= row_sum
-
-        # --- NEW: Compute Post-Normalization Effective Intersected Area ---
-        tie_intersected_area_post = 0.0
-        for s_idx, seid in enumerate(s_eids_local):
-            if seid in W_slave_to_master:
-                # Recompute exact slave area for this element
-                s_node_ids = s_elements[seid]
-                s_vertices_3d = np.array([sorted_nodes[nid] for nid in s_node_ids])
-                
-                s_normal = s_normals[s_idx]
-                s_center = s_centers[s_idx]
-                ref_vec = np.array([1.0, 0.0, 0.0]) if abs(s_normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-                u_axis = np.cross(s_normal, ref_vec)
-                u_axis /= np.linalg.norm(u_axis)
-                v_axis = np.cross(s_normal, u_axis)
-                
-                s_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in s_vertices_3d]
-                s_area = compute_polygon_area_2d(s_vertices_2d)
-                
-                # Weight sum after sliver scaling (should equal 1.0 for scaled boundary elements)
-                w_sum = sum(W_slave_to_master[seid].values())
-                tie_intersected_area_post += s_area * w_sum
-
-        # # Calculate actual post-normalization conservation error
-        # post_area_error = abs(tie_slave_area - tie_intersected_area_post)
-
-        # Calculate true total master surface area
-        tie_master_area = 0.0
-        for meid in target_m_eids:
-            if meid in m_elements:
-                m_node_ids = m_elements[meid]
-                m_v3d = np.array([sorted_nodes[nid] for nid in m_node_ids])
-                if len(m_v3d) == 3:
-                    tie_master_area += 0.5 * np.linalg.norm(np.cross(m_v3d[1] - m_v3d[0], m_v3d[2] - m_v3d[0]))
-                else:  # Quad
-                    a1 = 0.5 * np.linalg.norm(np.cross(m_v3d[1] - m_v3d[0], m_v3d[2] - m_v3d[0]))
-                    a2 = 0.5 * np.linalg.norm(np.cross(m_v3d[2] - m_v3d[0], m_v3d[3] - m_v3d[0]))
-                    tie_master_area += a1 + a2
 
         # Calculate actual post-normalization conservation error (sliver trimming loss)
         post_area_error = abs(tie_intersected_area - tie_intersected_area_post)

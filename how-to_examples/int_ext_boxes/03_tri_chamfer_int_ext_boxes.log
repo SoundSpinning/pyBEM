@@ -1,0 +1,386 @@
+================================================================================
+                  pyBEM - V0.5.1-alpha | BEM Acoustics Solver
+                     Standard Element (Constant) Collocation
+                  Direct Method | Multi-Zone Analysis & TIED pairs
+================================================================================
+*Heading
+Hash: OdZnX2UC, Date: 10/14/2026, Unit system: MM_TON_S_C
+03_tri_chamfer_int_ext_boxes.pmx
+BEM Acoustics model to check on multi-zone implementation in pyBEM solver
+Simultaneous interior / exterior analysis
+Added spheres of mics to check on exterior power calcs
+Remeshed with all BEM TRIAs
+------------------------------------------------------
+
+    =====================
+    *** MODEL SUMMARY ***
+    =====================
+    INPUT FILE:   "03_tri_chamfer_int_ext_boxes.inp"
+    MODEL NAME:   "03_tri_chamfer_int_ext_boxes"
+
+    [ MESH | SETS | SURFACES ]
+      NODES:       4163   = BEM: 213    + MICS: 3950   
+      ELEMENTS:    4436   = BEM: 414    + MICS: 4022   
+      NSETS  ( 12 ):   'inlet', 'mics_sph_z3_200mm', 'mics_sph_z3_150mm', 'mics_sph_z3_100mm'
+        'mics_sph_z3_90mm', 'mics_sph_z3_80mm', 'mics_sph_z3_70mm'
+        'mics_sph_z3_60mm', 'Tie-1_Master', 'Tie-1_Slave', 'Tie-2_Master'
+        'Tie-2_Slave'
+      ELSETS ( 18 ):   'Z_1_els', 'Z_2_els', 'Z_3_els', 'mics_1_els', 'mics_2_els', 'mics_3_els'
+        'inlet_S2', 'mics_sph_z3_200mm_S2', 'mics_sph_z3_150mm_S2'
+        'mics_sph_z3_100mm_S2', 'mics_sph_z3_90mm_S2', 'mics_sph_z3_80mm_S2'
+        'mics_sph_z3_70mm_S2', 'mics_sph_z3_60mm_S2', 'Tie-1_Master_S2'
+        'Tie-1_Slave_S2', 'Tie-2_Master_S2', 'Tie-2_Slave_S1'
+      SURFACES ( 12 ):
+        * 'inlet': elset = 'inlet_S2'
+        * 'mics_sph_z3_200mm': elset = 'mics_sph_z3_200mm_S2'
+        * 'mics_sph_z3_150mm': elset = 'mics_sph_z3_150mm_S2'
+        * 'mics_sph_z3_100mm': elset = 'mics_sph_z3_100mm_S2'
+        * 'mics_sph_z3_90mm': elset = 'mics_sph_z3_90mm_S2'
+        * 'mics_sph_z3_80mm': elset = 'mics_sph_z3_80mm_S2'
+        * 'mics_sph_z3_70mm': elset = 'mics_sph_z3_70mm_S2'
+        * 'mics_sph_z3_60mm': elset = 'mics_sph_z3_60mm_S2'
+        * 'Tie-1_Master': elset = 'Tie-1_Master_S2'
+        * 'Tie-1_Slave': elset = 'Tie-1_Slave_S2'
+        * 'Tie-2_Master': elset = 'Tie-2_Master_S2'
+        * 'Tie-2_Slave': elset = 'Tie-2_Slave_S1'
+
+    [ BCs | TIED PAIRS | AMPLITUDES ]
+      BCs ( 1 ):
+        * Type: VELO  | Set: 'inlet' | Value: (5e-05+0j)
+
+      TIED PAIRS ( 2 ):
+        * [Tie-1] Master: 'Tie-1_Master' <---> Slave: 'Tie-1_Slave' (Tol: 1.0)
+        * [Tie-2] Master: 'Tie-2_Master' <---> Slave: 'Tie-2_Slave' (Tol: 1.0)
+
+      AMPLITUDES ( 0 ):  None
+
+    [ MATERIALS | ZONES ]
+      MATERIALS ( 3 ):
+        * 'Air-1': rho = 1.210e-12, c = 343053.86
+        * 'Air-2': rho = 1.210e-12, c = 343053.86
+        * 'Air-3': rho = 1.210e-12, c = 343053.86
+
+      BEM ZONES ( 3 ):
+        * Zone 'Air-1': elsets = ['Z_1_els', 'mics_1_els']
+        * Zone 'Air-2': elsets = ['Z_2_els', 'mics_2_els']
+        * Zone 'Air-3': elsets = ['Z_3_els', 'mics_3_els']
+
+    [ ANALYSIS ]
+      FREQUENCIES: 49 steps [20.0 Hz --> 500.0 Hz]
+      DAMPING:     Damping Ratio (DR) = 0.0
+                   Solver uses Damping Ratio (DR)
+                   In structures is Loss Factor (LF) = DR * 2
+                   Abaqus uses Volumetric Drag (gamma) = 2 * DR * rho * omega (Freq curve)
+
+
+    ==============================
+    *** INPUT MESH DIAGNOSTICS ***
+    ==============================
+    Found a total of ( 3 ) Acoustic ZONES as follows:
+    
+--> ZONE: [ 'Air-1' ]
+    BEM Surface Area:              ( 15000 L^2 )
+    CoG of BEM zone:               [ -25.00, 25.00, -25.00 ] L
+    Max Element Aspect Ratio:      ( 1.67 )
+    Element Edge Size (approx):    ( 25.38 L )
+    Element CoG Distance (approx): ( 10.36 L )
+    Suggested Max Freq:            ( 3310.5 Hz )
+    Closed (+) Volume detected:    ( 125000 L^3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> ZONE: [ 'Air-2' ]
+    BEM Surface Area:              ( 15000 L^2 )
+    CoG of BEM zone:               [ 25.00, 25.00, -25.00 ] L
+    Max Element Aspect Ratio:      ( 1.67 )
+    Element Edge Size (approx):    ( 25.38 L )
+    Element CoG Distance (approx): ( 10.36 L )
+    Suggested Max Freq:            ( 3310.5 Hz )
+    Closed (+) Volume detected:    ( 125000 L^3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> ZONE: [ 'Air-3' ]
+    BEM Surface Area:              ( 16133 L^2 )
+    CoG of BEM zone:               [ 35.00, 25.00, -25.00 ] L
+    Max Element Aspect Ratio:      ( 3.00 )
+    Element Edge Size (approx):    ( 24.96 L )
+    Element CoG Distance (approx): ( 8.37 L )
+    Suggested Max Freq:            ( 4098.9 Hz )
+    Closed (-) Volume detected:    ( -139167 L^3 )
+    -> Normals point INWARDS ==> Assuming EXTERIOR Analysis
+
+--> BC-PROCESSING: BC resolution complete ==> ( 16 ) elements have active BCs.
+
+    ==========================
+    *** SURFACE TIED PAIRS ***
+    ==========================
+    Found a total of ( 2 ) TIED pair constraint(s).
+
+    [i] RECOMMENDATION: Equal or similar mesh sizing is recommended on TIED surfaces' mesh.
+        This helps for a stable area-weighted polygon clipping and mortar flux integration.
+        'pyBEM' automatically checks and if necessary, adjusts slave/master order during PRE.
+        This is indicated as '[ Auto-Swap ]').
+    [i] METRIC DEFINITION: 'h_avg' represents the average element characteristic size.
+
+    ----------------------------------------------------------------------
+    TIE INTERFACE: [ 'Tie-1' ]
+    ----------------------------------------------------------------------
+    Master Surface: 'Tie-1_Master' | ( 18 ) elements | h_avg = 18.627
+    Slave Surface:  'Tie-1_Slave' | ( 16 ) elements | h_avg = 19.917
+    Mapping Search Tolerance: ( 1.0 ) L
+    Area-Weighted Collocation Mapped Pairs: ( 47 ) element intersections
+
+    AREA CONSERVATION & OVERLAP ANALYSIS
+    ------------------------------------
+    Input Master Surface Area:         2500.00 L^2
+    Input Slave Surface Area:          2500.00 L^2
+    Intersected (Tied) Area:           2500.00 L^2 ( 100.00% ) tied
+    Uncoupled (Non-Tied) Area:            0.00 L^2 (   0.00% ) non-tied
+    Area Mapping Conservation Error:      0.00 L^2 (   0.00% ) flux leakage
+
+    MORTAR INTERFACE WEIGHTS
+    ------------------------
+    [ SLAVE -> MASTER (Area Fractions) ]
+    Slave EID  | Master EIDs & Weights                       | Total Sum
+    ----------------------------------------------------------------------
+    9          | M4415:0.532, M4426:0.320, M4427:0.148       | 1.000
+    10         | M4416:0.639, M4427:0.361                    | 1.000
+    11         | M4417:1.000                                 | 1.000
+    12         | M4421:1.000                                 | 1.000
+    13         | M4422:0.670, M4432:0.330                    | 1.000
+    14         | M4422:0.108, M4424:0.675, M4430:0.034, M4431:0.123, M4432:0.060 | 1.000
+    15         | M4418:1.000                                 | 1.000
+    16         | M4420:0.785, M4425:0.194, M4428:0.021       | 1.000
+    17         | M4420:0.051, M4428:0.028, M4429:0.045, M4430:0.297, M4431:0.578 | 1.000
+    18         | M4425:0.858, M4428:0.142                    | 1.000
+    19         | M4419:0.536, M4428:0.464                    | 1.000
+    20         | M4423:0.678, M4432:0.322                    | 1.000
+    21         | M4415:0.532, M4426:0.443, M4427:0.025       | 1.000
+    22         | M4419:0.237, M4426:0.281, M4427:0.126, M4428:0.255, M4429:0.100 | 1.000
+    23         | M4416:0.319, M4423:0.205, M4427:0.254, M4429:0.044, M4430:0.069, M4432:0.109 | 1.000
+    24         | M4427:0.117, M4428:0.025, M4429:0.606, M4430:0.252 | 1.000
+
+    [ MASTER -> SLAVE (Flux Distribution) ]
+    Master EID | Slave EIDs & Weights                        | Total Sum
+    ----------------------------------------------------------------------
+    4415       | S9:0.440, S21:0.560                         | 1.000
+    4416       | S10:0.544, S23:0.456                        | 1.000
+    4417       | S11:1.000                                   | 1.000
+    4418       | S15:1.000                                   | 1.000
+    4419       | S19:0.685, S22:0.315                        | 1.000
+    4420       | S16:0.921, S17:0.079                        | 1.000
+    4421       | S12:1.000                                   | 1.000
+    4422       | S13:0.797, S14:0.203                        | 1.000
+    4423       | S20:0.772, S23:0.228                        | 1.000
+    4424       | S14:1.000                                   | 1.000
+    4425       | S16:0.178, S18:0.822                        | 1.000
+    4426       | S9:0.255, S21:0.449, S22:0.295              | 1.000
+    4427       | S9:0.116, S10:0.283, S21:0.025, S22:0.131, S23:0.334, S24:0.111 | 1.000
+    4428       | S16:0.023, S17:0.041, S18:0.165, S19:0.475, S22:0.271, S24:0.024 | 1.000
+    4429       | S17:0.080, S22:0.129, S23:0.073, S24:0.718  | 1.000
+    4430       | S14:0.062, S17:0.526, S23:0.113, S24:0.299  | 1.000
+    4431       | S14:0.179, S17:0.821                        | 1.000
+    4432       | S13:0.316, S14:0.090, S20:0.447, S23:0.147  | 1.000
+
+    ----------------------------------------------------------------------
+    TIE INTERFACE: [ 'Tie-2' ]
+    ----------------------------------------------------------------------
+    [ Auto-Swap ] Master/Slave roles inverted: Slave designated as coarser mesh surface (higher h_avg).
+    Master Surface: 'Tie-2_Slave' | ( 24 ) elements | h_avg = 16.245
+    Slave Surface:  'Tie-2_Master' | ( 18 ) elements | h_avg = 18.627
+    Mapping Search Tolerance: ( 1.0 ) L
+    Area-Weighted Collocation Mapped Pairs: ( 61 ) element intersections
+
+    AREA CONSERVATION & OVERLAP ANALYSIS
+    ------------------------------------
+    Input Master Surface Area:         2500.00 L^2
+    Input Slave Surface Area:          2500.00 L^2
+    Intersected (Tied) Area:           2500.00 L^2 ( 100.00% ) tied
+    Uncoupled (Non-Tied) Area:            0.00 L^2 (   0.00% ) non-tied
+    Area Mapping Conservation Error:      0.00 L^2 (   0.00% ) flux leakage
+
+    MORTAR INTERFACE WEIGHTS
+    ------------------------
+    [ SLAVE -> MASTER (Area Fractions) ]
+    Slave EID  | Master EIDs & Weights                       | Total Sum
+    ----------------------------------------------------------------------
+    43         | M4279:0.940, M4280:0.060                    | 1.000
+    44         | M4287:0.029, M4288:0.855, M4292:0.105, M4302:0.011 | 1.000
+    45         | M4284:0.951, M4287:0.049                    | 1.000
+    46         | M4277:0.498, M4290:0.502                    | 1.000
+    47         | M4278:1.000                                 | 1.000
+    48         | M4283:0.578, M4293:0.231, M4295:0.053, M4298:0.138 | 1.000
+    49         | M4282:0.486, M4289:0.514                    | 1.000
+    50         | M4285:0.728, M4294:0.249, M4300:0.023       | 1.000
+    51         | M4287:0.798, M4296:0.188, M4299:0.014       | 1.000
+    52         | M4282:0.221, M4289:0.225, M4294:0.332, M4295:0.089, M4297:0.020, M4300:0.113 | 1.000
+    53         | M4277:0.233, M4290:0.221, M4291:0.117, M4293:0.242, M4298:0.143, M4301:0.044 | 1.000
+    54         | M4278:0.029, M4280:0.971                    | 1.000
+    55         | M4292:0.910, M4302:0.090                    | 1.000
+    56         | M4278:0.014, M4291:0.609, M4298:0.020, M4301:0.358 | 1.000
+    57         | M4298:0.022, M4301:0.329, M4302:0.649       | 1.000
+    58         | M4297:0.065, M4298:0.104, M4299:0.441, M4300:0.258, M4301:0.033, M4302:0.100 | 1.000
+    59         | M4295:0.327, M4297:0.429, M4298:0.094, M4300:0.150 | 1.000
+    60         | M4285:0.112, M4294:0.012, M4296:0.552, M4299:0.249, M4300:0.075 | 1.000
+
+    [ MASTER -> SLAVE (Flux Distribution) ]
+    Master EID | Slave EIDs & Weights                        | Total Sum
+    ----------------------------------------------------------------------
+    4277       | S46:0.632, S53:0.368                        | 1.000
+    4278       | S47:0.948, S54:0.035, S56:0.017             | 1.000
+    4279       | S43:1.000                                   | 1.000
+    4280       | S43:0.057, S54:0.943                        | 1.000
+    4282       | S49:0.680, S52:0.320                        | 1.000
+    4283       | S48:1.000                                   | 1.000
+    4284       | S45:1.000                                   | 1.000
+    4285       | S50:0.839, S60:0.161                        | 1.000
+    4287       | S44:0.026, S45:0.046, S51:0.929             | 1.000
+    4288       | S44:1.000                                   | 1.000
+    4289       | S49:0.688, S52:0.312                        | 1.000
+    4290       | S46:0.646, S53:0.354                        | 1.000
+    4291       | S53:0.189, S56:0.811                        | 1.000
+    4292       | S44:0.096, S55:0.904                        | 1.000
+    4293       | S48:0.425, S53:0.575                        | 1.000
+    4294       | S50:0.364, S52:0.614, S60:0.021             | 1.000
+    4295       | S48:0.104, S52:0.190, S59:0.706             | 1.000
+    4296       | S51:0.292, S60:0.708                        | 1.000
+    4297       | S48:0.012, S52:0.039, S58:0.103, S59:0.846  | 1.000
+    4298       | S48:0.248, S53:0.333, S56:0.038, S57:0.034, S58:0.164, S59:0.184 | 1.000
+    4299       | S51:0.027, S58:0.577, S60:0.395             | 1.000
+    4300       | S50:0.032, S52:0.198, S58:0.370, S59:0.269, S60:0.131 | 1.000
+    4301       | S53:0.076, S56:0.504, S57:0.382, S58:0.038  | 1.000
+    4302       | S44:0.015, S55:0.128, S57:0.742, S58:0.115  | 1.000
+    ======================================================================
+
+======================================================================
+*** ACOUSTICS multi-zone job started   |  Wed Oct 14 17:30:23 2026 ***
+======================================================================
+--> SOLVING ( 49 ) Frequencies [20.0Hz --> 500.0Hz | delta_Hz = 10.00] Steady State Direct <--
+
+ Number of CPUs found on this machine: ( 6 ) | Number of threads: ( 12 )
+ MAX number of CPUs assigned to Numba parallel loops in PRE is: ( 6 )
+ Available RAM found at job start:     ( 44.75 GB )
+ Global Multi-Zone Matrix Structure:   ( 1068 x 1068 ) DOF
+
+ [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
+     Hold tight, it gets faster, see table with times per Freq in '03_tri_chamfer_int_ext_boxes.log'.
+
+ --> ZONES matrix sizing:
+     Zone 'Air-1       ': Matrix Index Range [    0 -> 99   ] ( 100 ) elements
+     Zone 'Air-2       ': Matrix Index Range [  100 -> 199  ] ( 100 ) elements
+     Zone 'Air-3       ': Matrix Index Range [  200 -> 413  ] ( 214 ) elements
+
+ --> PRE Assembly calculations started:
+     Pre - BEM Geometric Static Kernels for Zone: [ Air-1 ]
+     Pre - MICS data and arrays for Zone:         [ Air-1 ]
+     Pre - BEM Geometric Static Kernels for Zone: [ Air-2 ]
+     Pre - MICS data and arrays for Zone:         [ Air-2 ]
+     Pre - BEM Geometric Static Kernels for Zone: [ Air-3 ]
+     Pre - MICS data and arrays for Zone:         [ Air-3 ]
+
+ [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( 1.43s )
+     BEM: ( 0.395s ) | MICS: ( 1.032s ) | RAM ( 0.208 GB )
+     
+ Heuristic estimates for Frequency Sweep based on RAM available ( 44.75 GB ):
+ Estimated (+)RAM per Freq: ( 0.61 GB ) | Parallel Frequency Workers: ( 1 )
+ [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( 6 )
+     Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
+     which already does parallel solving. MAX CPUs for Numpy is set to ( 6 )
+
+ [i] Promoting heavy arrays to Shared Memory ...
+
+==================================================================================================
+ Freq (Hz) | Assembly | Solve All:   BEM    +   Mics   |  RAM (MB)  | Results file       | Status
+==================================================================================================
+ 20.0   Hz |  0.290 s |   0.042s :  0.011   +  0.031   |   211.5    | In Memory          |   OK  
+ 30.0   Hz |  0.009 s |   0.024s :  0.010   +  0.014   |   214.2    | In Memory          |   OK  
+ 40.0   Hz |  0.012 s |   0.027s :  0.013   +  0.014   |   215.1    | In Memory          |   OK  
+ 50.0   Hz |  0.012 s |   0.025s :  0.010   +  0.015   |   215.6    | In Memory          |   OK  
+ 60.0   Hz |  0.012 s |   0.032s :  0.014   +  0.018   |   216.2    | In Memory          |   OK  
+ 70.0   Hz |  0.009 s |   0.024s :  0.009   +  0.015   |   216.2    | In Memory          |   OK  
+ 80.0   Hz |  0.011 s |   0.020s :  0.010   +  0.010   |   216.1    | In Memory          |   OK  
+ 90.0   Hz |  0.011 s |   0.027s :  0.010   +  0.017   |   216.1    | In Memory          |   OK  
+ 100.0  Hz |  0.010 s |   0.021s :  0.010   +  0.011   |   216.8    | In Memory          |   OK  
+ 110.0  Hz |  0.011 s |   0.027s :  0.009   +  0.018   |   216.0    | In Memory          |   OK  
+ 120.0  Hz |  0.010 s |   0.020s :  0.010   +  0.010   |   217.3    | In Memory          |   OK  
+ 130.0  Hz |  0.009 s |   0.025s :  0.010   +  0.016   |   217.5    | In Memory          |   OK  
+ 140.0  Hz |  0.009 s |   0.026s :  0.012   +  0.014   |   217.8    | In Memory          |   OK  
+ 150.0  Hz |  0.012 s |   0.031s :  0.016   +  0.015   |   218.0    | In Memory          |   OK  
+ 160.0  Hz |  0.013 s |   0.033s :  0.015   +  0.018   |   218.2    | In Memory          |   OK  
+ 170.0  Hz |  0.013 s |   0.031s :  0.013   +  0.018   |   218.4    | In Memory          |   OK  
+ 180.0  Hz |  0.009 s |   0.027s :  0.010   +  0.017   |   218.6    | In Memory          |   OK  
+ 190.0  Hz |  0.011 s |   0.029s :  0.011   +  0.018   |   218.8    | In Memory          |   OK  
+ 200.0  Hz |  0.013 s |   0.029s :  0.012   +  0.018   |   218.9    | In Memory          |   OK  
+ 210.0  Hz |  0.010 s |   0.026s :  0.010   +  0.015   |   219.2    | In Memory          |   OK  
+ 220.0  Hz |  0.009 s |   0.027s :  0.009   +  0.018   |   219.2    | In Memory          |   OK  
+ 230.0  Hz |  0.011 s |   0.025s :  0.013   +  0.012   |   219.2    | In Memory          |   OK  
+ 240.0  Hz |  0.012 s |   0.029s :  0.014   +  0.015   |   219.4    | In Memory          |   OK  
+ 250.0  Hz |  0.009 s |   0.031s :  0.011   +  0.020   |   219.4    | In Memory          |   OK  
+ 260.0  Hz |  0.009 s |   0.026s :  0.010   +  0.016   |   219.5    | In Memory          |   OK  
+ 270.0  Hz |  0.009 s |   0.030s :  0.010   +  0.020   |   219.5    | In Memory          |   OK  
+ 280.0  Hz |  0.012 s |   0.032s :  0.014   +  0.018   |   219.5    | In Memory          |   OK  
+ 290.0  Hz |  0.011 s |   0.029s :  0.010   +  0.018   |   219.5    | In Memory          |   OK  
+ 300.0  Hz |  0.012 s |   0.026s :  0.015   +  0.011   |   219.5    | In Memory          |   OK  
+ 310.0  Hz |  0.009 s |   0.026s :  0.011   +  0.015   |   219.5    | In Memory          |   OK  
+ 320.0  Hz |  0.009 s |   0.026s :  0.010   +  0.016   |   219.5    | In Memory          |   OK  
+ 330.0  Hz |  0.011 s |   0.027s :  0.010   +  0.018   |   219.5    | In Memory          |   OK  
+ 340.0  Hz |  0.011 s |   0.022s :  0.011   +  0.011   |   219.6    | In Memory          |   OK  
+ 350.0  Hz |  0.009 s |   0.027s :  0.010   +  0.018   |   219.6    | In Memory          |   OK  
+ 360.0  Hz |  0.012 s |   0.034s :  0.015   +  0.019   |   219.6    | In Memory          |   OK  
+ 370.0  Hz |  0.010 s |   0.028s :  0.009   +  0.019   |   219.6    | In Memory          |   OK  
+ 380.0  Hz |  0.009 s |   0.022s :  0.010   +  0.012   |   219.6    | In Memory          |   OK  
+ 390.0  Hz |  0.010 s |   0.021s :  0.009   +  0.012   |   219.6    | In Memory          |   OK  
+ 400.0  Hz |  0.012 s |   0.025s :  0.009   +  0.016   |   219.6    | In Memory          |   OK  
+ 410.0  Hz |  0.010 s |   0.029s :  0.009   +  0.020   |   219.6    | In Memory          |   OK  
+ 420.0  Hz |  0.010 s |   0.025s :  0.009   +  0.017   |   219.7    | In Memory          |   OK  
+ 430.0  Hz |  0.009 s |   0.029s :  0.009   +  0.020   |   219.7    | In Memory          |   OK  
+ 440.0  Hz |  0.010 s |   0.028s :  0.009   +  0.020   |   219.7    | In Memory          |   OK  
+ 450.0  Hz |  0.009 s |   0.027s :  0.010   +  0.018   |   219.7    | In Memory          |   OK  
+ 460.0  Hz |  0.010 s |   0.027s :  0.010   +  0.018   |   219.7    | In Memory          |   OK  
+ 470.0  Hz |  0.011 s |   0.026s :  0.010   +  0.016   |   219.7    | In Memory          |   OK  
+ 480.0  Hz |  0.009 s |   0.029s :  0.012   +  0.017   |   219.7    | In Memory          |   OK  
+ 490.0  Hz |  0.012 s |   0.028s :  0.011   +  0.017   |   219.7    | In Memory          |   OK  
+ 500.0  Hz |  0.011 s |   0.025s :  0.013   +  0.011   |   219.7    | In Memory          |   OK  
+==================================================================================================
+
+--> Writing 49 binary frequency steps
+    Export Complete. PV results file written to: ( '03_tri_chamfer_int_ext_boxes_Results.pvd' )
+
+--> Calculating Sound POWERS:
+    SWL(dB), RMS Pressure, SPL(dB) and Mean Velocity on all Input & Tied surfaces:
+    A = Input or TIED Area | TSW = Total Sound Power sum from all frequencies
+
+     'inlet' | A = 2500 L^2 | TSW_real = 1.216e-12 | TSW_imag = -1.868e-11 | TSW_mag = 1.872e-11
+     'mics_sph_z3_200mm' | A = 501603 L^2 | TSW_real = 4.101e-13 | TSW_imag = 3.226e-13 | TSW_mag = 5.299e-13
+     'mics_sph_z3_150mm' | A = 281738 L^2 | TSW_real = 4.101e-13 | TSW_imag = 4.354e-13 | TSW_mag = 6.073e-13
+     'mics_sph_z3_100mm' | A = 124650 L^2 | TSW_real = 4.088e-13 | TSW_imag = 6.762e-13 | TSW_mag = 7.991e-13
+     'mics_sph_z3_90mm' | A = 100764 L^2 | TSW_real = 4.08e-13 | TSW_imag = 7.628e-13 | TSW_mag = 8.736e-13
+     'mics_sph_z3_80mm' | A = 79443 L^2 | TSW_real = 4.069e-13 | TSW_imag = 8.77e-13 | TSW_mag = 9.748e-13
+     'mics_sph_z3_70mm' | A = 60559.7 L^2 | TSW_real = 4.047e-13 | TSW_imag = 1.034e-12 | TSW_mag = 1.118e-12
+     'mics_sph_z3_60mm' | A = 44217.8 L^2 | TSW_real = 3.995e-13 | TSW_imag = 1.283e-12 | TSW_mag = 1.35e-12
+     'Tie-1_Master' | A = 2500 L^2 | TSW_real = 1.091e-12 | TSW_imag = 7.208e-12 | TSW_mag = 7.292e-12
+     'Tie-1_Slave' | A = 2500 L^2 | TSW_real = 1.09e-12 | TSW_imag = -7.206e-12 | TSW_mag = 7.29e-12
+     'Tie-2_Master' | A = 2500 L^2 | TSW_real = 3.365e-12 | TSW_imag = 9.599e-12 | TSW_mag = 1.018e-11
+     'Tie-2_Slave' | A = 2500 L^2 | TSW_real = 3.283e-12 | TSW_imag = -9.469e-12 | TSW_mag = 1.003e-11
+
+     Freq / Power results written to: ( '03_tri_chamfer_int_ext_boxes_power.csv' )
+     Freq / Power graphs plotted to: ( '03_tri_chamfer_int_ext_boxes_power.png' )
+
+--> COMPLETED all Multi-Zone Frequency Steps + POST power sums <--
+    Function 'averaged_at_nodes' took: ( 0.20s )
+    Export Write and VTU Processing:   ( 5.20s )
+
+[i] Shared Memory released.
+
+    ==========================
+    *** SIMULATION SUMMARY ***
+    ==========================
+    Simulation Finished at: Wed Oct 14 17:30:35 2026
+    Total Elapsed Time:     11.77 seconds ( 0.20 minutes )
+    Total Frequencies:      49
+    Avg Time per Freq:      0.240 seconds/Freq: 
+                            Assy ( 0.024s ) + BEM ( 0.011s ) + Mics ( 0.037s ) + Export ( 0.110s )
+
+    Check '03_tri_chamfer_int_ext_boxes.log' for more details.
+    Open  '03_tri_chamfer_int_ext_boxes_Results.pvd' in ParaView.
+==================================================================================================
+
