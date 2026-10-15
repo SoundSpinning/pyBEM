@@ -13,7 +13,7 @@ Welcome to the `how-to_examples` directory for **pyBEM (V0.5.2-alpha)**. This gu
     - [2.4 Amplitude Curves, Step Definition \& Damping](#24-amplitude-curves-step-definition--damping)
     - [2.5 Acoustic Boundary Conditions \& Export](#25-acoustic-boundary-conditions--export)
   - [3. EXAMPLES](#3-examples)
-    - [3.1 `1m_pipe`: Straight 1m Pipe Analysis Suite](#31-1m_pipe-straight-1m-pipe-analysis-suite)
+    - [3.1 `1m_pipe`: Straight 1m Pipe (Interior) Analysis Suite](#31-1m_pipe-straight-1m-pipe-interior-analysis-suite)
       - [3.1.1 CASE 1: PRES @ INLET \& Rigid OUTLET](#311-case-1-pres--inlet--rigid-outlet)
       - [3.1.2 CASE 2: PRES @ INLET \& PRES @ OUTLET](#312-case-2-pres--inlet--pres--outlet)
       - [3.1.3 CASE 3: PRES @ INLET \& IMPE ($Z = \\rho c$) @ OUTLET](#313-case-3-pres--inlet--impe-z--rho-c--outlet)
@@ -24,9 +24,11 @@ Welcome to the `how-to_examples` directory for **pyBEM (V0.5.2-alpha)**. This gu
       - [3.1.8 `1m_pipe`: Preliminary Conclusions](#318-1m_pipe-preliminary-conclusions)
     - [3.2 `int_ext_boxes`: Simultaneous Interior \& Exterior Acoustic Analysis](#32-int_ext_boxes-simultaneous-interior--exterior-acoustic-analysis)
       - [3.2.1 Outlet Flange with Sharp (90deg) Corners](#321-outlet-flange-with-sharp-90deg-corners)
-      - [3.2.2 Chamfered Outlet with Smoother Corners](#322-chamfered-outlet-with-smoother-corners)
+      - [3.2.2 Chamfered Outlet (Smoother Corners)](#322-chamfered-outlet-smoother-corners)
       - [3.2.3 All TRIAs, Chamfered Outlet](#323-all-trias-chamfered-outlet)
+      - [3.2.4 `int_ext_boxes`: Preliminary Conclusions](#324-int_ext_boxes-preliminary-conclusions)
 
+---
 ---
 
 > [Back to MAIN page](../README.md)
@@ -38,16 +40,16 @@ Welcome to the `how-to_examples` directory for **pyBEM (V0.5.2-alpha)**. This gu
 To ensure mathematical formulation and convergence during the BEM assembly and solving stages, all input BEM meshes must strictly comply with the following architectural rules:
 
 1. **Watertight Domains:** Every BEM acoustic zone must be a completely closed, watertight surface (shell) mesh. MICS meshes do not need to comply with this rule, but be at least half the BEM element size away from the boundary.
-2. **Normal Orientation (CRITICAL):** All BEM element normals **MUST point AWAY from the acoustic domain** (pointing outward for interior acoustic domains or inwards for exterior ones).
+2. **Normal Orientation (CRITICAL):** All BEM element normals **MUST point AWAY from the acoustic domain** (pointing outwards for interior acoustic domains or inwards for exterior ones).
 3. **Unique Entity IDs:** Node and element IDs exported from PrePoMax must be unique. Sequential gaps ("jumps") in ID numbers are fully supported for both BEM & MICS meshes, this happens when re-meshing a part.
 4. **Zone Declaration via Materials:** Acoustic zones are declared by assigning a matching **Material Name** to BEM elements and (optional) MICS elements for a given zone.
-5. **Element Types:** Supported shell elements from `PrePoMax` include 3-node linear triangles (`S3`& `M3D3` for mics) and 4-node linear quadrilaterals (`S4` & `M3D4` for mics).
+5. **Element Types:** Supported shell elements from `PrePoMax` include 3-node linear triangles [`S3` (BEM) & `M3D3` (MICS)] and 4-node linear quadrilaterals [`S4` (BEM) & `M3D4` (MICS)].
 
 ---
 
 ## 2. PrePoMax Workflow & `*.inp` Export
 
-`PrePoMax` is used as the primary pre-processor for mesh generation, surface grouping, boundary condition assignments and analysis setup. Because PrePoMax is designed primarily for structural FEA, a few custom keywords (commands) for acoustics are injected via the PrePoMax **Keywords Editor**.
+`PrePoMax` is used as the primary pre-processor for mesh generation, surface grouping, boundary condition assignments and analysis setup. Because PrePoMax is designed primarily for structural FEA, some custom keywords (commands) for acoustics are injected via the PrePoMax **Keywords Editor**.
 
 ### 2.1 Mesh Generation & Normal Verification
 
@@ -78,7 +80,7 @@ To ensure mathematical formulation and convergence during the BEM assembly and s
 3. Use PrePoMax visual tools to **verify** that all shell **surface normals point AWAY** from the acoustic fluid domain. Flipping normals can be done in the 'Geometry' module: select a part -> `Geometry (menu) -> CAD Part -> Flip Face Normal`. This tool will also show colour coded the normals orientation. The latter can also be displayed via `View -> Color Annotations -> Face Orientations`; both in the 'Geometry' & 'FE Model' tabs.
 \
 \
-pyBEM will automatically identify 'normals' consistency per zone at pre-processing, and assign either an **interior or exterior** zone analysis depending on the direction of the normals. It will also trigger an error and stop a job if cracks, holes, T-junctions and zero volume are detected in the input mesh on each BEM zone.
+pyBEM will automatically identify 'normals' consistency per zone at pre-processing, and assign either an **interior or exterior** zone analysis depending on the direction of the normals. It will also trigger an error and stop a job if cracks, holes, T-junctions and zero domain volume are detected in the input mesh on each BEM zone.
 \
 \
 Below is shown a typical `.log` file entry from pyBEM on acoustic zones:
@@ -170,8 +172,8 @@ The `Position tolerance` value (length units) is used to find what element pairs
     **
     ```
 
-    > [!NOTE]
-    > By default, `pyBEM` will calculate all acoustic powers (mag or "Apparent", real or "Active", imag or "Reactive") and additional surface metrics going through each of the surfaces defined in the input file. It also generates a figure with plots for SWL - dB (Sound Power Level). look out for the `CSV` & `PNG` files at the end of a job.
+  > [!NOTE]
+  > By default, `pyBEM` will calculate all acoustic powers (mag or "Apparent", real or "Active", imag or "Reactive") and additional surface metrics going through each of the surfaces defined in the input file. It also generates a figure with plots for SWL - dB (Sound Power Level). look out for the `CSV` & `PNG` files at the end of a job.
 
 ### 2.4 Amplitude Curves, Step Definition & Damping
 
@@ -183,10 +185,10 @@ The `Position tolerance` value (length units) is used to find what element pairs
 
 1. Open the PrePoMax **Keywords Editor** prior to export to insert commands in order to apply acoustic boundary conditions (BC) on **surface names** within the STEP definition:
 
-   - **PRES:** Pressure boundary condition ($P = \bar{p}$).
-   - **VELO:** Element normal velocity ($v_n = \bar{v}$).
-   - **IMPE:** Acoustic surface impedance; e.g. ($Z = \rho c$).
-   - **VELO + IMPE:** Combined normal velocity with surface impedance.
+    - **PRES:** Pressure boundary condition ($P = \bar{p}$).
+    - **VELO:** Element normal velocity ($v_n = \bar{v}$).
+    - **IMPE:** Acoustic surface impedance; e.g. ($Z = \rho c$).
+    - **VELO + IMPE:** Combined normal velocity with surface impedance.
 
     > Example STEP definition showing the format for damping and BCs:
 
@@ -245,9 +247,16 @@ The `Position tolerance` value (length units) is used to find what element pairs
 
 ---
 
+> [!TIP]
+> The fastest way to get started with a **`PrePoMax` template for `pyBEM`** is to copy one of the small `*.pmx` files provided in the examples sub-folders. These already contain the **hand edits** in the keywords editor for materials and BCs.
+> \
+> In PrePoMax ('Geometry' tab), after importing new CAD parts, if you select an old 'part' and a new one in the tree, right-click and do 'Swap Part Geometries'. The template part names remain, but contain the new CAD. Then the complete meshing and setup should rebuild automatically for similar setups.
+
+---
+
 ## 3. EXAMPLES
 
-The sub-folders under `how-to_examples/` contain complete and ready to run input decks (`*.inp`), `*.log` files, and power plots for various acoustic setups, as solved in pyBEM. Furthermore, PrePoMax (`*.pmx`) and ParaView (PV) state (session) files (`*.pvsm`) are supplied when applicable. PV results are not included, but most models in each folder are fast to run via the batch script `run_suite.py`.
+The sub-folders under `how-to_examples/` contain complete and ready to run input decks (`*.inp`), `*.log` files, and power plots for various acoustic setups, as solved in pyBEM. Furthermore, PrePoMax (`*.pmx`, V2.6.0) and ParaView (`*.pvsm`, V5.13) state (session) files, are supplied when applicable. PV results are not included in the repo, but most models in each folder are fast to run via the batch script `run_suite.py`.
 
 ```text
 how-to_examples/
@@ -263,9 +272,12 @@ how-to_examples/
 ├── int_ext_boxes/
 ```
 
+> [!TIP]
+> You can use the script `run_suite.py` supplied in the `pyBEM_code` folder, to batch solve all *.inp files found in a given directory.
+
 ---
 
-### 3.1 `1m_pipe`: Straight 1m Pipe Analysis Suite
+### 3.1 `1m_pipe`: Straight 1m Pipe (Interior) Analysis Suite
 
 > [!NOTE]
 > $L = 1.0 \times 10^{3}\text{ mm}$ ; $c = 343 \times 10^{3}\text{ mm/s}$ ; $\rho = 1.21 \times 10^{-12}\text{ tonne/mm}^3$ ; Damping Factor = 1%
@@ -281,9 +293,6 @@ In acoustics a simple straight pipe with BC variants at the inlet & outlet surfa
 We can easily model half-wave pipes (open or closed both ends) and quarter-wave pipes (open one end, rigid the other end), and compare to simple hand calculations on resonant frequency peaks. Furthermore, it is a simple and fast model to test a new acoustics solver on some basic principals, and compare to other solvers.
 
 The `*.inp` input files supplied in this folder solve at every 10Hz for fast initial turnaround to start getting a grasp with pyBEM. Nevertheless, the result graphs shown for each case were generated at every 1Hz, to catch properly all frequency peaks with a small 1% of damping. Furthermore, this finer frequency stepping allows for fair comparisons to other codes, as a too coarse freq solve may miss peaks slightly differently. These pipe models comprise **2 interior zones & 1 TIED pair**; this is to show the multi-zone capability.
-
-> [!TIP]
-> You can use the script `run_suite.py` supplied in the `pyBEM_code` folder, to batch solve all *.inp files found in a given directory.
 
 #### 3.1.1 CASE 1: PRES @ INLET & Rigid OUTLET
 
@@ -493,9 +502,11 @@ Figure shows **pyBEM** SPL (dB) distribution for the 6 cases presented above.
 
 > [!NOTE]
 > Small Multi-zone test model with two interior zones and one exterior one ; Damping Factor = 0%.\
-> 7 spheres with MICS meshes capture the exterior radiation power for solver sanity checks (conservation of energy).
+> 7 spheres with MICS meshes capture the exterior radiation power for solver sanity checks (conservation of 'Active' energy).
 
 Setting up an interior / exterior BEM model is relatively easy if we follow the main rules listed in [Section 1](#1-bem-meshing--modelling-rules). The normals on the last exterior zone are flipped to point inwards, so that the acoustics is solved in the infinite exterior domain. A TIED pair is then defined between interior zone 2 and the exterior zone 3.
+\
+***NOTE** that since we are not interested in the scattering at the back of the exterior zone, we make it short, which is enough to get the power outputs, while keeping solve times / RAM small.*
 
 > **Interior & Exterior pyBEM Setup**: figure shows details of the meshes, ties and exterior MICS spheres as built in PrePoMax
 
@@ -507,7 +518,7 @@ Setting up an interior / exterior BEM model is relatively easy if we follow the 
 
 - **Boundary Conditions:**
   - **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$) | Rigid piston
-  - **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM calculates the outlet Impedance at each frequency
+  - **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM resolves the outlet Impedance at each frequency
 
 - **Objectives:** Velocity-driven system with outlet geometry featuring a flange with sharp corners. This case illustrates potential numerical singularities to look out for with BEM methods.
 
@@ -520,7 +531,7 @@ Setting up an interior / exterior BEM model is relatively easy if we follow the 
 We can observe two significant effects in power graphs:
 
 - All **Active** (real part) SWL(dB) curves for the 7 exterior MICS spheres with different radius, lay on top of each other. This is expected when dissipation is not present, and shows the power calculations are sensible.
-- The power curves for Tie-2 into the exterior blow up. This is due to potential numerical singularities at an outlet transition with a flange featuring sharp (90deg) corners near the outlet surface. The phase on the velocities near-field changes fast without a smoother transition on the outlet geometry.
+- The power curves for Tie-2 into the exterior blow up. This is due to potential numerical singularities at an outlet transition with a flange featuring sharp (90deg) corners near the outlet surface. The phase on the near-field velocities changes fast, without a smoother transition on the outlet geometry.
 
 ![pyBEM power plots](int_ext_boxes/01_sharp_int_ext_boxes_power.png)
 
@@ -534,11 +545,11 @@ Figure shows SPL distribution at 500Hz. The results look sensible in terms of tr
 > When modelling in BEM outlet geometries, comparative test work should be performed on each 3D geometry to assess potential numerical singularities in the near-field area.
 ---
 
-#### 3.2.2 Chamfered Outlet with Smoother Corners
+#### 3.2.2 Chamfered Outlet (Smoother Corners)
 
 - **Boundary Conditions:**
   - **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$) | Rigid piston
-  - **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM calculates the outlet Impedance at each frequency
+  - **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM resolves the outlet Impedance at each frequency
 
 - **Objectives:** Effects from outlet geometry changes, featuring a chamfered flange. This case illustrates how to get around potential numerical singularities illustrated in the previous case.
 
@@ -554,7 +565,7 @@ While the **Active** (real part) SWL(dB) curves for the 7 exterior MICS spheres 
 
 > **SPL (dB) Contours**: pyBEM Sound Pressure results in ParaView
 
-Figure shows SPL distribution at 500Hz. The results look sensible in terms of transitioning from interior zones (high) into the exterior MICS spheres showing sensible SPL values decreasing with distance from the outlet.
+Figure shows SPL distribution at 500Hz. The results look sensible in terms of transitioning from interior zones (high) into the exterior MICS spheres. Note how now we get a significantly smoother SPL distribution on the outlet tie-2 and flange vs the previous sharp corners model.
 
 ![pyBEM contour plots in PV](assets/02_chamfer_int_ext_boxes_SPL.png)
 
@@ -567,9 +578,9 @@ Figure shows SPL distribution at 500Hz. The results look sensible in terms of tr
 
 - **Boundary Conditions:**
   - **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$) | Rigid piston
-  - **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM calculates the outlet Impedance at each frequency
+  - **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM resolves the outlet Impedance at each frequency
 
-- **Objectives:** All BEM zones re-meshed with TRIA elements. This is to illustrate the effect when doubling the number of DoF (element centroids) in a model, which affects accuracy in an element based collocation BEM solver.
+- **Objectives:** All BEM zones re-meshed with TRIA elements. This is to illustrate the effect when doubling the number of DoF (element centroids) in a model, which affects accuracy in an element based collocation BEM solver. It also shows how the TIED constraint implementation handles many overlaps on pair surface mesh.
 
 > **PrePoMax mesh**: all TRIAs, chamfered outlet flange
 
@@ -587,6 +598,20 @@ Figure shows SPL distribution at 500Hz. The results show some smoother SPL distr
 
 ![pyBEM contour plots in PV](assets/03_tri_chamfer_int_ext_boxes_SPL.png)
 
+---
+
+#### 3.2.4 `int_ext_boxes`: Preliminary Conclusions
+
+- It is easy to model a **simultaneous interior / exterior** acoustics analysis in `pyBEM`, by simply adding an exterior zone with all BEM element normals pointing inwards, and a TIED pair with the last interior zone.
+- We should keep an eye on potential **numerical singularities** at outlets with sharp corners. It is **recommended to chamfer or bellmouth** the outlet geometry, in order to improve the accuracy of the outlet conditions.
+- Always first check the power plots on a new setup. **Conservation of energy** and input / output curves should make sense vs BCs and geometry analysed.
+
+---
+
+> [!TIP]
+> Following the methodologies and template setups of the previous two small projects presented in *Sections 3.1 & 3.2*, we should be able to carry those methods over to really complex acoustic assemblies.
+
+---
 ---
 
 > [Back to MAIN page](../README.md)

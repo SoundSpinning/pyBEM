@@ -6,7 +6,12 @@
 
 ---
 
-> [Click to read more: 'How-To & Examples'](how-to_examples/README.md)
+![pyBEM poster strip](how-to_examples/assets/strip_pyBEM_01.png)
+
+---
+---
+
+> [**read more:** 'How-To & Examples'](how-to_examples/README.md)
 
 ---
 
@@ -42,21 +47,23 @@ PrePoMax (*.inp) ──> pyBEM ──> ParaView / SWL (power) plots
 
 ## Input Deck & Mesh Rules
 
-`pyBEM` parses model definitions directly from **PrePoMax `*.inp**` input decks:
+`pyBEM` parses model definitions directly from **PrePoMax `*.inp`** input decks:
 
 * **Mesh Requirements:** Domain meshes must be watertight with element normals consistently pointing away from the acoustic domain.
 * **ID Handling:** Full support for non-sequential node and element IDs with ID sequence jumps.
-* **Zone Definition:** Multi-zone domains are declared natively in PrePoMax by assigning matching material names to BEM and microphone elements per zone.
-* **Optional Microphones:** Field-point microphone meshes (`MICS`) can be optionally defined per zone for off-mesh visualization.
+* **BEM Zone Definition:** Multi-zone domains are declared in PrePoMax by assigning matching material names to BEM and microphone elements per zone.
+* **Microphones (Optional):** Field-point microphone meshes (`MICS`) can be defined per zone for interior and exterior acoustics visualisation.
 
 ---
 
 ## Execution & CLI Arguments
 
-Execute `pyBEM` directly from the terminal by passing a PrePoMax `*.inp` input file to the main solver script; e.g. (assuming *pyBEM = python /full-path-to/main.py $1*):
+Execute `pyBEM` directly from the terminal by passing a PrePoMax `*.inp` input file to the main solver script.
+\
+Example (assuming *pyBEM = python "/full-path-to/main.py" $1*):
 
 ```bash
-pyBEM model.inp --cpus=1 --Pref=2e-11 --Wref=1e-9 --debug
+pyBEM model.inp --debug
 ```
 
 Type `pyBEM -h` for latest supported flags; e.g.:
@@ -140,8 +147,9 @@ pyBEM_code/
 ```
 
 ---
+---
 
-> [Click to read more: 'How-To & Examples'](how-to_examples/README.md)
+> [**read more:** 'How-To & Examples'](how-to_examples/README.md)
 
 ---
 
