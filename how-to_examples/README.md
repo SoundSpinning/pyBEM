@@ -172,8 +172,8 @@ The `Position tolerance` value (length units) is used to find what element pairs
     **
     ```
 
-  > [!NOTE]
-  > By default, `pyBEM` will calculate all acoustic powers (mag or "Apparent", real or "Active", imag or "Reactive") and additional surface metrics going through each of the surfaces defined in the input file. It also generates a figure with plots for SWL - dB (Sound Power Level). look out for the `CSV` & `PNG` files at the end of a job.
+> [!NOTE]
+> By default, `pyBEM` will calculate all acoustic powers (mag or "Apparent", real or "Active", imag or "Reactive") and additional surface metrics going through each of the surfaces defined in the input file. It also generates a figure with plots for SWL - dB (Sound Power Level). look out for the `CSV` & `PNG` files at the end of a job.
 
 ### 2.4 Amplitude Curves, Step Definition & Damping
 
