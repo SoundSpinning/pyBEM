@@ -669,7 +669,9 @@ Figure shows SPL distribution at the same frequency and contour scales across th
 > [!WARNING]
 > Although we are able to generate pretty graphs and contour plots, we shouldn't get over-confident with simulation results too quickly. The primary objective of any CAE work in-production is: **"to allow for fast & informed decision making"**. As such, we should ask ourselves many questions about our work, find the answers and keep clear evidence based material.
 >
-> Imagine that your work will be challenged by a chief engineer with decades of experience on the subject. Be prepared and always come clean if you spot any errors, and offer solutions going forward. In other words: *"we know nothing till we prove otherwise, with clear evidence"*.
+> Imagine that your work will be challenged by a chief engineer with decades of experience on the subject. Be prepared and always come clean if you spot any errors, and offer solutions going forward.
+> 
+> In other words: *"we know nothing till we prove otherwise, with clear evidence"*. **Engineering judgement** wins every time over cold numbers and plots.
 
 ---
 ---
