@@ -1,6 +1,6 @@
 # pyBEM: How-To Guide & Multi-Zone Examples
 
-Welcome to the `how-to_examples` directory for **pyBEM (V0.5.2-alpha)**. This guide details the workflow for creating, exporting, and verifying multi-zone Boundary Element Method (BEM) acoustic models using `PrePoMax` and `pyBEM`. Furthermore, results with ready to run models for several examples are explained and supplied.
+Welcome to the `how-to_examples` directory for **pyBEM (V0.5.3-alpha)**. This guide details the workflow for creating, exporting, and verifying multi-zone Boundary Element Method (BEM) acoustic models using `PrePoMax` and `pyBEM`. Furthermore, results with ready to run models for several examples are explained and supplied.
 
 ---
 
@@ -27,6 +27,8 @@ Welcome to the `how-to_examples` directory for **pyBEM (V0.5.2-alpha)**. This gu
       - [3.2.2 Chamfered Outlet (Smoother Corners)](#322-chamfered-outlet-smoother-corners)
       - [3.2.3 All TRIAs, Chamfered Outlet](#323-all-trias-chamfered-outlet)
       - [3.2.4 `int_ext_boxes`: Preliminary Conclusions](#324-int_ext_boxes-preliminary-conclusions)
+    - [3.3 `int_ext_pipe_1m`: Interior \& Exterior 1m Pipe Acoustics](#33-int_ext_pipe_1m-interior--exterior-1m-pipe-acoustics)
+      - [3.3.1 `int_ext_pipe_1m`: Preliminary Conclusions](#331-int_ext_pipe_1m-preliminary-conclusions)
 
 ---
 ---
@@ -610,6 +612,64 @@ Figure shows SPL distribution at 500Hz. The results show some smoother SPL distr
 
 > [!TIP]
 > Following the methodologies and template setups of the previous two small projects presented in *Sections 3.1 & 3.2*, we should be able to carry those methods over to really complex acoustic assemblies.
+
+---
+
+### 3.3 `int_ext_pipe_1m`: Interior & Exterior 1m Pipe Acoustics
+
+> [!NOTE]
+> 1m pipe (interior & exterior) with three design variants at the outlet ; Damping Factor = 1%.\
+> Capture the exterior radiation power for solver sanity checks (conservation of 'Active' energy) vs 3D geometry at the outlet.
+
+<!-- blank -->
+
+> **Interior & Exterior pyBEM Setup**: figure shows details of the meshes, ties and MICS as built in `PrePoMax`
+
+![multi-zone bem boxes](assets/int_ext_1m_pipes_setup.png)
+
+---
+
+**Boundary Conditions:**
+
+- **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$) | Rigid piston
+- **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM resolves the outlet Impedance at each frequency
+
+**Objectives:** Velocity-driven system with three outlet geometry variants: 'sharp', 'chamfer' & 'bellmouth'. This case illustrates potential numerical singularities to look out for with BEM methods in the near-field transition from an interior to an exterior zone.
+
+> **PrePoMax meshes**: 3 x outlet design variants: (1) 'sharp', (2) 'chamfer' & (3) 'bellmouth'
+
+Note the significantly different mesh densities at the `Tie-2` pair at the outlet. This should check against the resilience of the TIED pair constraint in pyBEM, with regards to how dissimilar interface meshes may be.
+
+![PrePoMax BEM model](assets/int_ext_1m_pipes_mesh.png)
+
+> **SWL (dB)**: automatic power outputs in pyBEM
+
+Plots below show a comparison of power curves across the three design variants. We can observe:
+
+- All **Active** (real part) SWL(dB) curves show values within a similar scale. **However**, note how the 'sharp' (1) design, seems to deviate (in active power) more than the other two designs, when comparing the outlet vs exterior MICS sphere results.
+- For this specific case, the 'chamfer' (2) design shows very close power levels between the outlet and the sphere of mics. The 'bellmouth' (3) design follows next in terms of sensible active powers. We'd discard the 'sharp' model, as it shows potential numerical singularities affecting the velocities by the outlet near-field.
+
+![pyBEM power plots](assets/int_ext_1m_pipes_powers.png)
+
+> **SPL (dB) Contours**: pyBEM Sound Pressure results in ParaView
+
+Figure shows SPL distribution at the same frequency and contour scales across the three designs. Both the contours and the SPL(dB) graphs at inlet & outlet nodes, show a remarkable similarity, which shows that acoustic pressures do not get affected so much by velocity numerical singularities at the outlet, as explained above.
+
+![pyBEM contour plots in PV](assets/int_ext_1m_pipes_SPL.png)
+
+---
+
+#### 3.3.1 `int_ext_pipe_1m`: Preliminary Conclusions
+
+- We've been able to pass the methods and learnings from the first two simple test models onto a more realistic case with the 1m pipe exterior acoustics, with sensible results so far.
+- It is emphasised the potential numerical singularities at outlets due to 3D geometries causing sadden flip of the velocity phase in the near-field.
+- Nevertheless, the implementation of the **TIED pair constraints in pyBEM** shows a resilient method, even for dissimilar meshes across the interface.
+- It is also emphasised that these issues are application dependant, and initial test work on each project should show a suitable modelling methodology for each case.
+
+> [!WARNING]
+> Although we are able to generate pretty graphs and contour plots, we shouldn't get over-confident with simulation results too quickly. The primary objective of any CAE work in-production is: **"to allow for fast & informed decision making"**. As such, we should ask ourselves many questions about our work, find the answers and keep clear evidence based material.
+>
+> Imagine that your work will be challenged by a chief engineer with decades of experience on the subject. Be prepared and always come clean if you spot any errors, and offer solutions going forward. In other words: *"we know nothing till we prove otherwise, with clear evidence"*.
 
 ---
 ---
