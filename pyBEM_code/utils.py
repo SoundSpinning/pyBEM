@@ -5,6 +5,7 @@ import csv
 import sys
 import argparse
 import constants
+import version
 import logging
 # KDTree is a spatial indexing data structure in SciPy 
 # that organizes points in a multi-dimensional space.
@@ -336,41 +337,53 @@ def get_zone_data(parser, sorted_nodes):
 
 def evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes):
     """
-    Evaluates characteristic edge lengths (h_bar) of both candidate surfaces.
-    Forces the side with larger h_bar (COARSER mesh) to be the SLAVE 
-    for point-collocation sound power conservation.
+    Evaluates characteristic edge lengths and centroid spacing (h_CoG_avg) 
+    of both candidate surfaces.
+    Forces the side with larger characteristic length (COARSER mesh) to be the SLAVE.
     """
-    def calc_surface_hbar(eids):
+    def calc_surface_metrics(eids):
         total_area = 0.0
         weighted_h = 0.0
+        surface_centers = []
+        
         for z_name, z_mesh in zones_mesh.items():
-            for idx, eid in enumerate(z_mesh['elements'].keys()):
+            for eid, conn in z_mesh['elements'].items():
                 if eid in eids:
-                    conn = z_mesh['elements'][eid]
-                    coords = np.array([sorted_nodes[nid] for nid in conn])
-                    n_nodes = len(conn)
+                    pts, center, area, unit_normal, ratio, max_len = get_element_properties(sorted_nodes, conn)
+                    if area < constants.tol:
+                        continue
                     
-                    # Compute average perimeter edge length (not max diagonal)
+                    surface_centers.append(center)
+                    
+                    n_nodes = len(conn)
                     edge_lengths = [
-                        np.linalg.norm(coords[i] - coords[(i + 1) % n_nodes]) 
+                        np.linalg.norm(pts[i] - pts[(i + 1) % n_nodes]) 
                         for i in range(n_nodes)
                     ]
                     h_elem = np.mean(edge_lengths)
                     
-                    _, _, area, _, _, _ = get_element_properties(sorted_nodes, conn)
                     total_area += area
                     weighted_h += area * h_elem
-        return weighted_h / total_area if total_area > 0 else 0.0
+                    
+        h_bar = weighted_h / total_area if total_area > 0 else 0.0
+        
+        # Calculate centroid-based element spacing and reduce to a scalar average
+        if len(surface_centers) > 1:
+            cog_array = calculate_centroid_element_size(np.array(surface_centers))
+            h_cog = np.mean(cog_array)
+        else:
+            h_cog = h_bar
+        
+        return h_bar, h_cog
 
-    h_slave = calc_surface_hbar(slave_eids)
-    h_master = calc_surface_hbar(master_eids)
+    h_slave_bar, h_slave_cog = calc_surface_metrics(slave_eids)
+    h_master_bar, h_master_cog = calc_surface_metrics(master_eids)
 
-    # Force COARSE side (larger h_bar) to be SLAVE.
-    # Swap if slave is finer (h_slave * 1.005 < h_master) - TOL=0.5%
-    is_swapped = h_slave * 1.005 < h_master
-    # is_swapped = False  ## for debugging only
+    # Force COARSE side (larger characteristic length) to be SLAVE.
+    # Using h_cog as the primary decision driver, falling back to h_bar if needed.
+    is_swapped = h_slave_cog * 1.005 < h_master_cog
 
-    return is_swapped, h_slave, h_master
+    return is_swapped, h_slave_bar, h_master_bar, h_slave_cog, h_master_cog
 
 def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3):
     """
@@ -388,7 +401,6 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         master_surf_name = tie_dict['master']
         tolerance = tie_dict.get('tolerance', default_tolerance)
         
-        # Grab PrePoMax Surface to Element Set links safely
         slave_surface = parser.surfaces.get(slave_surf_name)
         master_surface = parser.surfaces.get(master_surf_name)
         
@@ -399,37 +411,25 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         slave_elset = slave_surface.get('elset', slave_surf_name)
         master_elset = master_surface.get('elset', master_surf_name)
         
-        slave_eids = parser.elsets.get(slave_elset, [])
-        master_eids = parser.elsets.get(master_elset, [])
+        raw_slave_eids = parser.elsets.get(slave_elset, [])
+        raw_master_eids = parser.elsets.get(master_elset, [])
         
-        # Evaluate mesh density & execute swap BEFORE pulling geometry:
-        is_swapped, h_s, h_m = evaluate_and_orient_tie(slave_eids, master_eids, zones_mesh, sorted_nodes)
+        n_input_slave_els = len(raw_slave_eids)
+        n_input_master_els = len(raw_master_eids)
 
-        if is_swapped:
-            # Swap surface references for calculation
-            slave_eids, master_eids = master_eids, slave_eids
-            slave_surf_name, master_surf_name = master_surf_name, slave_surf_name
-            h_s, h_m = h_m, h_s
-        
-        n_input_slave_els = len(slave_eids)
-        n_input_master_els = len(master_eids)
-
-        # Identify Zone Ownership, Centroids, and Normals
+        # Identify Zone Ownership and Geometry Data for Raw Inputs First
         slave_zone, master_zone = None, None
-        slave_data = {}   # stores {eid: (centroid, normal)}
-        master_data = {}  # stores {eid: centroid}
+        slave_data = {}
+        master_data = {}
 
         for zone_name, z_mesh in zones_mesh.items():
-            # Use existing framework to pull geometry properties
             _, z_centers, _, z_normals, _, _ = prepare_geometry(sorted_nodes, z_mesh['elements'])
-            
-            # Build lookups for the elements in this zone
             local_elements = list(z_mesh['elements'].keys())
             for idx, eid in enumerate(local_elements):
-                if eid in slave_eids:
+                if eid in raw_slave_eids:
                     slave_zone = zone_name
                     slave_data[eid] = (z_centers[idx], z_normals[idx])
-                if eid in master_eids:
+                if eid in raw_master_eids:
                     master_zone = zone_name
                     master_data[eid] = z_centers[idx]
 
@@ -437,7 +437,7 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
             logger.info(f" [ ! ] Warning: Skipping Tie '{tie_name}' - Zone ownership unresolved.")
             continue
 
-        # Spatial Gap Matching Pass
+        # 1. Spatial Gap Matching Pass (Finds true active overlaps first)
         element_pairs = []
         for seid, (s_center, s_normal) in slave_data.items():
             s_conn = zones_mesh[slave_zone]['elements'][seid]
@@ -450,35 +450,50 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
                 m_radius = max(np.linalg.norm(pt - m_center) for pt in m_coords)
 
                 vec = m_center - s_center
-                
-                # 1. Normal gap check
                 gap = abs(np.dot(vec, s_normal))
                 
                 if gap <= tolerance:
-                    # 2. Bounding sphere contact check (Sum of both radii)
                     lateral_vec = vec - np.dot(vec, s_normal) * s_normal
                     lateral_dist = np.linalg.norm(lateral_vec)
                     
-                    # if lateral_dist <= (s_radius + m_radius + 1e-6):
                     if lateral_dist <= (s_radius + m_radius + constants.tol):
                         element_pairs.append((meid, seid))
+        
+        active_slave_eids = list({pair[1] for pair in element_pairs})
+        active_master_eids = list({pair[0] for pair in element_pairs})
 
-        if len(element_pairs) > 0:
-            tie_registry[tie_name] = {
-                'slave_surface': slave_surf_name,
-                'master_surface': master_surf_name,
-                'slave_zone': slave_zone,
-                'master_zone': master_zone,
-                'element_pairs': element_pairs,
-                'tolerance_used': tolerance,
-                'n_input_slave_els': n_input_slave_els,
-                'n_input_master_els': n_input_master_els,
-                'active_slave_eids': list({pair[1] for pair in element_pairs}),
-                'active_master_eids': list({pair[0] for pair in element_pairs}),
-                'is_swapped': is_swapped,
-                'h_slave': h_s,
-                'h_master': h_m
-            }
+        if not element_pairs:
+            continue
+
+        # 2. Evaluate Mesh Density & Orient Swap strictly on Active Elements
+        is_swapped, h_s, h_m, h_s_cog, h_m_cog = evaluate_and_orient_tie(active_slave_eids, active_master_eids, zones_mesh, sorted_nodes)
+
+        if is_swapped:
+            active_slave_eids, active_master_eids = active_master_eids, active_slave_eids
+            slave_surf_name, master_surf_name = master_surf_name, slave_surf_name
+            h_s, h_m = h_m, h_s
+            h_s_cog, h_m_cog = h_m_cog, h_s_cog
+            slave_zone, master_zone = master_zone, slave_zone
+            n_input_slave_els, n_input_master_els = n_input_master_els, n_input_slave_els
+            # Remap element_pairs direction if swapped
+            element_pairs = [(seid, meid) for meid, seid in element_pairs]
+
+        tie_registry[tie_name] = {
+            'slave_surface': slave_surf_name,
+            'master_surface': master_surf_name,
+            'slave_zone': slave_zone,
+            'master_zone': master_zone,
+            'element_pairs': element_pairs,
+            'tolerance_used': tolerance,
+            'n_input_slave_els': n_input_slave_els,
+            'n_input_master_els': n_input_master_els,
+            'active_slave_eids': active_slave_eids,
+            'active_master_eids': active_master_eids,
+            'is_swapped': is_swapped,
+            'h_slave': h_s,
+            'h_master': h_m,
+            'h_slave_cog': h_s_cog,
+            'h_master_cog': h_m_cog,        }
     return tie_registry
 
 def ensure_ccw_2d(poly):
@@ -595,6 +610,7 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
         W_master_to_slave (dict): 
             Maps master element IDs to slave element IDs with weight w_m2s = A_ij / A_master.
             Used to transfer Slave flux/velocities to Master elements.
+        It also re-builds active slave / master elements for the Active sub-patches in a tie.
     """
     W_slave_to_master = {}
     W_master_to_slave = {}
@@ -619,9 +635,22 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
         target_s_eids_set = {pair[1] for pair in tie_info['element_pairs']}
         target_m_eids_set = {pair[0] for pair in tie_info['element_pairs']}
 
+        # --- Determine untrimmed status using input surface counts ---
+        is_slave_clean = (len(target_s_eids_set) == tie_info.get('n_input_slave_els', len(target_s_eids_set)))
+        is_master_clean = (len(target_m_eids_set) == tie_info.get('n_input_master_els', len(target_m_eids_set)))
+
         # --- Sub-Patch Filtering: Extract ONLY elements participating in this tie interface ---
         s_eids_patch = [eid for eid in s_elements_full if eid in target_s_eids_set]
         m_eids_patch = [eid for eid in m_elements_full if eid in target_m_eids_set]
+
+        # For trimmed surfaces, drop boundary edge elements to prevent cutting artifacts
+        if not is_slave_clean:
+            s_free_initial = get_subpatch_free_nodes(s_eids_patch, s_elements_full)
+            s_eids_patch = [eid for eid in s_eids_patch if not element_touches_free_edge(eid, s_elements_full, s_free_initial)]
+            
+        if not is_master_clean:
+            m_free_initial = get_subpatch_free_nodes(m_eids_patch, m_elements_full)
+            m_eids_patch = [eid for eid in m_eids_patch if not element_touches_free_edge(eid, m_elements_full, m_free_initial)]
 
         s_elements_patch = {eid: s_elements_full[eid] for eid in s_eids_patch}
         m_elements_patch = {eid: m_elements_full[eid] for eid in m_eids_patch}
@@ -655,10 +684,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                 a2 = 0.5 * np.linalg.norm(np.cross(pts[2] - pts[0], pts[3] - pts[0]))
                 area = a1 + a2
             m_geom[eid] = {'center': center, 'area': area, 'vertices_3d': pts}
-
-        # --- Extract Free-Edge Topology for Sub-Patches ---
-        s_free_nodes = get_subpatch_free_nodes(target_s_eids_set, s_elements_full)
-        m_free_nodes = get_subpatch_free_nodes(target_m_eids_set, m_elements_full)
         
         # Local per-tie tracking for geometry diagnostics
         tie_slave_area = 0.0
@@ -667,7 +692,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
         active_slave_eids = set()
         active_master_eids = set()
 
-        # Track keys created specifically in this tie iteration for localized safety net application
         current_tie_slave_eids = []
         current_tie_master_eids = []
 
@@ -685,13 +709,11 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
             
             s_vertices_3d = s_geom[seid]['vertices_3d']
             
-            # Build local 2D coordinate system on the slave element plane
             ref_vec = np.array([1.0, 0.0, 0.0]) if abs(s_normal[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
             u_axis = np.cross(s_normal, ref_vec)
             u_axis /= np.linalg.norm(u_axis)
             v_axis = np.cross(s_normal, u_axis)
             
-            # Project Slave to Local 2D Plane
             s_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in s_vertices_3d]
             
             overlapping_masters = []
@@ -706,22 +728,18 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                 vec = m_center - s_center
                 gap = abs(np.dot(vec, s_normal))
                 
-                # Proximity check acts as the boundary filter
                 if gap <= tolerance:
                     m_vertices_3d = m_geom[meid]['vertices_3d']
-                    
-                    # Project Master onto the Slave's Local 2D Plane
                     m_vertices_2d = [(np.dot(v - s_center, u_axis), np.dot(v - s_center, v_axis)) for v in m_vertices_3d]
                     
-                    # 3. Geometric Polygon Clipping
                     intersection_polygon = clip_polygon_2d(s_vertices_2d, m_vertices_2d)
                     intersection_area = compute_polygon_area_2d(intersection_polygon)
                     
-                    if intersection_area > constants.tol:  # Physical overlap found
+                    if intersection_area > constants.tol:
                         overlapping_masters.append(meid)
                         weights_raw.append(intersection_area)
             
-            # 4. Build Independent Weights for Pressure and Velocity
+            # 3. Build Independent Weights for Pressure and Velocity
             if overlapping_masters:
                 slave_eids_set.add(seid)
                 active_slave_eids.add(seid)
@@ -735,8 +753,6 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                     
                     m_area_true = m_geom[m_eid]['area']
 
-                    # Safe normalization: normalize w_slave_fraction against total_clipped_area 
-                    # to ensure sum(w_slave) == 1.0 even if polygon clipping missed small perimeter edges
                     w_slave_fraction = area_ij / s_area
                     w_master_fraction = area_ij / m_area_true
 
@@ -749,77 +765,64 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                         current_tie_master_eids.append(m_eid)
                     tie_intersected_area += area_ij
 
-        # --- Dual Free-Edge Check & Normalization Pass ---
-        # --- Sliver Normalization Pass ---
-        # 1. Normalize Slave-to-Master (Pressure Mapping)
-        for seid, m_dict in W_slave_to_master.items():
-            if seid not in current_tie_slave_eids:
-                continue
-            row_sum = sum(m_dict.values())
-            if row_sum > 0 and row_sum < 1.0:
-                s_touches_free = element_touches_free_edge(seid, s_elements_full, s_free_nodes)
-                tolerance = EDGE_SLIVER_TOLERANCE if s_touches_free else INTERNAL_SLIVER_TOLERANCE
-                if (1.0 - tolerance) <= row_sum:
-                    scale = 1.0 / row_sum
-                    for meid in m_dict:
-                        m_dict[meid] *= scale
+        # --- Extract Free-Edge Topology on the Active Intersected Sub-Patch ---
+        s_free_nodes = get_subpatch_free_nodes(current_tie_slave_eids, s_elements_full)
+        m_free_nodes = get_subpatch_free_nodes(current_tie_master_eids, m_elements_full)
 
-        # 2. Normalize Master-to-Slave (Flux Distribution)
-        for meid, s_dict in W_master_to_slave.items():
-            if meid not in current_tie_master_eids:
-                continue
-            row_sum = sum(s_dict.values())
-            if row_sum > 0 and row_sum < 1.0:
-                m_touches_free = element_touches_free_edge(meid, m_elements_full, m_free_nodes)
-                tolerance = EDGE_SLIVER_TOLERANCE if m_touches_free else INTERNAL_SLIVER_TOLERANCE
-                if (1.0 - tolerance) <= row_sum:
-                    scale = 1.0 / row_sum
-                    for seid in s_dict:
-                        s_dict[seid] *= scale
-
-        # --- Universal Normalization Safety Net ---
-        # Catches minor drift just below the explicit tolerances down to a hard floor (e.g. 0.90)
-        for seid, m_dict in W_slave_to_master.items():
-            if seid in current_tie_slave_eids:
-                row_sum = sum(m_dict.values())
-                if 0.90 <= row_sum < (1.0 - INTERNAL_SLIVER_TOLERANCE):
-                    scale = 1.0 / row_sum
-                    for meid in m_dict:
-                        m_dict[meid] *= scale
-
-        for meid, s_dict in W_master_to_slave.items():
-            if meid in current_tie_master_eids:
-                row_sum = sum(s_dict.values())
-                if 0.90 <= row_sum < (1.0 - INTERNAL_SLIVER_TOLERANCE):
-                    scale = 1.0 / row_sum
-                    for seid in s_dict:
-                        s_dict[seid] *= scale
-
-        # --- Prune Ghost Slivers Pass ---
+        # --- Universal Prune Pass (Ghost Slivers Below Threshold) ---
         for seid in list(current_tie_slave_eids):
             if seid in W_slave_to_master:
                 W_slave_to_master[seid] = {meid: w for meid, w in W_slave_to_master[seid].items() if w >= WEIGHT_PRUNE_THRESHOLD}
                 if not W_slave_to_master[seid]:
                     del W_slave_to_master[seid]
-                else:
-                    # Post-pruning renormalization: force surviving valid weights to sum to exactly 1.0
-                    row_sum = sum(W_slave_to_master[seid].values())
-                    if (1.0 - EDGE_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                        scale = 1.0 / row_sum
-                        for meid in W_slave_to_master[seid]:
-                            W_slave_to_master[seid][meid] *= scale
 
         for meid in list(current_tie_master_eids):
             if meid in W_master_to_slave:
                 W_master_to_slave[meid] = {seid: w for seid, w in W_master_to_slave[meid].items() if w >= WEIGHT_PRUNE_THRESHOLD}
                 if not W_master_to_slave[meid]:
                     del W_master_to_slave[meid]
-                else:
-                    row_sum = sum(W_master_to_slave[meid].values())
-                    if (1.0 - EDGE_SLIVER_TOLERANCE) <= row_sum < 1.0:
-                        scale = 1.0 / row_sum
-                        for seid in W_master_to_slave[meid]:
-                            W_master_to_slave[meid][seid] *= scale
+
+        # --- Clean Up Dangling Inner References ---
+        for seid in list(W_slave_to_master.keys()):
+            W_slave_to_master[seid] = {meid: w for meid, w in W_slave_to_master[seid].items() if meid in W_master_to_slave}
+            if not W_slave_to_master[seid]:
+                del W_slave_to_master[seid]
+
+        for meid in list(W_master_to_slave.keys()):
+            W_master_to_slave[meid] = {seid: w for seid, w in W_master_to_slave[meid].items() if seid in W_slave_to_master}
+            if not W_master_to_slave[meid]:
+                del W_master_to_slave[meid]
+
+        # --- Final Row Normalization Pass ---
+        for seid in W_slave_to_master:
+            row_sum = sum(W_slave_to_master[seid].values())
+            if row_sum > 0:
+                scale = 1.0 / row_sum
+                for meid in W_slave_to_master[seid]:
+                    W_slave_to_master[seid][meid] *= scale
+
+        for meid in W_master_to_slave:
+            row_sum = sum(W_master_to_slave[meid].values())
+            if row_sum > 0:
+                scale = 1.0 / row_sum
+                for seid in W_master_to_slave[meid]:
+                    W_master_to_slave[meid][seid] *= scale
+
+        # --- Filter Out Partial Rows with Soft Tolerance ---
+        W_slave_to_master = {
+            seid: m_dict for seid, m_dict in W_slave_to_master.items() 
+            if abs(sum(m_dict.values()) - 1.0) < 1e-3 or (is_slave_clean and element_touches_free_edge(seid, s_elements_full, s_free_nodes))
+        }
+        W_master_to_slave = {
+            meid: s_dict for meid, s_dict in W_master_to_slave.items() 
+            if abs(sum(s_dict.values()) - 1.0) < 1e-3 or (is_master_clean and element_touches_free_edge(meid, m_elements_full, m_free_nodes))
+        }
+
+        # --- Sync Active Registry ---
+        current_tie_slave_eids = [seid for seid in current_tie_slave_eids if seid in W_slave_to_master]
+        current_tie_master_eids = [meid for meid in current_tie_master_eids if meid in W_master_to_slave]
+        active_slave_eids = {seid for seid in active_slave_eids if seid in W_slave_to_master}
+        active_master_eids = {meid for meid in active_master_eids if meid in W_master_to_slave}
 
         # --- Compute Post-Normalization Effective Intersected Area ---
         tie_intersected_area_post = 0.0
@@ -829,13 +832,12 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
                 w_sum = sum(W_slave_to_master[seid].values())
                 tie_intersected_area_post += s_area * w_sum
 
-        # Calculate true active master surface area (strictly active participating elements)
+        # tie_slave_area = sum(s_geom[seid]['area'] for seid in active_slave_eids)
         tie_master_area = sum(m_geom[meid]['area'] for meid in active_master_eids)
-
-        # Calculate actual post-normalization conservation error (sliver trimming loss)
         post_area_error = abs(tie_intersected_area - tie_intersected_area_post)
 
-        # Store calculated physical areas directly on tie_info for build_tie_summary_log
+        tie_info['active_slave_eids'] = list(active_slave_eids)
+        tie_info['active_master_eids'] = list(active_master_eids)
         tie_info['total_slave_area'] = tie_slave_area
         tie_info['total_master_area'] = tie_master_area
         tie_info['intersected_area'] = tie_intersected_area_post
@@ -1015,8 +1017,7 @@ def get_total_gps(element_nodes):
 
 def build_tie_summary_log(parser, tie_registry, W_slave_to_master, W_master_to_slave):
     """
-    Assembles a unified, formatted diagnostic log for surface tied pair constraints
-    matching pyBEM V0.4.8-alpha log formatting standards.
+    Assembles a unified, formatted and detailed diagnostic log for surface TIED pair constraints.
     """
     num_ties = len(parser.ties) if getattr(parser, 'ties', None) else 0
     
@@ -1032,9 +1033,11 @@ def build_tie_summary_log(parser, tie_registry, W_slave_to_master, W_master_to_s
     log.append(f"    Found a total of ( {num_ties} ) TIED pair constraint(s).\n")
     log.append("    [i] RECOMMENDATION: Equal or similar mesh sizing is recommended on TIED surfaces' mesh.")
     log.append("        This helps for a stable area-weighted polygon clipping and mortar flux integration.")
-    log.append("        'pyBEM' automatically checks and if necessary, adjusts slave/master order during PRE.")
+    log.append("        'pyBEM' automatically checks, and if necessary, adjusts slave/master roles during PRE.")
     log.append("        This is indicated as '[ Auto-Swap ]').")
-    log.append("    [i] METRIC DEFINITION: 'h_avg' represents the average element characteristic size.")
+    log.append("    [i] 'h_CoG_avg' represents the average characteristic distance between element CoGs (DoF).")
+    # log.append("        The ratio of 'h_CoG_avg' across a TIED pair shouldn't be >> 1.75.")
+    # log.append("        Always check for Active power conservation on curves in '*_power.png' at that pair.")
 
     for tie_name, info in tie_registry.items():
         tie_slave_eids = set(info['active_slave_eids'])
@@ -1050,22 +1053,26 @@ def build_tie_summary_log(parser, tie_registry, W_slave_to_master, W_master_to_s
             raise RuntimeError(f" [!] PRE-PROCESSING FAILED: Tie '{tie_name}' has 0 matched element intersections.")
 
         m_surf_name = info.get('master_surface', 'N/A')
-        # m_surf_name = info['master_surface']
         s_surf_name = info.get('slave_surface', 'N/A')
-        # s_surf_name = info['slave_surface']
         n_active_slave = len(info['active_slave_eids'])
         n_active_master = len(info['active_master_eids'])
+        h_cog_slave = info.get('h_slave_cog', 'N/A')
+        h_cog_master = info.get('h_master_cog', 'N/A')
+        h_cog_ratio = max(h_cog_slave, h_cog_master) / min(h_cog_slave, h_cog_master)
 
         log.append("\n    ----------------------------------------------------------------------")
         log.append(f"    TIE INTERFACE: [ '{tie_name}' ]")
         log.append("    ----------------------------------------------------------------------")
         if info.get('is_swapped'):
-            log.append("    [ Auto-Swap ] Master/Slave roles inverted: Slave designated as coarser mesh surface (higher h_avg).")
+            log.append("    [ Auto-Swap ] Master/Slave roles inverted: Slave designated as coarser mesh surface (higher h_CoG_avg).")
 
-        log.append(f"    Master Surface: '{m_surf_name}' | ( {n_active_master} ) elements | h_avg = {info['h_master']:.3f}")
-        log.append(f"    Slave Surface:  '{s_surf_name}' | ( {n_active_slave} ) elements | h_avg = {info['h_slave']:.3f}")
+        log.append(f"    Master Surface: '{m_surf_name}' | ( {n_active_master} ) elements | h_CoG_avg = {h_cog_master:.3f}")
+        log.append(f"    Slave Surface:  '{s_surf_name}' | ( {n_active_slave} ) elements | h_CoG_avg = {h_cog_slave:.3f}")
         log.append(f"    Mapping Search Tolerance: ( {info['tolerance_used']} ) L")
         log.append(f"    Area-Weighted Collocation Mapped Pairs: ( {n_el_pairs} ) element intersections\n")
+        if h_cog_ratio > 1.75:
+            log.append(f"    [i] WARNING: it seems that the mesh density across this pair is quite dissimilar.")
+            log.append(f"                 Always check for Active power conservation on tie curves in '*_power.png' after job completion.\n")
 
         # Read stored areas directly from tie_info
         total_master_area = info.get('total_master_area', 0.0)
@@ -1839,7 +1846,7 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
         )
 
     fig.suptitle(
-        f"Acoustic Sound Power Levels (SWL) — Model: {model_name}",
+        f"Acoustic Sound Power Levels (SWL) — Model: {model_name} — pyBEM V{version.__version__}",
         fontsize=13,
         fontweight="bold",
         y=0.98,

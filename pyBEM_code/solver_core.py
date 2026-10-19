@@ -137,11 +137,6 @@ def apply_tie_collocation_columns(A_global, H_local, G_local, local_j, start_row
         # Scale G_local by the actual active interface coverage
         A_global[start_row : start_row + n_elements, l_col] -= G_local[:, local_j] * ik_rho_c * eta_s
 
-    # if eid in slave_lagrange_col_map:
-    #     l_col = slave_lagrange_col_map[eid]
-    #     # Direct 1:1 mapping of native slave flux unknown
-    #     A_global[start_row : start_row + n_elements, l_col] -= G_local[:, local_j] * ik_rho_c
-
     # 3. MASTER ELEMENT BRANCH
     elif eid in W_master_to_slave:
         for s_eid, w_m2s in W_master_to_slave[eid].items():
@@ -225,6 +220,7 @@ def frequency_worker(f, bc_map, sorted_bem_ids, threads_per_worker):
     # TIED pairs
     W_slave_to_master = static_data['W_slave_to_master']  # dict: seid -> {meid: weight}
     W_master_to_slave = static_data['W_master_to_slave']  # dict: meid -> {seid: weight}
+    # This will use the active pruned element lists instead of the raw inputs in *.inp
     master_elements = static_data['master_elements']      # list of unique master eids
     slave_elements = static_data['slave_elements']        # list of unique slave eids
 

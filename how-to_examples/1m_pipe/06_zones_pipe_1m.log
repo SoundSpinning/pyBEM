@@ -1,5 +1,5 @@
 ================================================================================
-                  pyBEM - V0.5.1-alpha | BEM Acoustics Solver
+                  pyBEM - V0.5.4-alpha | BEM Acoustics Solver
                      Standard Element (Constant) Collocation
                   Direct Method | Multi-Zone Analysis & TIED pairs
 ================================================================================
@@ -92,16 +92,16 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
 
     [i] RECOMMENDATION: Equal or similar mesh sizing is recommended on TIED surfaces' mesh.
         This helps for a stable area-weighted polygon clipping and mortar flux integration.
-        'pyBEM' automatically checks and if necessary, adjusts slave/master order during PRE.
+        'pyBEM' automatically checks, and if necessary, adjusts slave/master roles during PRE.
         This is indicated as '[ Auto-Swap ]').
-    [i] METRIC DEFINITION: 'h_avg' represents the average element characteristic size.
+    [i] 'h_CoG_avg' represents the average characteristic distance between element CoGs (DoF).
 
     ----------------------------------------------------------------------
     TIE INTERFACE: [ 'Tie-1' ]
     ----------------------------------------------------------------------
-    [ Auto-Swap ] Master/Slave roles inverted: Slave designated as coarser mesh surface (higher h_avg).
-    Master Surface: 'Tie-1_Slave' | ( 16 ) elements | h_avg = 23.877
-    Slave Surface:  'Tie-1_Master' | ( 15 ) elements | h_avg = 25.161
+    [ Auto-Swap ] Master/Slave roles inverted: Slave designated as coarser mesh surface (higher h_CoG_avg).
+    Master Surface: 'Tie-1_Slave' | ( 16 ) elements | h_CoG_avg = 19.029
+    Slave Surface:  'Tie-1_Master' | ( 15 ) elements | h_CoG_avg = 19.897
     Mapping Search Tolerance: ( 1.0 ) L
     Area-Weighted Collocation Mapped Pairs: ( 42 ) element intersections
 
@@ -156,13 +156,13 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
     ======================================================================
 
 ======================================================================
-*** ACOUSTICS multi-zone job started   |  Tue Oct 13 12:40:22 2026 ***
+*** ACOUSTICS multi-zone job started   |  Mon Oct 19 14:00:28 2026 ***
 ======================================================================
 --> SOLVING ( 119 ) Frequencies [20.0Hz --> 1200.0Hz | delta_Hz = 10.00] Steady State Direct <--
 
  Number of CPUs found on this machine: ( 6 ) | Number of threads: ( 12 )
  MAX number of CPUs assigned to Numba parallel loops in PRE is: ( 6 )
- Available RAM found at job start:     ( 49.16 GB )
+ Available RAM found at job start:     ( 49.51 GB )
  Global Multi-Zone Matrix Structure:   ( 709 x 709 ) DOF
 
  [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
@@ -178,10 +178,10 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
      Pre - BEM Geometric Static Kernels for Zone: [ z2_Air ]
      Pre - MICS data and arrays for Zone:         [ z2_Air ]
 
- [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( 0.53s )
-     BEM: ( 0.436s ) | MICS: ( 0.089s ) | RAM ( 0.202 GB )
+ [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( 0.59s )
+     BEM: ( 0.488s ) | MICS: ( 0.098s ) | RAM ( 0.202 GB )
      
- Heuristic estimates for Frequency Sweep based on RAM available ( 49.16 GB ):
+ Heuristic estimates for Frequency Sweep based on RAM available ( 49.51 GB ):
  Estimated (+)RAM per Freq: ( 0.53 GB ) | Parallel Frequency Workers: ( 1 )
  [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( 6 )
      Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
@@ -192,125 +192,125 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
 ==================================================================================================
  Freq (Hz) | Assembly | Solve All:   BEM    +   Mics   |  RAM (MB)  | Results file       | Status
 ==================================================================================================
- 20.0   Hz |  0.282 s |   0.036s :  0.016   +  0.019   |   209.9    | In Memory          |   OK  
- 30.0   Hz |  0.016 s |   0.017s :  0.015   +  0.002   |   211.8    | In Memory          |   OK  
- 40.0   Hz |  0.017 s |   0.017s :  0.014   +  0.003   |   212.0    | In Memory          |   OK  
- 50.0   Hz |  0.017 s |   0.023s :  0.021   +  0.002   |   212.1    | In Memory          |   OK  
- 60.0   Hz |  0.017 s |   0.015s :  0.014   +  0.002   |   212.3    | In Memory          |   OK  
- 70.0   Hz |  0.018 s |   0.017s :  0.014   +  0.002   |   212.5    | In Memory          |   OK  
- 80.0   Hz |  0.019 s |   0.017s :  0.014   +  0.003   |   212.6    | In Memory          |   OK  
- 90.0   Hz |  0.014 s |   0.019s :  0.017   +  0.003   |   212.7    | In Memory          |   OK  
- 100.0  Hz |  0.019 s |   0.017s :  0.014   +  0.002   |   212.8    | In Memory          |   OK  
- 110.0  Hz |  0.018 s |   0.023s :  0.020   +  0.003   |   212.9    | In Memory          |   OK  
- 120.0  Hz |  0.019 s |   0.018s :  0.015   +  0.003   |   213.1    | In Memory          |   OK  
- 130.0  Hz |  0.018 s |   0.022s :  0.020   +  0.003   |   213.3    | In Memory          |   OK  
- 140.0  Hz |  0.018 s |   0.016s :  0.014   +  0.003   |   213.4    | In Memory          |   OK  
- 150.0  Hz |  0.015 s |   0.019s :  0.017   +  0.003   |   213.5    | In Memory          |   OK  
- 160.0  Hz |  0.017 s |   0.017s :  0.014   +  0.003   |   213.7    | In Memory          |   OK  
- 170.0  Hz |  0.014 s |   0.018s :  0.015   +  0.003   |   213.8    | In Memory          |   OK  
- 180.0  Hz |  0.017 s |   0.020s :  0.017   +  0.003   |   213.9    | In Memory          |   OK  
- 190.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   214.1    | In Memory          |   OK  
- 200.0  Hz |  0.013 s |   0.016s :  0.013   +  0.003   |   214.2    | In Memory          |   OK  
- 210.0  Hz |  0.017 s |   0.023s :  0.020   +  0.003   |   214.3    | In Memory          |   OK  
- 220.0  Hz |  0.017 s |   0.023s :  0.020   +  0.003   |   214.4    | In Memory          |   OK  
- 230.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   214.6    | In Memory          |   OK  
- 240.0  Hz |  0.014 s |   0.017s :  0.014   +  0.003   |   214.7    | In Memory          |   OK  
- 250.0  Hz |  0.018 s |   0.019s :  0.016   +  0.003   |   214.8    | In Memory          |   OK  
- 260.0  Hz |  0.017 s |   0.017s :  0.014   +  0.003   |   215.0    | In Memory          |   OK  
- 270.0  Hz |  0.023 s |   0.023s :  0.020   +  0.003   |   215.1    | In Memory          |   OK  
- 280.0  Hz |  0.015 s |   0.019s :  0.016   +  0.003   |   215.2    | In Memory          |   OK  
- 290.0  Hz |  0.019 s |   0.016s :  0.013   +  0.003   |   215.3    | In Memory          |   OK  
- 300.0  Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   215.4    | In Memory          |   OK  
- 310.0  Hz |  0.023 s |   0.027s :  0.024   +  0.002   |   215.4    | In Memory          |   OK  
- 320.0  Hz |  0.016 s |   0.017s :  0.014   +  0.003   |   215.4    | In Memory          |   OK  
- 330.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   215.5    | In Memory          |   OK  
- 340.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   215.6    | In Memory          |   OK  
- 350.0  Hz |  0.014 s |   0.017s :  0.015   +  0.002   |   215.7    | In Memory          |   OK  
- 360.0  Hz |  0.017 s |   0.015s :  0.013   +  0.002   |   215.7    | In Memory          |   OK  
- 370.0  Hz |  0.019 s |   0.018s :  0.015   +  0.003   |   215.7    | In Memory          |   OK  
- 380.0  Hz |  0.020 s |   0.018s :  0.015   +  0.003   |   215.8    | In Memory          |   OK  
- 390.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   215.9    | In Memory          |   OK  
- 400.0  Hz |  0.018 s |   0.024s :  0.021   +  0.003   |   215.9    | In Memory          |   OK  
- 410.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   215.9    | In Memory          |   OK  
- 420.0  Hz |  0.020 s |   0.022s :  0.019   +  0.003   |   216.0    | In Memory          |   OK  
- 430.0  Hz |  0.015 s |   0.017s :  0.015   +  0.003   |   216.0    | In Memory          |   OK  
- 440.0  Hz |  0.015 s |   0.020s :  0.017   +  0.003   |   216.0    | In Memory          |   OK  
- 450.0  Hz |  0.020 s |   0.025s :  0.022   +  0.003   |   216.0    | In Memory          |   OK  
- 460.0  Hz |  0.018 s |   0.023s :  0.021   +  0.002   |   216.0    | In Memory          |   OK  
- 470.0  Hz |  0.020 s |   0.026s :  0.024   +  0.002   |   216.0    | In Memory          |   OK  
- 480.0  Hz |  0.019 s |   0.025s :  0.022   +  0.003   |   216.0    | In Memory          |   OK  
- 490.0  Hz |  0.021 s |   0.026s :  0.022   +  0.003   |   216.0    | In Memory          |   OK  
- 500.0  Hz |  0.016 s |   0.020s :  0.017   +  0.003   |   216.0    | In Memory          |   OK  
- 510.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.1    | In Memory          |   OK  
- 520.0  Hz |  0.023 s |   0.025s :  0.022   +  0.003   |   216.1    | In Memory          |   OK  
- 530.0  Hz |  0.018 s |   0.017s :  0.014   +  0.003   |   216.1    | In Memory          |   OK  
- 540.0  Hz |  0.015 s |   0.017s :  0.015   +  0.002   |   216.1    | In Memory          |   OK  
- 550.0  Hz |  0.024 s |   0.024s :  0.021   +  0.003   |   216.1    | In Memory          |   OK  
- 560.0  Hz |  0.014 s |   0.016s :  0.013   +  0.003   |   216.1    | In Memory          |   OK  
- 570.0  Hz |  0.019 s |   0.019s :  0.016   +  0.003   |   216.1    | In Memory          |   OK  
- 580.0  Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.1    | In Memory          |   OK  
- 590.0  Hz |  0.020 s |   0.018s :  0.015   +  0.003   |   216.1    | In Memory          |   OK  
- 600.0  Hz |  0.021 s |   0.024s :  0.021   +  0.003   |   216.1    | In Memory          |   OK  
- 610.0  Hz |  0.018 s |   0.018s :  0.015   +  0.003   |   216.1    | In Memory          |   OK  
- 620.0  Hz |  0.015 s |   0.017s :  0.015   +  0.003   |   216.1    | In Memory          |   OK  
- 630.0  Hz |  0.023 s |   0.022s :  0.019   +  0.003   |   216.2    | In Memory          |   OK  
- 640.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   216.2    | In Memory          |   OK  
- 650.0  Hz |  0.022 s |   0.024s :  0.021   +  0.003   |   216.2    | In Memory          |   OK  
- 660.0  Hz |  0.016 s |   0.017s :  0.015   +  0.003   |   216.2    | In Memory          |   OK  
- 670.0  Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   216.2    | In Memory          |   OK  
- 680.0  Hz |  0.023 s |   0.023s :  0.021   +  0.002   |   216.2    | In Memory          |   OK  
- 690.0  Hz |  0.019 s |   0.025s :  0.021   +  0.003   |   216.2    | In Memory          |   OK  
- 700.0  Hz |  0.019 s |   0.021s :  0.018   +  0.003   |   216.2    | In Memory          |   OK  
- 710.0  Hz |  0.020 s |   0.021s :  0.018   +  0.003   |   216.2    | In Memory          |   OK  
- 720.0  Hz |  0.016 s |   0.020s :  0.017   +  0.003   |   216.2    | In Memory          |   OK  
- 730.0  Hz |  0.020 s |   0.017s :  0.014   +  0.003   |   216.2    | In Memory          |   OK  
- 740.0  Hz |  0.016 s |   0.021s :  0.018   +  0.003   |   216.2    | In Memory          |   OK  
- 750.0  Hz |  0.020 s |   0.020s :  0.017   +  0.003   |   216.2    | In Memory          |   OK  
- 760.0  Hz |  0.020 s |   0.017s :  0.014   +  0.002   |   216.2    | In Memory          |   OK  
- 770.0  Hz |  0.019 s |   0.016s :  0.013   +  0.003   |   216.3    | In Memory          |   OK  
- 780.0  Hz |  0.019 s |   0.020s :  0.017   +  0.003   |   216.4    | In Memory          |   OK  
- 790.0  Hz |  0.021 s |   0.020s :  0.017   +  0.003   |   216.5    | In Memory          |   OK  
- 800.0  Hz |  0.023 s |   0.023s :  0.021   +  0.002   |   216.5    | In Memory          |   OK  
- 810.0  Hz |  0.018 s |   0.024s :  0.020   +  0.003   |   216.5    | In Memory          |   OK  
- 820.0  Hz |  0.018 s |   0.019s :  0.016   +  0.003   |   216.5    | In Memory          |   OK  
- 830.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.5    | In Memory          |   OK  
- 840.0  Hz |  0.024 s |   0.020s :  0.017   +  0.003   |   216.5    | In Memory          |   OK  
- 850.0  Hz |  0.019 s |   0.023s :  0.020   +  0.003   |   216.5    | In Memory          |   OK  
- 860.0  Hz |  0.017 s |   0.021s :  0.018   +  0.003   |   216.5    | In Memory          |   OK  
- 870.0  Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   216.6    | In Memory          |   OK  
- 880.0  Hz |  0.022 s |   0.024s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
- 890.0  Hz |  0.015 s |   0.023s :  0.020   +  0.003   |   216.6    | In Memory          |   OK  
- 900.0  Hz |  0.023 s |   0.024s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
- 910.0  Hz |  0.022 s |   0.021s :  0.018   +  0.003   |   216.6    | In Memory          |   OK  
- 920.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
- 930.0  Hz |  0.016 s |   0.022s :  0.019   +  0.003   |   216.6    | In Memory          |   OK  
- 940.0  Hz |  0.021 s |   0.020s :  0.017   +  0.003   |   216.6    | In Memory          |   OK  
- 950.0  Hz |  0.019 s |   0.024s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
- 960.0  Hz |  0.022 s |   0.020s :  0.017   +  0.003   |   216.6    | In Memory          |   OK  
- 970.0  Hz |  0.020 s |   0.026s :  0.023   +  0.003   |   216.6    | In Memory          |   OK  
- 980.0  Hz |  0.021 s |   0.026s :  0.022   +  0.003   |   216.6    | In Memory          |   OK  
- 990.0  Hz |  0.017 s |   0.017s :  0.014   +  0.002   |   216.6    | In Memory          |   OK  
- 1000.0 Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
- 1010.0 Hz |  0.018 s |   0.024s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
- 1020.0 Hz |  0.023 s |   0.024s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
- 1030.0 Hz |  0.017 s |   0.016s :  0.014   +  0.002   |   216.6    | In Memory          |   OK  
- 1040.0 Hz |  0.023 s |   0.023s :  0.020   +  0.003   |   216.6    | In Memory          |   OK  
- 1050.0 Hz |  0.016 s |   0.025s :  0.022   +  0.003   |   216.6    | In Memory          |   OK  
- 1060.0 Hz |  0.025 s |   0.026s :  0.023   +  0.003   |   216.6    | In Memory          |   OK  
- 1070.0 Hz |  0.016 s |   0.016s :  0.013   +  0.003   |   216.6    | In Memory          |   OK  
- 1080.0 Hz |  0.020 s |   0.017s :  0.014   +  0.003   |   216.6    | In Memory          |   OK  
- 1090.0 Hz |  0.022 s |   0.024s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
- 1100.0 Hz |  0.021 s |   0.027s :  0.023   +  0.004   |   216.6    | In Memory          |   OK  
- 1110.0 Hz |  0.027 s |   0.027s :  0.024   +  0.003   |   216.7    | In Memory          |   OK  
- 1120.0 Hz |  0.017 s |   0.017s :  0.015   +  0.002   |   216.7    | In Memory          |   OK  
- 1130.0 Hz |  0.015 s |   0.016s :  0.013   +  0.003   |   216.7    | In Memory          |   OK  
- 1140.0 Hz |  0.022 s |   0.025s :  0.021   +  0.003   |   216.7    | In Memory          |   OK  
- 1150.0 Hz |  0.019 s |   0.025s :  0.022   +  0.003   |   216.7    | In Memory          |   OK  
- 1160.0 Hz |  0.019 s |   0.025s :  0.022   +  0.003   |   216.7    | In Memory          |   OK  
- 1170.0 Hz |  0.020 s |   0.027s :  0.024   +  0.003   |   216.7    | In Memory          |   OK  
- 1180.0 Hz |  0.020 s |   0.022s :  0.019   +  0.003   |   216.7    | In Memory          |   OK  
- 1190.0 Hz |  0.016 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
- 1200.0 Hz |  0.021 s |   0.020s :  0.017   +  0.003   |   216.7    | In Memory          |   OK  
+ 20.0   Hz |  0.304 s |   0.035s :  0.015   +  0.020   |   209.9    | In Memory          |   OK  
+ 30.0   Hz |  0.014 s |   0.016s :  0.013   +  0.002   |   212.1    | In Memory          |   OK  
+ 40.0   Hz |  0.016 s |   0.016s :  0.013   +  0.002   |   212.2    | In Memory          |   OK  
+ 50.0   Hz |  0.016 s |   0.018s :  0.016   +  0.002   |   212.4    | In Memory          |   OK  
+ 60.0   Hz |  0.020 s |   0.021s :  0.019   +  0.002   |   212.6    | In Memory          |   OK  
+ 70.0   Hz |  0.014 s |   0.018s :  0.017   +  0.002   |   212.7    | In Memory          |   OK  
+ 80.0   Hz |  0.017 s |   0.020s :  0.017   +  0.003   |   212.9    | In Memory          |   OK  
+ 90.0   Hz |  0.016 s |   0.020s :  0.018   +  0.002   |   213.0    | In Memory          |   OK  
+ 100.0  Hz |  0.021 s |   0.021s :  0.018   +  0.002   |   213.1    | In Memory          |   OK  
+ 110.0  Hz |  0.015 s |   0.024s :  0.022   +  0.003   |   213.2    | In Memory          |   OK  
+ 120.0  Hz |  0.023 s |   0.023s :  0.020   +  0.003   |   213.3    | In Memory          |   OK  
+ 130.0  Hz |  0.018 s |   0.016s :  0.014   +  0.002   |   213.5    | In Memory          |   OK  
+ 140.0  Hz |  0.017 s |   0.025s :  0.022   +  0.003   |   213.6    | In Memory          |   OK  
+ 150.0  Hz |  0.017 s |   0.024s :  0.022   +  0.003   |   213.7    | In Memory          |   OK  
+ 160.0  Hz |  0.019 s |   0.023s :  0.020   +  0.003   |   213.8    | In Memory          |   OK  
+ 170.0  Hz |  0.021 s |   0.023s :  0.020   +  0.003   |   214.0    | In Memory          |   OK  
+ 180.0  Hz |  0.018 s |   0.022s :  0.020   +  0.002   |   214.1    | In Memory          |   OK  
+ 190.0  Hz |  0.020 s |   0.021s :  0.019   +  0.003   |   214.3    | In Memory          |   OK  
+ 200.0  Hz |  0.017 s |   0.016s :  0.013   +  0.002   |   214.4    | In Memory          |   OK  
+ 210.0  Hz |  0.017 s |   0.020s :  0.018   +  0.003   |   214.5    | In Memory          |   OK  
+ 220.0  Hz |  0.020 s |   0.023s :  0.020   +  0.003   |   214.6    | In Memory          |   OK  
+ 230.0  Hz |  0.014 s |   0.022s :  0.019   +  0.003   |   214.7    | In Memory          |   OK  
+ 240.0  Hz |  0.016 s |   0.015s :  0.013   +  0.002   |   214.9    | In Memory          |   OK  
+ 250.0  Hz |  0.018 s |   0.020s :  0.017   +  0.003   |   215.0    | In Memory          |   OK  
+ 260.0  Hz |  0.018 s |   0.024s :  0.021   +  0.002   |   215.2    | In Memory          |   OK  
+ 270.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   215.3    | In Memory          |   OK  
+ 280.0  Hz |  0.018 s |   0.023s :  0.020   +  0.003   |   215.4    | In Memory          |   OK  
+ 290.0  Hz |  0.018 s |   0.016s :  0.014   +  0.003   |   215.5    | In Memory          |   OK  
+ 300.0  Hz |  0.014 s |   0.022s :  0.019   +  0.003   |   215.7    | In Memory          |   OK  
+ 310.0  Hz |  0.019 s |   0.017s :  0.014   +  0.003   |   215.8    | In Memory          |   OK  
+ 320.0  Hz |  0.022 s |   0.020s :  0.017   +  0.003   |   216.0    | In Memory          |   OK  
+ 330.0  Hz |  0.014 s |   0.019s :  0.016   +  0.003   |   216.1    | In Memory          |   OK  
+ 340.0  Hz |  0.019 s |   0.019s :  0.016   +  0.003   |   216.2    | In Memory          |   OK  
+ 350.0  Hz |  0.014 s |   0.016s :  0.014   +  0.002   |   216.3    | In Memory          |   OK  
+ 360.0  Hz |  0.020 s |   0.021s :  0.018   +  0.003   |   216.3    | In Memory          |   OK  
+ 370.0  Hz |  0.015 s |   0.018s :  0.017   +  0.002   |   216.3    | In Memory          |   OK  
+ 380.0  Hz |  0.019 s |   0.018s :  0.015   +  0.003   |   216.4    | In Memory          |   OK  
+ 390.0  Hz |  0.021 s |   0.021s :  0.018   +  0.003   |   216.5    | In Memory          |   OK  
+ 400.0  Hz |  0.021 s |   0.021s :  0.019   +  0.002   |   216.5    | In Memory          |   OK  
+ 410.0  Hz |  0.015 s |   0.019s :  0.016   +  0.003   |   216.5    | In Memory          |   OK  
+ 420.0  Hz |  0.016 s |   0.016s :  0.014   +  0.002   |   216.5    | In Memory          |   OK  
+ 430.0  Hz |  0.019 s |   0.016s :  0.014   +  0.003   |   216.5    | In Memory          |   OK  
+ 440.0  Hz |  0.020 s |   0.022s :  0.020   +  0.003   |   216.5    | In Memory          |   OK  
+ 450.0  Hz |  0.017 s |   0.024s :  0.021   +  0.003   |   216.5    | In Memory          |   OK  
+ 460.0  Hz |  0.022 s |   0.024s :  0.021   +  0.003   |   216.5    | In Memory          |   OK  
+ 470.0  Hz |  0.015 s |   0.021s :  0.018   +  0.003   |   216.5    | In Memory          |   OK  
+ 480.0  Hz |  0.015 s |   0.016s :  0.013   +  0.003   |   216.6    | In Memory          |   OK  
+ 490.0  Hz |  0.019 s |   0.023s :  0.021   +  0.002   |   216.6    | In Memory          |   OK  
+ 500.0  Hz |  0.017 s |   0.023s :  0.020   +  0.003   |   216.6    | In Memory          |   OK  
+ 510.0  Hz |  0.018 s |   0.019s :  0.016   +  0.003   |   216.6    | In Memory          |   OK  
+ 520.0  Hz |  0.019 s |   0.023s :  0.021   +  0.003   |   216.6    | In Memory          |   OK  
+ 530.0  Hz |  0.016 s |   0.021s :  0.018   +  0.003   |   216.6    | In Memory          |   OK  
+ 540.0  Hz |  0.019 s |   0.026s :  0.022   +  0.003   |   216.6    | In Memory          |   OK  
+ 550.0  Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   216.6    | In Memory          |   OK  
+ 560.0  Hz |  0.016 s |   0.016s :  0.014   +  0.002   |   216.6    | In Memory          |   OK  
+ 570.0  Hz |  0.015 s |   0.019s :  0.017   +  0.003   |   216.7    | In Memory          |   OK  
+ 580.0  Hz |  0.018 s |   0.022s :  0.019   +  0.003   |   216.7    | In Memory          |   OK  
+ 590.0  Hz |  0.016 s |   0.019s :  0.017   +  0.003   |   216.7    | In Memory          |   OK  
+ 600.0  Hz |  0.018 s |   0.023s :  0.021   +  0.003   |   216.7    | In Memory          |   OK  
+ 610.0  Hz |  0.018 s |   0.018s :  0.015   +  0.003   |   216.7    | In Memory          |   OK  
+ 620.0  Hz |  0.022 s |   0.020s :  0.018   +  0.003   |   216.7    | In Memory          |   OK  
+ 630.0  Hz |  0.021 s |   0.019s :  0.017   +  0.002   |   216.7    | In Memory          |   OK  
+ 640.0  Hz |  0.015 s |   0.017s :  0.014   +  0.003   |   216.7    | In Memory          |   OK  
+ 650.0  Hz |  0.017 s |   0.019s :  0.016   +  0.003   |   216.7    | In Memory          |   OK  
+ 660.0  Hz |  0.019 s |   0.016s :  0.013   +  0.003   |   216.7    | In Memory          |   OK  
+ 670.0  Hz |  0.016 s |   0.017s :  0.015   +  0.003   |   216.8    | In Memory          |   OK  
+ 680.0  Hz |  0.021 s |   0.022s :  0.019   +  0.003   |   216.9    | In Memory          |   OK  
+ 690.0  Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   216.9    | In Memory          |   OK  
+ 700.0  Hz |  0.018 s |   0.019s :  0.016   +  0.003   |   216.9    | In Memory          |   OK  
+ 710.0  Hz |  0.020 s |   0.020s :  0.017   +  0.003   |   216.9    | In Memory          |   OK  
+ 720.0  Hz |  0.015 s |   0.022s :  0.020   +  0.003   |   216.9    | In Memory          |   OK  
+ 730.0  Hz |  0.017 s |   0.026s :  0.023   +  0.004   |   216.9    | In Memory          |   OK  
+ 740.0  Hz |  0.020 s |   0.027s :  0.024   +  0.003   |   216.9    | In Memory          |   OK  
+ 750.0  Hz |  0.020 s |   0.024s :  0.021   +  0.003   |   216.9    | In Memory          |   OK  
+ 760.0  Hz |  0.016 s |   0.017s :  0.014   +  0.003   |   216.9    | In Memory          |   OK  
+ 770.0  Hz |  0.017 s |   0.020s :  0.017   +  0.003   |   216.9    | In Memory          |   OK  
+ 780.0  Hz |  0.019 s |   0.025s :  0.022   +  0.003   |   216.9    | In Memory          |   OK  
+ 790.0  Hz |  0.017 s |   0.018s :  0.016   +  0.003   |   216.9    | In Memory          |   OK  
+ 800.0  Hz |  0.021 s |   0.027s :  0.024   +  0.003   |   216.9    | In Memory          |   OK  
+ 810.0  Hz |  0.019 s |   0.020s :  0.017   +  0.003   |   216.9    | In Memory          |   OK  
+ 820.0  Hz |  0.025 s |   0.021s :  0.018   +  0.003   |   216.9    | In Memory          |   OK  
+ 830.0  Hz |  0.021 s |   0.021s :  0.020   +  0.002   |   216.9    | In Memory          |   OK  
+ 840.0  Hz |  0.023 s |   0.023s :  0.021   +  0.003   |   216.9    | In Memory          |   OK  
+ 850.0  Hz |  0.020 s |   0.020s :  0.017   +  0.003   |   216.9    | In Memory          |   OK  
+ 860.0  Hz |  0.016 s |   0.023s :  0.020   +  0.003   |   216.9    | In Memory          |   OK  
+ 870.0  Hz |  0.020 s |   0.020s :  0.017   +  0.003   |   216.9    | In Memory          |   OK  
+ 880.0  Hz |  0.015 s |   0.021s :  0.018   +  0.003   |   216.9    | In Memory          |   OK  
+ 890.0  Hz |  0.020 s |   0.020s :  0.018   +  0.003   |   216.9    | In Memory          |   OK  
+ 900.0  Hz |  0.017 s |   0.021s :  0.019   +  0.003   |   216.9    | In Memory          |   OK  
+ 910.0  Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   216.9    | In Memory          |   OK  
+ 920.0  Hz |  0.016 s |   0.021s :  0.018   +  0.003   |   217.0    | In Memory          |   OK  
+ 930.0  Hz |  0.021 s |   0.021s :  0.018   +  0.003   |   217.0    | In Memory          |   OK  
+ 940.0  Hz |  0.019 s |   0.020s :  0.018   +  0.002   |   217.0    | In Memory          |   OK  
+ 950.0  Hz |  0.018 s |   0.024s :  0.021   +  0.003   |   217.0    | In Memory          |   OK  
+ 960.0  Hz |  0.017 s |   0.024s :  0.021   +  0.003   |   217.0    | In Memory          |   OK  
+ 970.0  Hz |  0.016 s |   0.017s :  0.014   +  0.003   |   217.0    | In Memory          |   OK  
+ 980.0  Hz |  0.019 s |   0.018s :  0.015   +  0.003   |   217.0    | In Memory          |   OK  
+ 990.0  Hz |  0.020 s |   0.026s :  0.023   +  0.003   |   217.0    | In Memory          |   OK  
+ 1000.0 Hz |  0.021 s |   0.024s :  0.021   +  0.003   |   217.1    | In Memory          |   OK  
+ 1010.0 Hz |  0.016 s |   0.018s :  0.016   +  0.003   |   217.1    | In Memory          |   OK  
+ 1020.0 Hz |  0.015 s |   0.023s :  0.021   +  0.003   |   217.1    | In Memory          |   OK  
+ 1030.0 Hz |  0.020 s |   0.019s :  0.016   +  0.003   |   217.1    | In Memory          |   OK  
+ 1040.0 Hz |  0.016 s |   0.019s :  0.016   +  0.003   |   217.1    | In Memory          |   OK  
+ 1050.0 Hz |  0.015 s |   0.024s :  0.021   +  0.003   |   217.1    | In Memory          |   OK  
+ 1060.0 Hz |  0.016 s |   0.023s :  0.020   +  0.003   |   217.1    | In Memory          |   OK  
+ 1070.0 Hz |  0.023 s |   0.022s :  0.019   +  0.003   |   217.1    | In Memory          |   OK  
+ 1080.0 Hz |  0.019 s |   0.022s :  0.019   +  0.003   |   217.1    | In Memory          |   OK  
+ 1090.0 Hz |  0.016 s |   0.016s :  0.014   +  0.002   |   217.1    | In Memory          |   OK  
+ 1100.0 Hz |  0.019 s |   0.019s :  0.016   +  0.003   |   217.1    | In Memory          |   OK  
+ 1110.0 Hz |  0.020 s |   0.022s :  0.019   +  0.003   |   217.1    | In Memory          |   OK  
+ 1120.0 Hz |  0.021 s |   0.020s :  0.017   +  0.003   |   217.1    | In Memory          |   OK  
+ 1130.0 Hz |  0.017 s |   0.018s :  0.015   +  0.003   |   217.1    | In Memory          |   OK  
+ 1140.0 Hz |  0.018 s |   0.022s :  0.018   +  0.003   |   217.1    | In Memory          |   OK  
+ 1150.0 Hz |  0.020 s |   0.017s :  0.014   +  0.003   |   217.1    | In Memory          |   OK  
+ 1160.0 Hz |  0.016 s |   0.018s :  0.016   +  0.002   |   217.1    | In Memory          |   OK  
+ 1170.0 Hz |  0.019 s |   0.022s :  0.019   +  0.003   |   217.1    | In Memory          |   OK  
+ 1180.0 Hz |  0.017 s |   0.023s :  0.020   +  0.003   |   217.1    | In Memory          |   OK  
+ 1190.0 Hz |  0.016 s |   0.017s :  0.014   +  0.003   |   217.1    | In Memory          |   OK  
+ 1200.0 Hz |  0.019 s |   0.025s :  0.021   +  0.003   |   217.1    | In Memory          |   OK  
 ==================================================================================================
 
  --> Results output was turned off. Set --results=paraview if required
@@ -320,7 +320,7 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
     A = Input or TIED Area | TSW = Total Sound Power sum from all frequencies
 
      'inlet' | A = 7498.88 L^2 | TSW_real = 4.404e-10 | TSW_imag = 5.661e-12 | TSW_mag = 4.448e-10
-     'outlet' | A = 7496.42 L^2 | TSW_real = 3.2e-10 | TSW_imag = -4.103e-28 | TSW_mag = 3.2e-10
+     'outlet' | A = 7496.42 L^2 | TSW_real = 3.2e-10 | TSW_imag = -3.467e-28 | TSW_mag = 3.2e-10
      'Tie-1_Master' | A = 7497.6 L^2 | TSW_real = 3.779e-10 | TSW_imag = -7.97e-12 | TSW_mag = 3.801e-10
      'Tie-1_Slave' | A = 7497.6 L^2 | TSW_real = 3.773e-10 | TSW_imag = 7.883e-12 | TSW_mag = 3.795e-10
 
@@ -328,19 +328,19 @@ CASE 6: VELO @ INLET & IMPE(z = rho x c) @ OUTLET | OPen pipe both ends; i.e. no
      Freq / Power graphs plotted to: ( '06_zones_pipe_1m_power.png' )
 
 --> COMPLETED all Multi-Zone Frequency Steps + POST power sums <--
-    Function 'averaged_at_nodes' took: ( 0.51s )
-    Export Write and VTU Processing:   ( 2.21s )
+    Function 'averaged_at_nodes' took: ( 0.46s )
+    Export Write and VTU Processing:   ( 2.22s )
 
 [i] Shared Memory released.
 
     ==========================
     *** SIMULATION SUMMARY ***
     ==========================
-    Simulation Finished at: Tue Oct 13 12:40:33 2026
-    Total Elapsed Time:     10.19 seconds ( 0.17 minutes )
+    Simulation Finished at: Mon Oct 19 14:00:38 2026
+    Total Elapsed Time:     10.47 seconds ( 0.17 minutes )
     Total Frequencies:      119
-    Avg Time per Freq:      0.086 seconds/Freq: 
-                            Assy ( 0.024s ) + BEM ( 0.017s ) + Mics ( 0.004s ) + Export ( 0.023s )
+    Avg Time per Freq:      0.088 seconds/Freq: 
+                            Assy ( 0.024s ) + BEM ( 0.018s ) + Mics ( 0.004s ) + Export ( 0.022s )
 
     Check '06_zones_pipe_1m.log' for more details.
     Open  '06_zones_pipe_1m_Results.pvd' in ParaView.

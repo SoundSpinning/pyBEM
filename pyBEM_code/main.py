@@ -254,6 +254,20 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
             # 2. Build continuous projection weights & mortar interface tables
             W_slave_to_master, W_master_to_slave, master_elements, slave_elements, _ = compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes)
+            
+            # Force master_elements and slave_elements to match the pruned dictionary keys strictly
+            slave_elements = list(W_slave_to_master.keys())
+            master_elements = list(W_master_to_slave.keys())
+            
+            # # Correctly aggregate across all active tie interfaces
+            # active_master_eids = []
+            # active_slave_eids = []
+            # for tie_info in tie_registry.values():
+            #     active_master_eids.extend(tie_info.get('active_master_eids', []))
+            #     active_slave_eids.extend(tie_info.get('active_slave_eids', []))
+
+            # master_elements = list(dict.fromkeys(active_master_eids))
+            # slave_elements = list(dict.fromkeys(active_slave_eids))
 
             # DEBUG
             logger.debug(f"\nDEBUG: === TIED pairs info ===")
@@ -395,7 +409,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
                 logger.debug(f"MAX Split_Quads 'z_H_stat' residual: {max_res}")
 
-                # STOP_RUN()
+                STOP_RUN()
             # DEBUG_end
             
             # Save local results cleanly into the zone storage dictionary
@@ -769,6 +783,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 """
         logger.info(summary_log)
     except (ValueError, RuntimeError) as e:
+        # # DEBUG: Temporarily force traceback for debugging
+        # logger.error(f"\n [!] Input ERROR, please check your BEM model setup.\n{e}", exc_info=True)
         # Expected user/input/mesh errors -> Clean 1-line log, no traceback
         logger.error(f"\n [!] Input ERROR, please check your BEM model setup.\n{e}")
     except OSError as e:
