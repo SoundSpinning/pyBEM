@@ -252,22 +252,18 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             if not tie_registry:
                 raise RuntimeError(" [!] PRE-PROCESSING FAILED: Tie definitions exist, but 0 tie connections were matched.\n")
 
+            # DEBUG
+            logger.debug(f"\nDEBUG: === TIED pairs info BEFORE clipping & weights ===")
+            logger.debug("tie_registry:")
+            logger.debug(tie_registry)
+            # DEBUG_end
+            
             # 2. Build continuous projection weights & mortar interface tables
             W_slave_to_master, W_master_to_slave, master_elements, slave_elements, _ = compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes)
             
             # Force master_elements and slave_elements to match the pruned dictionary keys strictly
             slave_elements = list(W_slave_to_master.keys())
             master_elements = list(W_master_to_slave.keys())
-            
-            # # Correctly aggregate across all active tie interfaces
-            # active_master_eids = []
-            # active_slave_eids = []
-            # for tie_info in tie_registry.values():
-            #     active_master_eids.extend(tie_info.get('active_master_eids', []))
-            #     active_slave_eids.extend(tie_info.get('active_slave_eids', []))
-
-            # master_elements = list(dict.fromkeys(active_master_eids))
-            # slave_elements = list(dict.fromkeys(active_slave_eids))
 
             # DEBUG
             logger.debug(f"\nDEBUG: === TIED pairs info ===")

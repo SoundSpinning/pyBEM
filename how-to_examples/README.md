@@ -1,6 +1,6 @@
 # pyBEM: How-To Guide & Multi-Zone Examples
 
-Welcome to the `how-to_examples` directory for **pyBEM (V0.5.4-alpha)**. This guide details the workflow for creating, exporting, and verifying multi-zone Boundary Element Method (BEM) acoustic models using `PrePoMax` and `pyBEM`. Furthermore, results with ready to run models for several examples are explained and supplied.
+Welcome to the `how-to_examples` directory for **pyBEM (V0.5.5-alpha)**. This guide details the workflow for creating, exporting, and verifying multi-zone Boundary Element Method (BEM) acoustic models using `PrePoMax` and `pyBEM`. Furthermore, results with ready to run models for several examples are explained and supplied.
 
 ---
 
