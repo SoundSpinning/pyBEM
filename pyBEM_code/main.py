@@ -471,7 +471,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         t_pre = time.time() - t_pre_start
         
         # ==================================================================
-        # --- 12. PACK MULTI-ZONE DATA FOR PARALLEL WORKERS ---
+        # --- 12. PACK MULTI-ZONE DATA FOR (PARALLEL) WORKER(s) ---
         # ==================================================================
         # Build dictionaries holding the explicit material props for each zone
         global_c = {}
@@ -515,43 +515,77 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             'n_mics_nodes': n_mics_nodes
         }
         
+        # # --- Dynamic Resource Governor Allocation ---
+        # # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
+        # # Start costing workers for parallel freq solve based on n_CPUS & RAM estimates at PRE
+        # # We can actually estimate the +RAM at solve based on BEM n_els & MICS n_mics_nodes
+        # # We add 25% on top for overheads in py & windows, etc as per testing to date.
+        # pre_RAM_gb = get_ram() / 1024.0
+        # cost_per_worker_gb = (((total_matrix_size**2 * 16 * 2.5) + (n_bem_els * n_mics_nodes * 32)) * 1.25 / 1024**3) + 0.5
+        # safe_RAM_limit_gb = max(0.5, RAM_gb - pre_RAM_gb)
+        # n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
+
+        # ==================================================================
+        # --- 12.1 RESOURCE GOVERNOR & WORKER ALLOCATION ---
+        # ==================================================================
         # --- Dynamic Resource Governor Allocation ---
-        # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
-        # Start costing workers for parallel freq solve based on n_CPUS & RAM estimates at PRE
-        # We can actually estimate the +RAM at solve based on BEM n_els & MICS n_mics_nodes
-        # We add 25% on top for overheads in py & windows, etc as per testing to date.
-        pre_RAM_gb = get_ram() / 1024.0
-        cost_per_worker_gb = (((total_matrix_size**2 * 16 * 2.5) + (n_bem_els * n_mics_nodes * 32)) * 1.25 / 1024**3) + 0.5
-        safe_RAM_limit_gb = max(0.5, RAM_gb - pre_RAM_gb)
-        n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
+        # Cost estimate per worker based on matrix size and workspace requirements
+        matrix_bytes = total_matrix_size**2 * 16  # complex128 storage
         
+        # LAPACK direct solvers (LU factorization) typically require workspace overhead, 
+        # roughly equal to the matrix size itself, plus rhs storage.
+        solver_workspace_bytes = matrix_bytes * 1.5 
+        
+        # Mic evaluation arrays and transfer vectors
+        mics_overhead_bytes = n_bem_els * n_mics_nodes * 16
+        
+        # Total per-worker RAM in GB with a single, transparent 15% system buffer
+        cost_per_worker_gb = ((matrix_bytes + solver_workspace_bytes + mics_overhead_bytes) * 1.15) / (1024**3)
+
+        # If running single-worker (default), we bypass shared-memory pickling entirely,
+        # since the main process holds all arrays directly in memory.
+        # We force a default of 1 CPU (sequential) solve, it seems fast enough vs parallel freqs; 
+        # based on loads of testing to date on a single PC.
         if user_ncpus is not None:
             num_workers = user_ncpus
         else:
-            # we force 1 CPU (sequential) solve, it seems fast enough vs parallel freqs; 
-            # based on loads of testing to date on a single PC.
             num_workers = 1
-
-            # OLD code for auto-parallel workers (Freqs) experiments.
-            # num_workers = max(1, min(n_CPUs - 1, n_potential_workers)) if n_potential_workers > 1 else 1
         
         # Determine Numba threads per worker based on Physical Cores
         threads_per_worker = max(1, n_CPUs // num_workers)
         set_num_threads(threads_per_worker)
-        
+
+        pre_RAM_gb = get_ram() / 1024.0
+        safe_RAM_limit_gb = max(0.5, RAM_gb - pre_RAM_gb)
+        n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
+
+#  Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f} GB ):
+#  Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB ) | Parallel Frequency Workers: ( {num_workers} )
+#  [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( {threads_per_worker} )
+#      Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
+#      which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
+
+        if num_workers > 1:
+            execution_mode_msg = f"Multi-Worker Parallel Solve ({num_workers} Workers, Shared Memory Enabled)"
+            logger.info("\n [i] Promoting heavy arrays to Shared Memory for multiprocessing...")
+            shm_static_data = promote_to_shm(static_data)
+        else:
+            execution_mode_msg = "Single-Worker Sequential Solve (Direct RAM Access, No Pickling Overhead)"
+            # logger.info("\n [i] Skipping Shared Memory promotion (running directly in main process).")
+            shm_static_data = static_data  # Direct dictionary reference, zero serialization cost!
+
         log_pre_stats = (f"""
  [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
      BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f} GB )
      
- Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f} GB ):
- Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB ) | Parallel Frequency Workers: ( {num_workers} )
- [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( {threads_per_worker} )
-     Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
-     which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
+ [i] Execution Mode: {execution_mode_msg}
+     Numba MAX CPUs set to: ( {threads_per_worker} )
+     Numpy / LAPACK internal multithreading set to: ( {n_CPUs} ) cores
+     Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB )
 """)
         logger.info(log_pre_stats)
-        logger.info(" [i] Promoting heavy arrays to Shared Memory ...")
-        shm_static_data = promote_to_shm(static_data)
+        if num_workers == 1:
+            logger.info(" [i] Running sequential frequency sweep in main process...")
 
         file_logger.info(f"\n{'=' * 98}")
         file_logger.info(f" {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}")
@@ -577,7 +611,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         logger.debug(f"=====================")
 
         # ==================================================================
-        # --- 13. THE PARALLEL SWEEP POOL INTERFACE ---
+        # --- 13. FREQUENCY SWEEP SOLVER EXECUTION ---
         # ==================================================================
         rslt_f = 'In Memory'
         # Terminal progress bar  
@@ -585,26 +619,18 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         pbar = tqdm(total=num_freqs, desc=" Done", ncols=80, unit="Freq", colour="#ddcd3e")
         
         try:
-            with ProcessPoolExecutor(
-                max_workers = num_workers,
-                initializer = init_worker,
-                initargs = (shm_static_data, threads_per_worker, log_f, constants.debug_mode)
-            ) as executor:
+            if num_workers == 1:
+                # --- SEQUENTIAL PATH (Direct Execution, Zero Pickling Overhead) ---
+                # Initialize the worker global state directly in the main process
+                init_worker(static_data, threads_per_worker, log_f, constants.debug_mode)
                 
-                # Submit all multi-zone frequency calculations to the pool
-                futures = {
-                    executor.submit(frequency_worker, f, bc_map, sorted_bem_ids, threads_per_worker): f 
-                    for f in parser.frequencies
-                }
-
-                for future in as_completed(futures):
-                    # Unpack the frequency step results returned by the worker
-                    f_done, nodal_pressures, meta = future.result()
+                for f in parser.frequencies:
+                    f_done, nodal_pressures, meta = frequency_worker(
+                        f, bc_map, sorted_bem_ids, threads_per_worker
+                    )
                     
-                    # Get the correct sorted row sequence index for this frequency
+                    # Unpack and store results identically to the pool version...
                     f_matrix_idx = freq_to_idx_map[f_done]
-                    
-                    # --- STORE THE UN-AVERAGED FIELDS DIRECTLY INTO GLOBAL MATRICES ---
                     global_p_surf[f_matrix_idx, :] = meta['p_surf']
                     global_v_surf[f_matrix_idx, :] = meta['v_surf']
                     
@@ -614,40 +640,80 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                         global_v_mics_y[f_matrix_idx, :] = meta['v_mics_y']
                         global_v_mics_z[f_matrix_idx, :] = meta['v_mics_z']
                     
-                    # 13.1 Update precise timing and benchmark info
                     t_assembly = meta['t_assembly']
                     global_assy += t_assembly
-                    
                     t_solve_bem = meta['t_solve_bem']
                     global_BEM += t_solve_bem
-                    
                     t_solve_mics = meta['t_solve_mics']
                     t_solve = t_solve_bem + t_solve_mics
                     global_mics += t_solve_mics
-                    
                     all_t_avr += meta['t_avrg_nodes']
                     solve_RAM = meta['solve_RAM']
                     
-                    # 13.2 Pass results to ParaView exporter in RAM
                     if constants.results_type == "paraview":
                         exporter.add_frequency_step(f_done, nodal_pressures)
                     
-                    # 13.3 Update UI progress bars
                     pbar.update(1)
                     pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
-                    # solve_RAM_2 = get_ram()  # Monitor local parent RAM step changes
                     
-                    # 13.4 Write to log
-                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}")
+                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}")
                     file_logger.info(log_line)
+
+            else:
+                # --- PARALLEL PATH (ProcessPoolExecutor for multiple workers) ---
+                with ProcessPoolExecutor(
+                    max_workers = num_workers,
+                    initializer = init_worker,
+                    initargs = (shm_static_data, threads_per_worker, log_f, constants.debug_mode)
+                ) as executor:
+                    
+                    futures = {
+                        executor.submit(frequency_worker, f, bc_map, sorted_bem_ids, threads_per_worker): f 
+                        for f in parser.frequencies
+                    }
+
+                    for future in as_completed(futures):
+                        f_done, nodal_pressures, meta = future.result()
+                        f_matrix_idx = freq_to_idx_map[f_done]
+                        
+                        global_p_surf[f_matrix_idx, :] = meta['p_surf']
+                        global_v_surf[f_matrix_idx, :] = meta['v_surf']
+                        
+                        if n_mics_nodes > 0 and meta['p_mics'] is not None:
+                            global_p_mics[f_matrix_idx, :] = meta['p_mics']
+                            global_v_mics_x[f_matrix_idx, :] = meta['v_mics_x']
+                            global_v_mics_y[f_matrix_idx, :] = meta['v_mics_y']
+                            global_v_mics_z[f_matrix_idx, :] = meta['v_mics_z']
+                        
+                        t_assembly = meta['t_assembly']
+                        global_assy += t_assembly
+                        t_solve_bem = meta['t_solve_bem']
+                        global_BEM += t_solve_bem
+                        t_solve_mics = meta['t_solve_mics']
+                        t_solve = t_solve_bem + t_solve_mics
+                        global_mics += t_solve_mics
+                        all_t_avr += meta['t_avrg_nodes']
+                        solve_RAM = meta['solve_RAM']
+                        
+                        if constants.results_type == "paraview":
+                            exporter.add_frequency_step(f_done, nodal_pressures)
+                        
+                        pbar.update(1)
+                        pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
+                        
+                        log_line = (f" {f_done:<7.1f}Hz | {t_assembly/num_workers:^7.3f}s | {t_solve/num_workers:>7.3f}s : {t_solve_bem/num_workers:^8.3f} + {t_solve_mics/num_workers:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}")
+                        file_logger.info(log_line)
                         
         finally:
-            # Safely releases shared memory allocations regardless of success or sudden crash
-            global_shm_cleanup()
-
-        file_logger.info(f"{'=' * 98}")
-        pbar.close()  # Close terminal progress bar
-        print(f"{'=' * 80}")
+            file_logger.info(f"{'=' * 98}")
+            pbar.close()  # Close terminal progress bar
+            print(f"{'=' * 80}")
+            
+            if num_workers > 1:
+                global_shm_cleanup()
+                logger.info("[i] Shared Memory released.")
+            else:
+                logger.info("[i] No shared memory to clean up (single-worker mode).")
 
         # 13.5 Finalize and write complete VTU outputs to disk
         if constants.results_type == "paraview":
@@ -760,8 +826,6 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 --> COMPLETED all Multi-Zone Frequency Steps + POST power sums <--
     Function 'averaged_at_nodes' took: ( {all_t_avr:.2f}s )
     Export Write and VTU Processing:   ( {all_t_exp:.2f}s )
-
-[i] Shared Memory released.
 """
         summary_log += f"""
     ==========================
