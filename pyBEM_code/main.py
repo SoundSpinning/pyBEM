@@ -21,7 +21,7 @@ from utils import (
     STOP_RUN, get_cpus, set_hardware_limits, get_ram, prepare_geometry, 
     get_zone_data, validate_and_log_zones, resolve_tie_interfaces, 
     compute_tie_area_weights, get_global_offsets,
-    setup_logger, build_tie_summary_log
+    setup_logger, tie_top_log, build_tie_summary_log
 )
 
 # Configuration
@@ -44,7 +44,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     parser.add_argument(
         "--cpus", 
         type=int, default=None, 
-        help="Number of CPUs to use for parallel Freqs solve. Defaults to 1 CPU, while still multi-threading for matrix solve. pyBEM sets this automatically at the start based on machine specs, in order to minimise race conditions."
+        help="NOTE this is not a true parallel matrix solve, but Number of CPUs to solve Freqs in parallel. Defaults to 1 CPU, while still multi-threading for matrix solve. pyBEM sets this automatically at the start based on machine specs, in order to minimise race conditions. If cpus > 1, it'll require more RAM than defaults."
     )
     parser.add_argument(
         "--debug",
@@ -63,6 +63,12 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         type=float,
         default=constants.Wref,
         help=f"dB POWER reference (default: {constants.Wref}mW)",
+    )
+    parser.add_argument(
+        "--Vref",
+        type=float,
+        default=constants.Vref,
+        help=f"dB VELOCITY reference (default: {constants.Vref}mm/s)",
     )
     parser.add_argument(
         "--results",
@@ -90,6 +96,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     constants.debug_mode = args.debug
     constants.Pref = args.Pref
     constants.Wref = args.Wref
+    constants.Vref = args.Vref
     constants.results_type = args.results
     user_ncpus = args.cpus
     filename = args.filename
@@ -117,19 +124,23 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     try:
         # --- 4. SETUP PARSER & MODEL LOADING ---
         parser = PMXParser(filename)
-        parser.load_model()
-        damping = parser.damping if parser.damping else {'value': 0.0}
-        amps = parser.amplitudes
 
-        # 4.2 Log file & prints setup (Initializes directly into model_name.log)
+        # Log files & prints setup
         log_f = f"{parser.model_name}.log"
         log_f_debug = f"{parser.model_name}_debug.log"
         inp_f_debug = f"bem_{parser.model_name}.inp"
 
+        # Delete old files if they exist
         for f in [log_f, log_f_debug, inp_f_debug]:
             if os.path.exists(f):
                 os.remove(f)
+        # Setup full logger
         logger, file_logger = setup_logger(log_f, debug_mode=constants.debug_mode)
+
+        # Load / Parse the input file (*.inp)
+        parser.load_model()
+        damping = parser.damping if parser.damping else {'value': 0.0}
+        amps = parser.amplitudes
 
         # --- 5. MULTI-ZONE GEOMETRY EXTRACTION ---
         # 5.1 Global Sort (Ensures index maps and arrays match input sequentially)
@@ -247,6 +258,10 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         has_global_ties = bool(getattr(parser, 'ties', None))
         
         if has_global_ties:
+            # 0. Print headers / info if TIED pairs present
+            log_tie_top = tie_top_log(parser)
+            logger.info(log_tie_top)
+
             # 1. Resolve matching interface elements
             tie_registry = resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1e-3)
             if not tie_registry:
@@ -322,7 +337,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         log_CPUs = (f"""
  Number of CPUs found on this machine: ( {n_CPUs} ) | Number of threads: ( {n_threads} )
  MAX number of CPUs assigned to Numba parallel loops in PRE is: ( {used_CPUs} )
- Available RAM found at job start:     ( {RAM_gb:.2f} GB )
+ Available RAM found at job start:     ( {RAM_gb:.3f} GB )
  Global Multi-Zone Matrix Structure:   ( {total_matrix_size} x {total_matrix_size} ) DOF
 
  [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
@@ -405,7 +420,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 max_res = np.max(np.abs(z_H_stat.sum(axis=1)))
                 logger.debug(f"MAX Split_Quads 'z_H_stat' residual: {max_res}")
 
-                STOP_RUN()
+                # STOP_RUN()
             # DEBUG_end
             
             # Save local results cleanly into the zone storage dictionary
@@ -514,16 +529,6 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             'n_bem_els': n_bem_els,
             'n_mics_nodes': n_mics_nodes
         }
-        
-        # # --- Dynamic Resource Governor Allocation ---
-        # # Here we try to auto-balance: RAM || py workers || n_CPUS for parallel solve/loops 
-        # # Start costing workers for parallel freq solve based on n_CPUS & RAM estimates at PRE
-        # # We can actually estimate the +RAM at solve based on BEM n_els & MICS n_mics_nodes
-        # # We add 25% on top for overheads in py & windows, etc as per testing to date.
-        # pre_RAM_gb = get_ram() / 1024.0
-        # cost_per_worker_gb = (((total_matrix_size**2 * 16 * 2.5) + (n_bem_els * n_mics_nodes * 32)) * 1.25 / 1024**3) + 0.5
-        # safe_RAM_limit_gb = max(0.5, RAM_gb - pre_RAM_gb)
-        # n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
 
         # ==================================================================
         # --- 12.1 RESOURCE GOVERNOR & WORKER ALLOCATION ---
@@ -532,15 +537,20 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         # Cost estimate per worker based on matrix size and workspace requirements
         matrix_bytes = total_matrix_size**2 * 16  # complex128 storage
         
-        # LAPACK direct solvers (LU factorization) typically require workspace overhead, 
-        # roughly equal to the matrix size itself, plus rhs storage.
-        solver_workspace_bytes = matrix_bytes * 1.5 
+        # # LAPACK direct solvers (LU factorization) typically require workspace overhead, 
+        # # roughly equal to the matrix size itself, plus rhs storage.
+        # solver_workspace_bytes = matrix_bytes * 0.3 
         
-        # Mic evaluation arrays and transfer vectors
-        mics_overhead_bytes = n_bem_els * n_mics_nodes * 16
+        # Precise per-zone microphone transfer evaluation memory
+        mics_overhead_bytes = 0
+        for zone_name, p_mics in pre_mics_data.items():
+            if zone_name in pre_bem_data:
+                n_zone_els = len(pre_bem_data[zone_name]['centers'])
+                n_zone_mics = p_mics.get('num_mics', 0)
+                mics_overhead_bytes += n_zone_els * n_zone_mics * 16
         
-        # Total per-worker RAM in GB with a single, transparent 15% system buffer
-        cost_per_worker_gb = ((matrix_bytes + solver_workspace_bytes + mics_overhead_bytes) * 1.15) / (1024**3)
+        # Total per-worker RAM in GB with a 20% system buffer
+        cost_per_worker_gb = ((matrix_bytes + mics_overhead_bytes) * 1.20) / (1024**3)
 
         # If running single-worker (default), we bypass shared-memory pickling entirely,
         # since the main process holds all arrays directly in memory.
@@ -557,13 +567,8 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         pre_RAM_gb = get_ram() / 1024.0
         safe_RAM_limit_gb = max(0.5, RAM_gb - pre_RAM_gb)
+        solve_RAM = pre_RAM_gb + (cost_per_worker_gb * num_workers)
         n_potential_workers = int(safe_RAM_limit_gb // cost_per_worker_gb)
-
-#  Heuristic estimates for Frequency Sweep based on RAM available ( {RAM_gb:.2f} GB ):
-#  Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB ) | Parallel Frequency Workers: ( {num_workers} )
-#  [i] To avoid race conditions in parallel sums, Numba MAX CPUs is set to ( {threads_per_worker} )
-#      Numpy solve [np.linalg.solve(A, B)] calls into LAPACK (Intel MKL or OpenBLAS), 
-#      which already does parallel solving. MAX CPUs for Numpy is set to ( {n_CPUs} )
 
         if num_workers > 1:
             execution_mode_msg = f"Multi-Worker Parallel Solve ({num_workers} Workers, Shared Memory Enabled)"
@@ -576,20 +581,27 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
 
         log_pre_stats = (f"""
  [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( {t_pre:.2f}s )
-     BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | RAM ( {pre_RAM_gb:.3f} GB )
+     BEM: ( {t_pre_assy:.3f}s ) | MICS: ( {t_pre_mics:.3f}s ) | allocated RAM ( {pre_RAM_gb:.3f} GB )
      
  [i] Execution Mode: {execution_mode_msg}
      Numba MAX CPUs set to: ( {threads_per_worker} )
      Numpy / LAPACK internal multithreading set to: ( {n_CPUs} ) cores
-     Estimated (+)RAM per Freq: ( {cost_per_worker_gb:.2f} GB )
+     Estimated total RAM per Freq: ( {solve_RAM:.3f} GB )
 """)
+        if solve_RAM > solve_RAM:
+            log_pre_stats += (f" [!] Warning: estimated solver RAM seems larger than available. Job may crash with OOM error.")
         logger.info(log_pre_stats)
         if num_workers == 1:
             logger.info(" [i] Running sequential frequency sweep in main process...")
 
         file_logger.info(f"\n{'=' * 98}")
-        file_logger.info(f" {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (MB)':^10} | {'Results file':<18} | {'Status':^6}")
+        file_logger.info(f" {'Freq (Hz)':<9} | {'Assembly':^8} | {'Solve All':>9}: {'BEM':^8} + {'Mics':^8} | {'RAM (GB)':^10} | {'Results file':<18} | {'Status':^6}")
         file_logger.info(f"{'=' * 98}")
+
+        # DEBUG
+        if constants.debug_mode:
+            STOP_RUN()
+        # DEBUG_end
 
         # ==================================================================
         # --- 13. PRE-ALLOCATE GLOBAL SOLVER RESULTS FOR SOUND POWER ---
@@ -656,7 +668,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                     pbar.update(1)
                     pbar.set_postfix({"Freq": f"{f_done:.1f}Hz"})
                     
-                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM:^10.1f} | {rslt_f:<18} | {'OK':^6}")
+                    log_line = (f" {f_done:<7.1f}Hz | {t_assembly:^7.3f}s | {t_solve:>7.3f}s : {t_solve_bem:^8.3f} + {t_solve_mics:^8.3f} | {solve_RAM/1024:^10.3f} | {rslt_f:<18} | {'OK':^6}")
                     file_logger.info(log_line)
 
             else:

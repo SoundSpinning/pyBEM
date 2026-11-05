@@ -1,8 +1,13 @@
 import os
 import numpy as np
+import logging
 import constants
 # from constants import SUPPORTED_KEYWORDS, SUB_KEYWORDS, TOP_LOG_LINES
 from version import __solver__
+
+# Module-level loggers (automatically connected to setup_logger from main.py)
+logger = logging.getLogger("pyBEM")           # Dual output (Terminal + Log file)
+file_logger = logging.getLogger("pyBEM.file_only") # File-only output
 
 class PMXParser:
     def __init__(self, file_path):
@@ -339,7 +344,7 @@ class PMXParser:
         Ensures the assigned material has density and bulk modulus.
         """
         if not self.sections:
-            raise ValueError(f"\n [!] ERROR: No *SHELL SECTION found. Check your .inp file.")
+            raise ValueError(f"\n [!] ERROR: No *SHELL SECTION found. Check your .inp file.\n")
         
         # Loop over every declared material zone to compute speed of sound
         for mat_name, mat_props in self.materials.items():
@@ -348,7 +353,7 @@ class PMXParser:
                 c_local = np.sqrt(mat_props['bulk'] / mat_props['density'])
                 mat_props['c'] = float(f"{c_local:.2f}")
             else:
-                raise ValueError(f"\n [!] ERROR: Material zone '{mat_name}' lacks valid density or bulk modulus.")
+                raise ValueError(f"\n [!] ERROR: Material zone '{mat_name}' lacks valid density or bulk modulus.\n")
             
         # Map element IDs to specific zones for downstream matrix routing
         for mat_name, elsets in self.zone_to_elsets.items():
@@ -388,8 +393,8 @@ class PMXParser:
             # 3. Assign bc_dict values to the map
             if not target_ids:
                 # Log an error if a BC is defined but hits no elements
-                log_bc_info += f"\n ERROR: BC target '{target_name}' could not be resolved to any elements.\n"
-                raise ValueError(f"{log_bc_info} [!] BC target '{target_name}' could not be resolved to any elements.\n    Please check your BCs were applied to the right surface or elset name.\n")
+                # log_bc_info += f"\n ERROR: BC target '{target_name}' could not be resolved to any elements.\n"
+                raise ValueError(f" [!] ERROR: BC target '{target_name}' could not be resolved to any BEM elements.\n     Please check your BCs were applied to the right surface or elset name.\n")
 
             for eid in target_ids:
                 if eid not in bc_dict: 
@@ -410,7 +415,7 @@ class PMXParser:
                                 bc_dict[eid][f'{bc['type']}_{amp}'] = bc[amp]
                     # Can't mix PRES with other BCs
                     elif bc['type'] != 'PRES' and 'PRES' in bc_dict[eid]:
-                        raise ValueError(f"{log_bc_info}\n [!] ERROR: Cannot mix PRES and other BCs type on the same element.\n     Please check your '{self.model_name}.inp' file.\n")
+                        raise ValueError(f" [!] ERROR: Cannot mix PRES and other BCs type on the same element.\n     Please check your '{self.model_name}.inp' file.\n")
                     # Allow for VELO + IMPE mix at same BEM element
                     elif bc['type'] != 'PRES' and bc['type'] not in bc_dict[eid]:
                         # Assign type (VELO, IMPE) and value

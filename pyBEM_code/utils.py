@@ -644,7 +644,7 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
         master_surface = parser.surfaces.get(master_surf_name)
         
         if not slave_surface or not master_surface:
-            logger.info(f" [ ! ] Warning: Tie '{tie_name}' references missing surfaces.")
+            logger.warning(f" [!] Warning: Tie '{tie_name}' references missing surfaces.")
             continue
             
         slave_elset = slave_surface.get('elset', slave_surf_name)
@@ -673,7 +673,7 @@ def resolve_tie_interfaces(parser, zones_mesh, sorted_nodes, default_tolerance=1
                     master_data[eid] = z_centers[idx]
 
         if not slave_zone or not master_zone:
-            logger.info(f" [ ! ] Warning: Skipping Tie '{tie_name}' - Zone ownership unresolved.")
+            logger.warning(f" [!] Warning: Skipping Tie '{tie_name}' - Zone ownership unresolved.")
             continue
 
         # 1. Spatial Gap Matching Pass (Finds true active overlaps first)
@@ -1063,9 +1063,9 @@ def compute_tie_area_weights(tie_registry, zones_mesh, sorted_nodes):
     return W_slave_to_master, W_master_to_slave, list(master_eids_set), list(slave_eids_set), log_pre_ties
 
 # Detailed TIED pairs logging
-def build_tie_summary_log(parser, tie_registry, W_slave_to_master, W_master_to_slave):
+def tie_top_log(parser):
     """
-    Assembles a unified, formatted and detailed diagnostic log for surface TIED pair constraints.
+    Print start header / info if TIED pair constraints present.
     """
     num_ties = len(parser.ties) if getattr(parser, 'ties', None) else 0
     
@@ -1074,16 +1074,24 @@ def build_tie_summary_log(parser, tie_registry, W_slave_to_master, W_master_to_s
     log.append("    *** SURFACE TIED PAIRS ***")
     log.append("    ==========================")
     
-    if not num_ties or not tie_registry:
+    if not num_ties:
         log.append("    [i] No *Tie constraints active or found in the model.\n")
         return "\n".join(log)
 
-    log.append(f"    Found a total of ( {num_ties} ) TIED pair constraint(s).\n")
+    log.append(f"    Found a total of ( {num_ties} ) TIED pair constraint(s). Calculating weights ...\n")
     log.append("    [i] RECOMMENDATION: Equal or similar mesh sizing is recommended on TIED surfaces.")
     log.append("        This helps for a stable area-weighted polygon clipping and mortar flux integration.")
     log.append("        'pyBEM' automatically checks, and if necessary, adjusts slave/master roles during PRE.")
     log.append("        This is indicated as '[ Auto-Swap ]').")
     log.append("    [i] 'h_CoG_avg' represents the average characteristic distance between element CoGs (DoF).")
+
+    return "\n".join(log)
+
+def build_tie_summary_log(parser, tie_registry, W_slave_to_master, W_master_to_slave):
+    """
+    Assembles a unified, formatted and detailed diagnostic log for surface TIED pair constraints.
+    """
+    log = [""]
 
     for tie_name, info in tie_registry.items():
         tie_slave_eids = set(info['active_slave_eids'])
@@ -1288,7 +1296,8 @@ def calculate_total_sound_power(
     surface_power_results = {
         surf_name: {
             "real": [], "imag": [], "mag": [],
-            "p_rms": [], "v_complex": [], "spl": []
+            "p_rms": [], "v_complex": [], "v_mag": [], 
+            "spl": [], "svl": []
         }
         for surf_name in all_surface_elements.keys()
     }
@@ -1421,7 +1430,9 @@ def calculate_total_sound_power(
                 surface_power_results[surf_name]["mag"].append(0.0)
                 surface_power_results[surf_name]["p_rms"].append(0.0)
                 surface_power_results[surf_name]["v_complex"].append(0.0)
+                surface_power_results[surf_name]["v_mag"].append(0.0)
                 surface_power_results[surf_name]["spl"].append(0.0)
+                surface_power_results[surf_name]["svl"].append(0.0)
                 continue
 
             first_eid = surf_elements[0]
@@ -1430,50 +1441,6 @@ def calculate_total_sound_power(
             surf_mag_pwr = 0.0
             surf_p_sq_accum = 0.0
             surf_v_accum = 0.0 + 0.0j
-
-            # # BREAKs some models --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
-            # if first_eid in global_bem_elements_map:
-            #     for eid in surf_elements:
-            #         if eid not in global_bem_elements_map:
-            #             continue
-            #         g_idx = global_bem_elements_map[eid]
-            #         P_elem = p_surf_f[g_idx]
-            #         V_elem = v_surf_f[g_idx]  # Normal velocity
-
-            #         # Handle active area weighting for tied sub-patches
-            #         if is_tied_patch:
-            #             w_effective = 0
-            #             # Fetch the effective tied fraction for this element from tie_registry
-            #             for tie_name, info in tie_registry.items():
-            #                 if surf_name == f"{tie_name}_Slave" and eid in W_slave_to_master:
-            #                     w_effective = sum(W_slave_to_master[eid].values())
-            #                     break
-            #                 elif surf_name == f"{tie_name}_Master" and eid in W_master_to_slave:
-            #                     w_effective = sum(W_master_to_slave[eid].values())
-            #                     break
-            #             area_elem = global_bem_areas[eid] * w_effective
-            #         else:
-            #             area_elem = global_bem_areas[eid]
-
-            #         # Complex intensity flux vector component: S_n = 0.5 * P * conj(V)
-            #         S_elem = 0.5 * P_elem * np.conj(V_elem)
-
-            #         surf_real_pwr += np.real(S_elem) * area_elem
-            #         surf_imag_pwr += np.imag(S_elem) * area_elem
-
-            #         # Surface pressure RMS and velocity accumulation
-            #         surf_p_sq_accum += (np.abs(P_elem) ** 2) * area_elem
-            #         surf_v_accum += V_elem * area_elem
-
-            #     surf_mag_pwr += np.sqrt(surf_real_pwr**2 + surf_imag_pwr**2)
-
-            #     # Sign inversion for non-tied, inward-driving boundary sources
-            #     if (
-            #         "tied" not in surf_name.lower()
-            #         and "[active]" not in surf_name.lower()
-            #         and surf_real_pwr < 0
-            #     ):
-            #         surf_real_pwr = -surf_real_pwr
 
             # --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
             if first_eid in global_bem_elements_map:
@@ -1560,8 +1527,9 @@ def calculate_total_sound_power(
             # --- AVERAGE METRICS & SPL CALCULATION ---
             p_rms_val = np.sqrt(max(surf_p_sq_accum / total_surf_area, 0.0))
             v_complex_val = surf_v_accum / total_surf_area
-            # v_mag_val = np.abs(surf_v_accum / total_surf_area)
+            v_mag_val = np.abs(v_complex_val)
             surf_spl_db = 20.0 * np.log10(max(p_rms_val, constants.log_floor) / constants.Pref)
+            surf_svl_db = 20.0 * np.log10(max(v_mag_val, constants.log_floor) / constants.Vref)
 
             # Append step results
             surface_power_results[surf_name]["real"].append(surf_real_pwr)
@@ -1569,7 +1537,9 @@ def calculate_total_sound_power(
             surface_power_results[surf_name]["mag"].append(surf_mag_pwr)
             surface_power_results[surf_name]["p_rms"].append(p_rms_val)
             surface_power_results[surf_name]["v_complex"].append(v_complex_val)
+            surface_power_results[surf_name]["v_mag"].append(v_mag_val)
             surface_power_results[surf_name]["spl"].append(surf_spl_db)
+            surface_power_results[surf_name]["svl"].append(surf_svl_db)
 
             surface_metrics[surf_name]["total_energy_sum_real"] += surf_real_pwr
             surface_metrics[surf_name]["total_energy_sum_imag"] += surf_imag_pwr
@@ -1605,7 +1575,9 @@ def calculate_total_sound_power(
             # Append new surface field metric headers
             headers.append(f"{hdr_base} | P_rms (MPa)")
             headers.append(f"{hdr_base} | V_mean (mm/s)")
+            headers.append(f"{hdr_base} | V_mag (mm/s)")
             headers.append(f"{hdr_base} | SPL (dB)")
+            headers.append(f"{hdr_base} | SVL (dB)")
 
         writer.writerow(headers)
 
@@ -1619,14 +1591,16 @@ def calculate_total_sound_power(
 
                 p_rms = surface_power_results[sname]["p_rms"][f_idx]
                 v_complex = surface_power_results[sname]["v_complex"][f_idx]
+                v_mag = surface_power_results[sname]["v_mag"][f_idx]
                 spl_db = surface_power_results[sname]["spl"][f_idx]
+                svl_db = surface_power_results[sname]["svl"][f_idx]
 
                 # Calculate SWL (dB re Wref) safely using absolute value for log scale
                 swl_real = 10.0 * np.log10(max(abs(w_real), constants.log_floor) / constants.Wref)
                 swl_imag = 10.0 * np.log10(max(abs(w_imag), constants.log_floor) / constants.Wref)
                 swl_mag = 10.0 * np.log10(max(abs(w_mag), constants.log_floor) / constants.Wref)
 
-                row.extend([w_real, w_imag, w_mag, swl_real, swl_imag, swl_mag, p_rms, v_complex, spl_db])
+                row.extend([w_real, w_imag, w_mag, swl_real, swl_imag, swl_mag, p_rms, v_complex, v_mag, spl_db, svl_db])
 
             writer.writerow(row)
 
@@ -1789,7 +1763,8 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                 non_tie_counter += 1
 
     # --- Build 3-Panel Side-by-Side Plot ---
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5.5), dpi=150)
+    # Increased figure height to 8.5 to accommodate bottom legends without crushing subplots
+    fig, axes = plt.subplots(1, 3, figsize=(18, 8.5), dpi=150)
 
     panels = [
         ("mag", "Apparent Power — SWL (Mag)"),
@@ -1858,16 +1833,19 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                     zorder=1,
                 )
 
-        ax.set_title(title_str, fontsize=11, fontweight="bold", pad=12)
-        ax.set_xlabel("Frequency (Hz)", fontsize=10, labelpad=6)
-        ax.set_ylabel("SWL (dB)", fontsize=10, labelpad=6)
+        ax.set_title(title_str, fontsize=13, fontweight="normal", pad=12, color="0.3")
+        # ax.set_title(title_str, fontsize=11, fontweight="bold", pad=12, color="gray")
+        ax.set_xlabel("Frequency (Hz)", fontsize=11, labelpad=6, color="0.3")
+        ax.set_ylabel("SWL (dB)", fontsize=11, labelpad=6, color="0.3")
 
         ax.set_xscale("log")
         ax.yaxis.set_tick_params(labelleft=True)
 
-        ax.grid(True, which="both", linestyle=":", color="#cccccc", alpha=0.8)
+        ax.grid(True, which="both", linestyle=":", color="#cccccc", alpha=1)
         ax.legend(
-            loc="best",
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.12),  # Shifts the legend just below the X-axis
+            ncol=1,                       
             frameon=True,
             facecolor="#ffffff",
             edgecolor="#cccccc",
@@ -1878,23 +1856,24 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
         f"Acoustic Sound Power Levels (SWL) — Model: {model_name} — pyBEM V{version.__version__}",
         fontsize=13,
         fontweight="bold",
-        y=0.98,
+        y=0.95,
     )
-    plt.tight_layout()
-    plt.subplots_adjust(top=0.88)
+    
+    # Reserve top for suptitle and bottom for the external legends
+    plt.subplots_adjust(top=0.87, bottom=0.3, wspace=0.22)
 
-    # Attempt normal save with fallback for locked files
+    # Attempt normal save with fallback for locked files (added bbox_inches='tight')
     try:
-        plt.savefig(png_filepath, dpi=150)
+        plt.savefig(png_filepath, dpi=150, bbox_inches="tight")
     except (PermissionError, OSError):
         suffix_alt = "_new"
         alt_filename = f"{model_name}_power{suffix_alt}.png"
         logger.warning(
-            f"     [Warning]: Could not overwrite ( '{png_filepath}' ), file is likely opened in a viewer.\n"
-            f"                 Saving fallback copy to ( '{alt_filename}' ) instead."
+            f"    [Warning]: Could not overwrite ( '{png_filepath}' ), file is likely opened in a viewer.\n"
+            f"                Saving fallback copy to ( '{alt_filename}' ) instead."
         )
         try:
-            plt.savefig(alt_filename, dpi=150)
+            plt.savefig(alt_filename, dpi=150, bbox_inches="tight")
             png_filepath = alt_filename
         except Exception as fallback_err:
             logger.error(f" [Error]: Failed to save plot: {fallback_err}")

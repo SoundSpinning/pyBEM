@@ -3,6 +3,7 @@ results_type = "paraview"  # --results CLI flag; set to None to turn off
 
 Pref = 2.0e-11   # SPL dB reference in MPa, mm models for air @20C
 Wref = 1.0e-9    # SWL dB reference in mili-Watts, mm models
+Vref = 5.0e-5    # VPL dB reference in mm/s, mm models
 
 # System-wide floating-point tolerances for double precision (float64 / complex128)
 # eps = Numerical machine noise, active/rigid status checks, preventing divide-by-zero in log10 or matrix scaling
