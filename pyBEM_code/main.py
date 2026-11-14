@@ -338,7 +338,7 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
  Number of CPUs found on this machine: ( {n_CPUs} ) | Number of threads: ( {n_threads} )
  MAX number of CPUs assigned to Numba parallel loops in PRE is: ( {used_CPUs} )
  Available RAM found at job start:     ( {RAM_gb:.3f} GB )
- Global Multi-Zone Matrix Structure:   ( {total_matrix_size} x {total_matrix_size} ) DOF
+ Global Multi-Zone Matrix Dimensions:  ( {total_matrix_size} x {total_matrix_size} ) i.e. {total_matrix_size} DoF
 
  [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
      Hold tight, it gets faster, see table with times per Freq in '{log_f}'.

@@ -1241,6 +1241,18 @@ def averaged_at_nodes(nodes, elements, P_bem, bem_areas, elem_id_map, ordered_mi
 
     return nodal_pressures
 
+def _get_a_weighting(f):
+    """Calculates standard IEC 61672 A-weighting filter offset in dB for a given frequency f (Hz)."""
+    if f <= 0:
+        return -100.0
+    f2 = f ** 2
+    term1 = 12194.217 ** 2 * (f2 ** 2)
+    term2 = (f2 + 20.598997 ** 2) * np.sqrt((f2 + 107.65265 ** 2) * (f2 + 737.86223 ** 2)) * (f2 + 12194.217 ** 2)
+    if term2 == 0:
+        return -100.0
+    r_a = term1 / term2
+    return 20.0 * np.log10(r_a) + 2.00
+
 # ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
 def calculate_total_sound_power(
     csv_filepath,
@@ -1265,15 +1277,15 @@ def calculate_total_sound_power(
 ):
     """
     COMPUTES:
-    - SWL(dB) & total sound power (TSW) passing through BEM and MICS surfaces
-    - Average RMS pressure, SPL(dB) & mean Velocity (V_mean, complex)
+    - SWL(dB) & SWL(dBA) & total sound power (TSW) passing through BEM and MICS surfaces
+    - Average RMS pressure, SPL(dB), SPL(dBA) & mean Velocity (V_mean, complex)
     
     OUTPUTS: single 'model_name_power.csv' file
     - Surface Area (A); for tied surfaces is the Active area
     - TSW = Total Sound Power sum from all frequencies
     - net acoustic power transmission values (mag, real, imag)
-    - Sound Power Levels (SWL - dB)
-    - Average SPL(dB) & mean Velocity (V_mean) per surface
+    - Sound Power Levels (SWL - dB and dBA)
+    - Average SPL(dB, dBA) & mean Velocity (V_mean) per surface
     
     Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
     
@@ -1457,7 +1469,6 @@ def calculate_total_sound_power(
 
                     surf_real_pwr += np.real(S_elem) * area_elem
                     surf_imag_pwr += np.imag(S_elem) * area_elem
-                    # surf_mag_pwr += np.abs(S_elem) * area_elem
 
                     # Surface pressure RMS and velocity accumulation
                     surf_p_sq_accum += (np.abs(P_elem) ** 2) * area_elem
@@ -1512,7 +1523,6 @@ def calculate_total_sound_power(
 
                     surf_real_pwr += np.real(S_elem) * area_m_elem
                     surf_imag_pwr += np.imag(S_elem) * area_m_elem
-                    # surf_mag_pwr += np.abs(S_elem) * area_m_elem
 
                     # Surface pressure RMS and velocity accumulation
                     surf_p_sq_accum += (np.abs(P_centroid) ** 2) * area_m_elem
@@ -1564,19 +1574,23 @@ def calculate_total_sound_power(
             hdr_log = f"'{sname}' | A = {A_val:.6g} L^2 | TSW_real = {TSW_val_real:.4g} | TSW_imag = {TSW_val_imag:.4g} | TSW_mag = {TSW_val_mag:.4g}"
             surf_pwr_labels.append(hdr_log)
 
-            # Write real, imag, mag, and sound power levels for each surface
+            # Write real, imag, mag, and sound power levels (dB and dBA) for each surface
             headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g}")
             headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g}")
             headers.append(f"{hdr_base} | TSW_mag (mW) = {TSW_val_mag:.4g}")
             headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g} | SWL_real (dB)")
+            headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g} | SWL_real (dBA)")
             headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g} | SWL_imag (dB)")
+            headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g} | SWL_imag (dBA)")
             headers.append(f"{hdr_base} | TSW_mag (mW) = {TSW_val_mag:.4g} | SWL_mag (dB)")
+            headers.append(f"{hdr_base} | TSW_mag (mW) = {TSW_val_mag:.4g} | SWL_mag (dBA)")
 
-            # Append new surface field metric headers
+            # Append new surface field metric headers (SPL with dBA right after)
             headers.append(f"{hdr_base} | P_rms (MPa)")
             headers.append(f"{hdr_base} | V_mean (mm/s)")
             headers.append(f"{hdr_base} | V_mag (mm/s)")
             headers.append(f"{hdr_base} | SPL (dB)")
+            headers.append(f"{hdr_base} | SPL (dBA)")
             headers.append(f"{hdr_base} | SVL (dB)")
 
         writer.writerow(headers)
@@ -1584,6 +1598,8 @@ def calculate_total_sound_power(
         # Write frequency rows
         for f_idx, freq in enumerate(freqs):
             row = [freq]
+            a_wt = _get_a_weighting(freq)
+
             for sname in all_surf_names:
                 w_real = surface_power_results[sname]["real"][f_idx]
                 w_imag = surface_power_results[sname]["imag"][f_idx]
@@ -1600,19 +1616,32 @@ def calculate_total_sound_power(
                 swl_imag = 10.0 * np.log10(max(abs(w_imag), constants.log_floor) / constants.Wref)
                 swl_mag = 10.0 * np.log10(max(abs(w_mag), constants.log_floor) / constants.Wref)
 
-                row.extend([w_real, w_imag, w_mag, swl_real, swl_imag, swl_mag, p_rms, v_complex, v_mag, spl_db, svl_db])
+                # A-weighted values
+                swl_real_a = swl_real + a_wt
+                swl_imag_a = swl_imag + a_wt
+                swl_mag_a = swl_mag + a_wt
+                spl_dBA = spl_db + a_wt
+
+                row.extend([
+                    w_real, w_imag, w_mag, 
+                    swl_real, swl_real_a, 
+                    swl_imag, swl_imag_a, 
+                    swl_mag, swl_mag_a, 
+                    p_rms, v_complex, v_mag, 
+                    spl_db, spl_dBA, 
+                    svl_db
+                ])
 
             writer.writerow(row)
 
     return surf_pwr_labels
 
-def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
+def generate_power_flux_plot(model_name, csv_filepath, png_filepath, plot_dBA=False):
     """
     Reads the generated 'model_name_power.csv' file and outputs a clean
-    PNG graph showing SWL (dB) for Apparent (Mag), Active (Real), and
-    Reactive (Imag) powers in 3 side-by-side subplots. Matches legends
-    with exact TSW components per metric type and assigns distinct colors
-    per tie pair and non-tied surfaces.
+    PNG graph showing SWL for Apparent (Mag), Active (Real), and
+    Reactive (Imag) powers in 3 side-by-side subplots. 
+    Handles both unweighted (dB) and A-weighted (dBA) metrics cleanly.
     """
     try:
         import matplotlib
@@ -1626,7 +1655,7 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
 
     frequencies = []
     series_dict = {}
-    col_map = []  # List of tuples: (surface_name, component_type)
+    col_map = []  # List of tuples: (surface_name, metric_key, is_dba)
 
     try:
         with open(csv_filepath, mode="r") as csv_file:
@@ -1637,7 +1666,7 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
             for col_idx, h_text in enumerate(headers[1:], start=1):
                 parts = [p.strip() for p in h_text.split("|")]
                 if len(parts) < 4 or "swl_" not in parts[3].lower():
-                    col_map.append((None, None))
+                    col_map.append((None, None, False))
                     continue
 
                 sname = parts[0]
@@ -1645,8 +1674,10 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                 tsw_part = parts[2]
                 swl_part = parts[3]
 
-                # Identify metric component type (real, imag, mag)
+                # Identify metric component type and weighting
                 comp_type = None
+                is_dba = "dba" in swl_part.lower()
+                
                 if "real" in swl_part.lower():
                     comp_type = "real"
                 elif "imag" in swl_part.lower():
@@ -1655,7 +1686,7 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                     comp_type = "mag"
 
                 if not comp_type:
-                    col_map.append((None, None))
+                    col_map.append((None, None, False))
                     continue
 
                 # Initialize surface entry if new
@@ -1663,28 +1694,23 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                     series_dict[sname] = {
                         "area_str": area_str,
                         "components": {
-                            "real": {"tsw_str": "", "tsw_val": 0.0, "SWL": []},
-                            "imag": {"tsw_str": "", "tsw_val": 0.0, "SWL": []},
-                            "mag": {"tsw_str": "", "tsw_val": 0.0, "SWL": []},
+                            "real": {"tsw_str": "", "tsw_val": 0.0, "SWL": [], "SWL_dba": []},
+                            "imag": {"tsw_str": "", "tsw_val": 0.0, "SWL": [], "SWL_dba": []},
+                            "mag": {"tsw_str": "", "tsw_val": 0.0, "SWL": [], "SWL_dba": []},
                         },
                     }
 
-                # Store TSW text string and parse numeric value
-                series_dict[sname]["components"][comp_type][
-                    "tsw_str"
-                ] = tsw_part
-                if "=" in tsw_part:
-                    try:
-                        val_str = tsw_part.split("=")[1].strip()
-                        series_dict[sname]["components"][comp_type][
-                            "tsw_val"
-                        ] = float(val_str)
-                    except ValueError:
-                        series_dict[sname]["components"][comp_type][
-                            "tsw_val"
-                        ] = 0.0
+                # Store TSW text string and parse numeric value (only once per base component)
+                if not is_dba:
+                    series_dict[sname]["components"][comp_type]["tsw_str"] = tsw_part
+                    if "=" in tsw_part:
+                        try:
+                            val_str = tsw_part.split("=")[1].strip()
+                            series_dict[sname]["components"][comp_type]["tsw_val"] = float(val_str)
+                        except ValueError:
+                            series_dict[sname]["components"][comp_type]["tsw_val"] = 0.0
 
-                col_map.append((sname, comp_type))
+                col_map.append((sname, comp_type, is_dba))
 
             # Read frequency data rows
             for row in reader:
@@ -1693,27 +1719,32 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                 if "freq" in row[0].lower():
                     continue
 
-                # 1. Parse frequency safely
                 try:
                     freq_val = float(row[0])
                 except ValueError:
                     continue
 
-                # 2. Extract only mapped SWL columns
                 has_parse_error = False
+                row_values_temp = []
 
-                for idx, (sname, comp_type) in enumerate(col_map):
+                for idx, (sname, comp_type, is_dba) in enumerate(col_map):
+                    val = 0.0
                     if sname and comp_type:
                         try:
                             val = float(row[idx + 1])
-                            series_dict[sname]["components"][comp_type]["SWL"].append(val)
                         except (ValueError, IndexError):
                             has_parse_error = True
                             break
+                    row_values_temp.append((sname, comp_type, is_dba, val))
 
-                # Only append frequency if row parsed successfully
-                if not has_parse_error:
-                    frequencies.append(freq_val)
+                if has_parse_error:
+                    continue
+
+                frequencies.append(freq_val)
+                for sname, comp_type, is_dba, val in row_values_temp:
+                    if sname and comp_type:
+                        target_key = "SWL_dba" if is_dba else "SWL"
+                        series_dict[sname]["components"][comp_type][target_key].append(val)
 
     except FileNotFoundError:
         logger.error(f" [Error]: Power CSV file '{csv_filepath}' not found.")
@@ -1724,7 +1755,6 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
         return
 
     # --- Pre-process Color Palette Mapping ---
-    # Palette definition for tie pairs: (master_color, slave_color)
     tie_palettes = [
         ("#d62728", "#2ca02c"),  # Tie 1: Red / Green
         ("#9467bd", "#8c564b"),  # Tie 2: Purple / Brown
@@ -1733,15 +1763,8 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
         ("#bcbd22", "#1f77b4"),  # Tie 5: Olive / Blue
     ]
 
-    # Palette definition for non-tied surfaces (Inlets, Outlets, Mics, Spheres, etc.)
     non_tie_palettes = [
-        "#1f77b4",  # Standard Blue (e.g. Inlet)
-        "#17becf",  # Deep Cyan (e.g. Mic sphere)
-        "#ff7f0e",  # Vibrant Orange
-        "#2ca02c",  # Green
-        "#9467bd",  # Purple
-        "#e377c2",  # Pink
-        "#8c564b",  # Brown
+        "#1f77b4", "#17becf", "#ff7f0e", "#2ca02c", "#9467bd", "#e377c2", "#8c564b"
     ]
 
     tie_color_map = {}
@@ -1750,7 +1773,6 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
     tie_counter = 0
     non_tie_counter = 0
 
-    # Map each surface to its dedicated color palette
     for sname in series_dict.keys():
         if "tie" in sname.lower():
             base_tie_name = sname.rsplit("_", 1)[0] if "_" in sname else sname
@@ -1763,13 +1785,13 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
                 non_tie_counter += 1
 
     # --- Build 3-Panel Side-by-Side Plot ---
-    # Increased figure height to 8.5 to accommodate bottom legends without crushing subplots
     fig, axes = plt.subplots(1, 3, figsize=(18, 8.5), dpi=150)
 
+    unit_label = "dBA" if plot_dBA else "dB"
     panels = [
-        ("mag", "Apparent Power — SWL (Mag)"),
-        ("real", "Active Power — SWL (Real)"),
-        ("imag", "Reactive Power — SWL (Imag)"),
+        ("mag", f"Apparent Power — SWL ({unit_label})"),
+        ("real", f"Active Power — SWL ({unit_label})"),
+        ("imag", f"Reactive Power — SWL ({unit_label})"),
     ]
 
     for ax_idx, (comp_type, title_str) in enumerate(panels):
@@ -1781,71 +1803,41 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
             comp_data = sdata["components"][comp_type]
 
             tsw_str = comp_data["tsw_str"]
-            y_vals = comp_data["SWL"]
-
-            # Always use Apparent Power (mag) magnitude to assess global rigid status
+            y_vals = comp_data["SWL_dba" if plot_dBA else "SWL"]
             tsw_mag_val = sdata["components"]["mag"]["tsw_val"]
 
-            # Construct base legend string
             full_lbl = f"{sname} | {area_str} | {tsw_str}"
 
-            # Check if surface is virtually inactive (TSW sum ~ 0)
             if abs(tsw_mag_val) < constants.eps:
                 ax.plot([], [], label=f"{full_lbl} (Rigid)", linestyle="none")
                 continue
 
-            # Plot active surfaces
+            # Assign colors & styles matching original code
             if "tie" in name_lower:
                 base_tie_name = sname.rsplit("_", 1)[0] if "_" in sname else sname
                 master_color, slave_color = tie_color_map[base_tie_name]
 
                 if "master" in name_lower:
-                    ax.plot(
-                        frequencies,
-                        y_vals,
-                        label=full_lbl,
-                        linewidth=2.0,
-                        linestyle="--",
-                        color=master_color,
-                        zorder=2,
-                    )
+                    ax.plot(frequencies, y_vals, label=full_lbl, linewidth=2.0, linestyle="--", color=master_color, zorder=2)
                 else:
-                    ax.plot(
-                        frequencies,
-                        y_vals,
-                        label=full_lbl,
-                        linewidth=2.5,
-                        linestyle=":",
-                        color=slave_color,
-                        zorder=3,
-                    )
+                    ax.plot(frequencies, y_vals, label=full_lbl, linewidth=2.5, linestyle=":", color=slave_color, zorder=3)
             else:
-                # Assign distinct color for each non-tied surface
                 surf_color = non_tie_color_map[sname]
-                
-                ax.plot(
-                    frequencies,
-                    y_vals,
-                    label=full_lbl,
-                    linewidth=2.0,
-                    linestyle="-",
-                    color=surf_color,
-                    zorder=1,
-                )
+                ax.plot(frequencies, y_vals, label=full_lbl, linewidth=2.0, linestyle="-", color=surf_color, zorder=1)
 
         ax.set_title(title_str, fontsize=13, fontweight="normal", pad=12, color="0.3")
-        # ax.set_title(title_str, fontsize=11, fontweight="bold", pad=12, color="gray")
         ax.set_xlabel("Frequency (Hz)", fontsize=11, labelpad=6, color="0.3")
-        ax.set_ylabel("SWL (dB)", fontsize=11, labelpad=6, color="0.3")
+        ax.set_ylabel(f"SWL ({unit_label})", fontsize=11, labelpad=6, color="0.3")
 
         ax.set_xscale("log")
         ax.yaxis.set_tick_params(labelleft=True)
 
+        # Original grid and single-column vertical legend formatting
         ax.grid(True, which="both", linestyle=":", color="#cccccc", alpha=1)
         ax.legend(
             loc="upper center",
-            bbox_to_anchor=(0.5, -0.12),  # Shifts the legend just below the X-axis
-            ncol=1,                       
+            bbox_to_anchor=(0.5, -0.12),
+            ncol=1,  # Reverted back to strict single column
             frameon=True,
             facecolor="#ffffff",
             edgecolor="#cccccc",
@@ -1855,14 +1847,13 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
     fig.suptitle(
         f"Acoustic Sound Power Levels (SWL) — Model: {model_name} — pyBEM V{version.__version__}",
         fontsize=13,
-        fontweight="bold",
+        weight="bold",
         y=0.95,
     )
     
-    # Reserve top for suptitle and bottom for the external legends
+    # Original layout margins
     plt.subplots_adjust(top=0.87, bottom=0.3, wspace=0.22)
 
-    # Attempt normal save with fallback for locked files (added bbox_inches='tight')
     try:
         plt.savefig(png_filepath, dpi=150, bbox_inches="tight")
     except (PermissionError, OSError):
@@ -1870,7 +1861,7 @@ def generate_power_flux_plot(model_name, csv_filepath, png_filepath):
         alt_filename = f"{model_name}_power{suffix_alt}.png"
         logger.warning(
             f"    [Warning]: Could not overwrite ( '{png_filepath}' ), file is likely opened in a viewer.\n"
-            f"                Saving fallback copy to ( '{alt_filename}' ) instead."
+            f"               Saving fallback copy to ( '{alt_filename}' ) instead."
         )
         try:
             plt.savefig(alt_filename, dpi=150, bbox_inches="tight")
