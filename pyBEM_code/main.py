@@ -772,7 +772,6 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
             from utils import calculate_total_sound_power, generate_power_flux_plot
             surf_pwr_labels = calculate_total_sound_power(
                 csv_filepath = csv_filename,
-                surfaces = parser.surfaces,
                 surface_elements = surface_to_elements,
                 freqs = parser.frequencies,
                 global_p_surf = global_p_surf,
@@ -788,8 +787,9 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 global_mics_normals = static_data['global_mics_normals'],
                 global_mics_elements_conn = static_data['global_mics_elements_conn'],
                 tie_registry = tie_registry,
-                W_slave_to_master=W_slave_to_master,
-                W_master_to_slave=W_master_to_slave
+                zones_mesh = zones_mesh,
+                global_rho = global_rho,
+                global_c = global_c,
             )
             for label in surf_pwr_labels:
                 logger.info(f"     {label}")

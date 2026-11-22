@@ -1,4 +1,4 @@
-__version__ = "0.5.8-alpha"
+__version__ = "0.5.9-alpha"
 
 div_1 = f"="*80
 __solver__ = f"""

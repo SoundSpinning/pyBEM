@@ -1256,7 +1256,6 @@ def _get_a_weighting(f):
 # ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
 def calculate_total_sound_power(
     csv_filepath,
-    surfaces,
     surface_elements,
     freqs,
     global_p_surf,
@@ -1272,28 +1271,33 @@ def calculate_total_sound_power(
     global_mics_normals,
     global_mics_elements_conn,
     tie_registry=None,
-    W_slave_to_master=None,
-    W_master_to_slave=None
+    zones_mesh=None,
+    global_rho=None,
+    global_c=None,
 ):
     """
     COMPUTES:
-    - SWL(dB) & SWL(dBA) & total sound power (TSW) passing through BEM and MICS surfaces
-    - Average RMS pressure, SPL(dB), SPL(dBA) & mean Velocity (V_mean, complex)
+- SWL(dB) & SWL(dBA) & total sound power (TSW) passing through BEM and MICS surfaces
+- Average RMS pressure, SPL(dB), SPL(dBA), mean Velocity (V_mean, complex),
+  mean Impedance (Z_mean), normalized Impedance (Z_norm), Reflection coeff (R),
+  Absorption factor (alpha = 1 - |R|^2), and Reactive/Active power ratio (W_imag / W_real)
     
     OUTPUTS: single 'model_name_power.csv' file
-    - Surface Area (A); for tied surfaces is the Active area
-    - TSW = Total Sound Power sum from all frequencies
-    - net acoustic power transmission values (mag, real, imag)
-    - Sound Power Levels (SWL - dB and dBA)
-    - Average SPL(dB, dBA) & mean Velocity (V_mean) per surface
+- Surface Area (A); for tied surfaces is the Active area
+- TSW = Total Sound Power sum from all frequencies
+- net acoustic power transmission values (mag, real, imag) and W_imag / W_real ratio
+- Sound Power Levels (SWL - dB and dBA)
+- Average SPL(dB, dBA), mean Velocity (V_mean), Z_mean, Z_norm, R & alpha per surface
     
-    Each Surface (BEM or MICS), as defined in PrePoMax, are expected to belong to one zone.
+    Each Surface (BEM or MICS), as defined in PrePoMax, belongs to one zone.
+    Solver is unit-agnostic; rho * c is expected in consistent solver units.
     
     If TIED pairs present, it also calculates the Active (area clipped / intersected elements) power for slave and master surfaces.
     """
 
     # 1. Create extended surface dictionary to incorporate active tied sub-patches
     all_surface_elements = dict(surface_elements)
+    surface_zone_map = {}
 
     if tie_registry:
         for tie_name, info in tie_registry.items():
@@ -1304,11 +1308,35 @@ def calculate_total_sound_power(
             all_surface_elements[master_active_key] = info["active_master_eids"]
             all_surface_elements[slave_active_key] = info["active_slave_eids"]
 
+            if "master_zone" in info:
+                surface_zone_map[master_active_key] = info["master_zone"]
+            if "slave_zone" in info:
+                surface_zone_map[slave_active_key] = info["slave_zone"]
+
+    # Resolve zone per surface using first element ID (each surface belongs to one zone)
+    if zones_mesh:
+        for surf_name, surf_elements in all_surface_elements.items():
+            if surf_name in surface_zone_map or len(surf_elements) == 0:
+                continue
+            first_eid = surf_elements[0]
+            for zone_name, z_mesh in zones_mesh.items():
+                if first_eid in z_mesh.get("elements", {}) or first_eid in z_mesh.get("mics_elements", {}):
+                    surface_zone_map[surf_name] = zone_name
+                    break
+
+    # Resolve characteristic impedance (rho * c) per surface in consistent solver units
+    surface_rho_c = {}
+    if global_rho and global_c:
+        for surf_name, zone_name in surface_zone_map.items():
+            if zone_name in global_rho and zone_name in global_c:
+                surface_rho_c[surf_name] = global_rho[zone_name] * global_c[zone_name]
+
     # Initialize container tracking for active (real), reactive (imag), and apparent (mag) powers
     surface_power_results = {
         surf_name: {
-            "real": [], "imag": [], "mag": [],
-            "p_rms": [], "v_complex": [], "v_mag": [], 
+            "real": [], "imag": [], "mag": [], "react_active_ratio": [],
+            "p_rms": [], "v_complex": [], "v_mag": [],
+            "z_complex": [], "z_norm_complex": [], "r_complex": [], "alpha": [],
             "spl": [], "svl": []
         }
         for surf_name in all_surface_elements.keys()
@@ -1440,9 +1468,14 @@ def calculate_total_sound_power(
                 surface_power_results[surf_name]["real"].append(0.0)
                 surface_power_results[surf_name]["imag"].append(0.0)
                 surface_power_results[surf_name]["mag"].append(0.0)
+                surface_power_results[surf_name]["react_active_ratio"].append(0.0)
                 surface_power_results[surf_name]["p_rms"].append(0.0)
                 surface_power_results[surf_name]["v_complex"].append(0.0)
                 surface_power_results[surf_name]["v_mag"].append(0.0)
+                surface_power_results[surf_name]["z_complex"].append(0.0 + 0.0j)
+                surface_power_results[surf_name]["z_norm_complex"].append(0.0 + 0.0j)
+                surface_power_results[surf_name]["r_complex"].append(0.0 + 0.0j)
+                surface_power_results[surf_name]["alpha"].append(0.0)
                 surface_power_results[surf_name]["spl"].append(0.0)
                 surface_power_results[surf_name]["svl"].append(0.0)
                 continue
@@ -1452,6 +1485,7 @@ def calculate_total_sound_power(
             surf_imag_pwr = 0.0
             surf_mag_pwr = 0.0
             surf_p_sq_accum = 0.0
+            surf_p_accum = 0.0 + 0.0j
             surf_v_accum = 0.0 + 0.0j
 
             # --- CASE A: BEM SURFACE (ELEMENTAL STORAGE) ---
@@ -1472,6 +1506,7 @@ def calculate_total_sound_power(
 
                     # Surface pressure RMS and velocity accumulation
                     surf_p_sq_accum += (np.abs(P_elem) ** 2) * area_elem
+                    surf_p_accum += P_elem * area_elem
                     surf_v_accum += V_elem * area_elem
 
                 surf_mag_pwr += np.sqrt(surf_real_pwr**2 + surf_imag_pwr**2)
@@ -1526,6 +1561,7 @@ def calculate_total_sound_power(
 
                     # Surface pressure RMS and velocity accumulation
                     surf_p_sq_accum += (np.abs(P_centroid) ** 2) * area_m_elem
+                    surf_p_accum += P_centroid * area_m_elem
                     surf_v_accum += V_normal_centroid * area_m_elem
 
                 surf_mag_pwr += np.sqrt(surf_real_pwr**2 + surf_imag_pwr**2)
@@ -1534,9 +1570,36 @@ def calculate_total_sound_power(
                 if surf_real_pwr < 0:
                     surf_real_pwr = -surf_real_pwr
 
-            # --- AVERAGE METRICS & SPL CALCULATION ---
+            # --- AVERAGE METRICS, IMPEDANCE, REFLECTION, ABSORPTION & SPL CALCULATION ---
+            if abs(surf_real_pwr) > constants.eps:
+                react_active_ratio_val = surf_imag_pwr / surf_real_pwr
+            else:
+                react_active_ratio_val = 0.0
+
             p_rms_val = np.sqrt(max(surf_p_sq_accum / total_surf_area, 0.0))
+            p_complex_val = surf_p_accum / total_surf_area
             v_complex_val = surf_v_accum / total_surf_area
+            if abs(v_complex_val) > constants.eps:
+                z_complex_val = p_complex_val / v_complex_val
+            else:
+                z_complex_val = 0.0 + 0.0j
+
+            rho_c_val = surface_rho_c.get(surf_name, 0.0)
+            if abs(rho_c_val) > constants.eps and abs(v_complex_val) > constants.eps:
+                z_norm_complex_val = z_complex_val / rho_c_val
+                denom_r = z_norm_complex_val + 1.0 + 0.0j
+                if abs(denom_r) > constants.eps:
+                    r_complex_val = (z_norm_complex_val - 1.0 + 0.0j) / denom_r
+                else:
+                    r_complex_val = 0.0 + 0.0j
+                r_mag_val = np.abs(r_complex_val)
+                alpha_val = 1.0 - (r_mag_val ** 2)
+            else:
+                z_norm_complex_val = 0.0 + 0.0j
+                r_complex_val = 0.0 + 0.0j
+                r_mag_val = 0.0
+                alpha_val = 0.0
+
             v_mag_val = np.abs(v_complex_val)
             surf_spl_db = 20.0 * np.log10(max(p_rms_val, constants.log_floor) / constants.Pref)
             surf_svl_db = 20.0 * np.log10(max(v_mag_val, constants.log_floor) / constants.Vref)
@@ -1545,9 +1608,14 @@ def calculate_total_sound_power(
             surface_power_results[surf_name]["real"].append(surf_real_pwr)
             surface_power_results[surf_name]["imag"].append(surf_imag_pwr)
             surface_power_results[surf_name]["mag"].append(surf_mag_pwr)
+            surface_power_results[surf_name]["react_active_ratio"].append(react_active_ratio_val)
             surface_power_results[surf_name]["p_rms"].append(p_rms_val)
             surface_power_results[surf_name]["v_complex"].append(v_complex_val)
             surface_power_results[surf_name]["v_mag"].append(v_mag_val)
+            surface_power_results[surf_name]["z_complex"].append(z_complex_val)
+            surface_power_results[surf_name]["z_norm_complex"].append(z_norm_complex_val)
+            surface_power_results[surf_name]["r_complex"].append(r_complex_val)
+            surface_power_results[surf_name]["alpha"].append(alpha_val)
             surface_power_results[surf_name]["spl"].append(surf_spl_db)
             surface_power_results[surf_name]["svl"].append(surf_svl_db)
 
@@ -1578,6 +1646,7 @@ def calculate_total_sound_power(
             headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g}")
             headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g}")
             headers.append(f"{hdr_base} | TSW_mag (mW) = {TSW_val_mag:.4g}")
+            headers.append(f"{hdr_base} | W_imag/W_real")
             headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g} | SWL_real (dB)")
             headers.append(f"{hdr_base} | TSW_real (mW) = {TSW_val_real:.4g} | SWL_real (dBA)")
             headers.append(f"{hdr_base} | TSW_imag (mW) = {TSW_val_imag:.4g} | SWL_imag (dB)")
@@ -1589,6 +1658,14 @@ def calculate_total_sound_power(
             headers.append(f"{hdr_base} | P_rms (MPa)")
             headers.append(f"{hdr_base} | V_mean (mm/s)")
             headers.append(f"{hdr_base} | V_mag (mm/s)")
+            headers.append(f"{hdr_base} | Z_mean_real")
+            headers.append(f"{hdr_base} | Z_mean_imag")
+            headers.append(f"{hdr_base} | Z_norm_real")
+            headers.append(f"{hdr_base} | Z_norm_imag")
+            headers.append(f"{hdr_base} | R_real")
+            headers.append(f"{hdr_base} | R_imag")
+            headers.append(f"{hdr_base} | R_mag")
+            headers.append(f"{hdr_base} | alpha")
             headers.append(f"{hdr_base} | SPL (dB)")
             headers.append(f"{hdr_base} | SPL (dBA)")
             headers.append(f"{hdr_base} | SVL (dB)")
@@ -1604,10 +1681,15 @@ def calculate_total_sound_power(
                 w_real = surface_power_results[sname]["real"][f_idx]
                 w_imag = surface_power_results[sname]["imag"][f_idx]
                 w_mag = surface_power_results[sname]["mag"][f_idx]
+                react_active_ratio = surface_power_results[sname]["react_active_ratio"][f_idx]
 
                 p_rms = surface_power_results[sname]["p_rms"][f_idx]
                 v_complex = surface_power_results[sname]["v_complex"][f_idx]
                 v_mag = surface_power_results[sname]["v_mag"][f_idx]
+                z_complex = surface_power_results[sname]["z_complex"][f_idx]
+                z_norm_complex = surface_power_results[sname]["z_norm_complex"][f_idx]
+                r_complex = surface_power_results[sname]["r_complex"][f_idx]
+                alpha = surface_power_results[sname]["alpha"][f_idx]
                 spl_db = surface_power_results[sname]["spl"][f_idx]
                 svl_db = surface_power_results[sname]["svl"][f_idx]
 
@@ -1623,11 +1705,14 @@ def calculate_total_sound_power(
                 spl_dBA = spl_db + a_wt
 
                 row.extend([
-                    w_real, w_imag, w_mag, 
+                    w_real, w_imag, w_mag, react_active_ratio,
                     swl_real, swl_real_a, 
                     swl_imag, swl_imag_a, 
                     swl_mag, swl_mag_a, 
                     p_rms, v_complex, v_mag, 
+                    np.real(z_complex), np.imag(z_complex),
+                    np.real(z_norm_complex), np.imag(z_norm_complex),
+                    np.real(r_complex), np.imag(r_complex), np.abs(r_complex), alpha,
                     spl_db, spl_dBA, 
                     svl_db
                 ])
@@ -1906,6 +1991,7 @@ QUAD_GP = np.array([
     [ Q_GP,  Q_GP],   # Top-Right
     [ Q_GP, -Q_GP],   # Bottom-Right
 ])
+
 ## test influence of order of GPoints 
 # QUAD_GP = np.array([
 #     [-Q_GP, -Q_GP],   # Bottom-Left
@@ -1945,6 +2031,7 @@ def get_quad_points(v1, v2, v3, v4):
 #     [0.166666666, 0.666666666, 0.166666666],
 #     [0.166666666, 0.166666666, 0.666666666]
 # ])
+
 TRI_GP = np.array([
     [2/3., 1/6., 1/6.],
     [1/6., 2/3., 1/6.],
@@ -1983,6 +2070,7 @@ QUAD_GP3 = np.array([
     [ 0, Q_GP3],      [ 0,  0],         [ Q_GP3, Q_GP3], # Middle row (Point 4 is CoG)
     [ Q_GP3, 0],      [ Q_GP3, -Q_GP3], [ 0, -Q_GP3]     # Top row
 ])
+
 # Standard ordering with (+) normals, NOT for BEM
 # QUAD_GP3 = np.array([
 #     [-Q_GP3, -Q_GP3], [ 0, -Q_GP3], [ Q_GP3, -Q_GP3], # Bottom row
