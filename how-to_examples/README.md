@@ -1,6 +1,6 @@
 # pyBEM: How-To Guide & Multi-Zone Examples
 
-Welcome to the `how-to_examples` directory for **pyBEM (V0.5.9-alpha)**. This guide details the workflow for creating, exporting, and verifying multi-zone Boundary Element Method (BEM) acoustic models using `PrePoMax` and `pyBEM`. Furthermore, results with ready to run models for several examples are explained and supplied.
+Welcome to the `how-to_examples` directory for **pyBEM (V0.6.0-alpha)**. This guide details the workflow for creating, exporting, and verifying multi-zone Boundary Element Method (BEM) acoustic models using `PrePoMax` and `pyBEM`. Furthermore, results with ready-to-run models for several examples are explained and supplied.
 
 ---
 
@@ -16,10 +16,10 @@ Welcome to the `how-to_examples` directory for **pyBEM (V0.5.9-alpha)**. This gu
     - [3.1 `1m_pipe`: Straight 1m Pipe (Interior) Analysis Suite](#31-1m_pipe-straight-1m-pipe-interior-analysis-suite)
       - [3.1.1 CASE 1: PRES @ INLET \& Rigid OUTLET](#311-case-1-pres--inlet--rigid-outlet)
       - [3.1.2 CASE 2: PRES @ INLET \& PRES @ OUTLET](#312-case-2-pres--inlet--pres--outlet)
-      - [3.1.3 CASE 3: PRES @ INLET \& IMPE ($Z = \\rho c$) @ OUTLET](#313-case-3-pres--inlet--impe-z--rho-c--outlet)
+      - [3.1.3 CASE 3: PRES @ INLET \& IMPE @ OUTLET](#313-case-3-pres--inlet--impe--outlet)
       - [3.1.4 CASE 4: VELO @ INLET \& Rigid OUTLET](#314-case-4-velo--inlet--rigid-outlet)
-      - [3.1.5 CASE 5: \[ VELO + IMPE ($Z = \\rho c$) \] @ INLET \& Rigid OUTLET](#315-case-5--velo--impe-z--rho-c---inlet--rigid-outlet)
-      - [3.1.6 CASE 6: VELO @ INLET \& IMPE ($Z = \\rho c$) @ OUTLET](#316-case-6-velo--inlet--impe-z--rho-c--outlet)
+      - [3.1.5 CASE 5: \[ VELO + IMPE \] @ INLET \& Rigid OUTLET](#315-case-5--velo--impe---inlet--rigid-outlet)
+      - [3.1.6 CASE 6: VELO @ INLET \& IMPE @ OUTLET](#316-case-6-velo--inlet--impe--outlet)
       - [3.1.7 `1m_pipe`: Comparison code\_aster (FEM acoustics) vs pyBEM](#317-1m_pipe-comparison-code_aster-fem-acoustics-vs-pybem)
       - [3.1.8 `1m_pipe`: Preliminary Conclusions](#318-1m_pipe-preliminary-conclusions)
     - [3.2 `int_ext_boxes`: Simultaneous Interior \& Exterior Acoustic Analysis](#32-int_ext_boxes-simultaneous-interior--exterior-acoustic-analysis)
@@ -29,6 +29,16 @@ Welcome to the `how-to_examples` directory for **pyBEM (V0.5.9-alpha)**. This gu
       - [3.2.4 `int_ext_boxes`: Preliminary Conclusions](#324-int_ext_boxes-preliminary-conclusions)
     - [3.3 `int_ext_pipe_1m`: Interior \& Exterior 1m Pipe Acoustics](#33-int_ext_pipe_1m-interior--exterior-1m-pipe-acoustics)
       - [3.3.1 `int_ext_pipe_1m`: Preliminary Conclusions](#331-int_ext_pipe_1m-preliminary-conclusions)
+    - [3.4 `Resonators`: Helmholtz \& Quarter-wave Pipes](#34-resonators-helmholtz--quarter-wave-pipes)
+      - [3.4.1 Quarter-wave Pipe Resonator](#341-quarter-wave-pipe-resonator)
+      - [3.4.2 Helmholtz Resonator](#342-helmholtz-resonator)
+      - [3.4.3 Assembly: Quarter-wave Pipe + Helmholtz Resonator](#343-assembly-quarter-wave-pipe--helmholtz-resonator)
+        - [3.4.3.1 Insertion Loss](#3431-insertion-loss)
+    - [3.5 `room`: Room Acoustics](#35-room-room-acoustics)
+      - [3.5.1 Single Speaker Model](#351-single-speaker-model)
+      - [3.5.2 Room Assembly](#352-room-assembly)
+      - [3.5.3 Preliminary Conclusions \& Further Work](#353-preliminary-conclusions--further-work)
+    - [3.6 Automotive Air Intake System](#36-automotive-air-intake-system)
 
 ---
 ---
@@ -139,7 +149,7 @@ Define fluid properties in PrePoMax using density ($\rho$) and Bulk Modulus ($K$
     *Density
     1.21E-12
     *Acoustic Medium
-    0.1424,
+    0.14239,
     ** Bulk modulus (K): c = sqrt(K/Rho)
     **
     ** Sections ++++++++++++++++++++++++++++++++++++++++++++++++
@@ -175,7 +185,7 @@ The `Position tolerance` value (length units) is used to find what element pairs
     ```
 
 > [!NOTE]
-> By default, `pyBEM` will calculate all acoustic powers (mag or "Apparent", real or "Active", imag or "Reactive") and additional surface metrics going through each of the surfaces defined in the input file. It also generates a figure with plots for SWL - dB (Sound Power Level). look out for the `CSV` & `PNG` files at the end of a job.
+> By default, `pyBEM` will calculate all acoustic powers (mag or "Apparent", real or "Active", imag or "Reactive") and additional surface metrics going through each of the surfaces defined in the input file. It also generates a figure with plots for SWL - dB (Sound Power Level). Look out for the `CSV` & `PNG` files at the end of a job.
 
 ### 2.4 Amplitude Curves, Step Definition & Damping
 
@@ -232,11 +242,12 @@ The `Position tolerance` value (length units) is used to find what element pairs
     *End step
     ```
 
-    For **frequency dependant inputs** use existing Amplitude table names like this:
+    For **frequency dependent inputs** use existing Amplitude table names like this:
 
     ```ini
     *Modal damping, Amplitude=<table_name>
     ...
+    **   Load case=1 ==> real | Load case=2 ==> imaginary
     *Boundary, Load case=1, Amplitude=<table_name_1>
     ...
     *Impedance, Load case=2, Amplitude=<table_name_2>
@@ -258,7 +269,7 @@ The `Position tolerance` value (length units) is used to find what element pairs
 
 ## 3. EXAMPLES
 
-The sub-folders under `how-to_examples/` contain complete and ready to run input decks (`*.inp`), `*.log` files, and power plots for various acoustic setups, as solved in pyBEM. Furthermore, PrePoMax (`*.pmx`, V2.6.0) and ParaView (`*.pvsm`, V5.13) state (session) files, are supplied when applicable. PV results are not included in the repo, but most models in each folder are fast to run via the batch script `run_suite.py`.
+The sub-folders under `how-to_examples/` contain complete and ready-to-run input decks (`*.inp`), `*.log` files, and power plots for various acoustic setups, as solved in pyBEM. Furthermore, PrePoMax (`*.pmx`, V2.6.0) and ParaView (`*.pvsm`, V5.13) state (session) files, are supplied when applicable. PV results are not included in the repo, but most models in each folder are fast to run via the batch script `run_suite.py`.
 
 ```text
 how-to_examples/
@@ -272,6 +283,7 @@ how-to_examples/
     ├── 06_zones_pipe_1m.inp
     └── 06_tri_zones_pipe_1m.inp
 ├── int_ext_boxes/
+├── int_ext_pipe_1m/
 ```
 
 > [!TIP]
@@ -292,7 +304,7 @@ This suite demonstrates **6 boundary condition (BC) variants** for a $1\text{m}$
 
 In acoustics a simple straight pipe with BC variants at the inlet & outlet surfaces can demonstrate key properties, tricks for fast post-processing and understanding of results that will later on appear with complex 3D interior acoustics systems; e.g. intake & exhaust systems. They'll help to allow for **fast & informed decision making**, which I believe is the primary objective of any CAE work for research or in-production.
 
-We can easily model half-wave pipes (open or closed both ends) and quarter-wave pipes (open one end, rigid the other end), and compare to simple hand calculations on resonant frequency peaks. Furthermore, it is a simple and fast model to test a new acoustics solver on some basic principals, and compare to other solvers.
+We can easily model half-wave pipes (open or closed both ends) and quarter-wave pipes (open one end, rigid the other end), and compare to simple hand calculations on resonant frequency peaks. Furthermore, it is a simple and fast model to test a new acoustics solver on some basic principles, and compare to other solvers.
 
 The `*.inp` input files supplied in this folder solve at every 10Hz for fast initial turnaround to start getting a grasp with pyBEM. Nevertheless, the result graphs shown for each case were generated at every 1Hz, to catch properly all frequency peaks with a small 1% of damping. Furthermore, this finer frequency stepping allows for fair comparisons to other codes, as a too coarse freq solve may miss peaks slightly differently. These pipe models comprise **2 interior zones & 1 TIED pair**; this is to show the multi-zone capability.
 
@@ -302,7 +314,7 @@ The `*.inp` input files supplied in this folder solve at every 10Hz for fast ini
   - **Inlet:** Sound Pressure ($P = 2\times 10^{-11}\text{ MPa}$)
   - **Outlet:** Rigid Boundary (Default: $v_n = 0\text{ mm/s}$)
 
-- **Acoustic Behaviour:** Classic quarter-wave resonator: open one end & closed the other end. Resonant peaks occur at odd harmonics:
+- **Acoustic Behaviour:** Classic quarter-wave pipe: open one end & closed the other end. Resonant peaks occur at odd harmonics:
 
 $$f_n = \frac{(2n - 1) c}{4L} = 85.75, 257.25, 428.75, 600.25\dots \text{ Hz}$$
 
@@ -358,7 +370,7 @@ Figure shows SPL distribution at 1200Hz.
 
 ---
 
-#### 3.1.3 CASE 3: PRES @ INLET & IMPE ($Z = \rho c$) @ OUTLET
+#### 3.1.3 CASE 3: PRES @ INLET & IMPE @ OUTLET
 
 - **Boundary Conditions:**
   - **Inlet:** Sound Pressure ($P = 2\times 10^{-11}\text{ MPa}$)
@@ -368,7 +380,7 @@ Figure shows SPL distribution at 1200Hz.
 
 > **SWL (dB)**: automatic power outputs in pyBEM
 
-Note the wiggles in pyBEM are noise, inherent in BEM, unless high mesh density is used. However, note the small range on the scales used. Normally the noise should be small enough compared to relevant sound level results; i.e. application dependant.
+Note the wiggles in pyBEM are noise, inherent in BEM, unless high mesh density is used. However, note the small range on the scales used. Normally the noise should be small enough compared to relevant sound level results; i.e. application dependent.
 
 ![pyBEM power plots](1m_pipe/03_tri_zones_pipe_1m_power.png)
 
@@ -414,7 +426,7 @@ Figure shows SPL distribution at 340Hz.
 
 ---
 
-#### 3.1.5 CASE 5: [ VELO + IMPE ($Z = \rho c$) ] @ INLET & Rigid OUTLET
+#### 3.1.5 CASE 5: [ VELO + IMPE ] @ INLET & Rigid OUTLET
 
 - **Boundary Conditions:**
   - **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$) + characteristic Impedance ($v_n + Z_0$)
@@ -442,7 +454,7 @@ Figure shows SPL distribution at 260Hz.
 
 ---
 
-#### 3.1.6 CASE 6: VELO @ INLET & IMPE ($Z = \rho c$) @ OUTLET
+#### 3.1.6 CASE 6: VELO @ INLET & IMPE @ OUTLET
 
 - **Boundary Conditions:**
   - **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$) | Rigid piston
@@ -492,11 +504,11 @@ Figure shows **pyBEM** SPL (dB) distribution for the 6 cases presented above.
 
 - It is emphasised that trying to compare like-to-like across FEM vs BEM solvers with different meshes, damping and acoustic boundary conditions implementations; makes it hard to expect exactly the same results.
 
-- Nevertheless, comparisons are still useful in terms of honouring basic principals for linear acoustics in pyBEM. Sensible similar trends are expected and hand calculations on resonant frequency values should be very close to predictions.
+- Nevertheless, comparisons are still useful in terms of honouring basic principles for linear acoustics in pyBEM. Sensible similar trends are expected and hand calculations on resonant frequency values should be very close to predictions.
 
 - Based on the results presented in this section for the 6 cases, we can conclude that pyBEM results are close to the Abaqus and code_aster results. They are all certainly *on the same bit of paper*.
 
-- This is encouraging in terms of continuing with the multi-zone and TIED pairs capabilities, and with  further testing of pyBEM with more complex 3D geometries and setups.
+- This is encouraging in terms of continuing with the multi-zone and TIED pairs capabilities, plus further testing of pyBEM with more complex 3D geometries and setups.
 
 ---
 
@@ -506,7 +518,7 @@ Figure shows **pyBEM** SPL (dB) distribution for the 6 cases presented above.
 > Small Multi-zone test model with two interior zones and one exterior one ; Damping Factor = 0%.\
 > 7 spheres with MICS meshes capture the exterior radiation power for solver sanity checks (conservation of 'Active' energy).
 
-Setting up an interior / exterior BEM model is relatively easy if we follow the main rules listed in [Section 1](#1-bem-meshing--modelling-rules). The normals on the last exterior zone are flipped to point inwards, so that the acoustics is solved in the infinite exterior domain. A TIED pair is then defined between interior zone 2 and the exterior zone 3.
+Setting up an interior / exterior BEM model is relatively easy if we follow the main rules listed in [Section 1](#1-bem-meshing--modelling-rules). The normals on the last exterior zone are flipped to point inwards, so that the acoustics is solved in the infinite exterior domain. A TIED pair is then defined between interior zone 2 and the exterior zone 3. One of the advantages with this method is that the outlet impedance is calculated by the solver per frequency. Therefore, no guesses or tricks on exterior meshes and impedance values are required.
 \
 ***NOTE** that since we are not interested in the scattering at the back of the exterior zone, we make it short, which is enough to get the power outputs, while keeping solve times / RAM small.*
 
@@ -611,7 +623,7 @@ Figure shows SPL distribution at 500Hz. The results show some smoother SPL distr
 ---
 
 > [!TIP]
-> Following the methodologies and template setups of the previous two small projects presented in *Sections 3.1 & 3.2*, we should be able to carry those methods over to really complex acoustic assemblies.
+> Following the methodologies and template setups of the previous two small projects presented in *Sections 3.2.1 & 3.2.2*, we should be able to carry those methods over to really complex acoustic assemblies.
 
 ---
 
@@ -619,10 +631,8 @@ Figure shows SPL distribution at 500Hz. The results show some smoother SPL distr
 
 > [!NOTE]
 > 1m pipe (interior & exterior) with three design variants at the outlet ; Damping Factor = 1%.\
-> Capture the exterior radiation power for solver sanity checks (conservation of 'Active' energy) vs 3D geometry at the outlet.
-
-<!-- blank -->
-
+> Captures the exterior radiation power for solver sanity checks (conservation of 'Active' energy) vs 3D geometry at the outlet.
+<!--  -->
 > **Interior & Exterior pyBEM Setup**: figure shows details of the meshes, ties and MICS as built in `PrePoMax`
 
 ![multi-zone bem boxes](assets/int_ext_1m_pipes_setup.png)
@@ -638,7 +648,7 @@ Figure shows SPL distribution at 500Hz. The results show some smoother SPL distr
 
 > **PrePoMax meshes**: 3 x outlet design variants: (1) 'sharp', (2) 'chamfer' & (3) 'bellmouth'
 
-Note the significantly different mesh densities at the `Tie-2` pair at the outlet. This should check against the resilience of the TIED pair constraint in pyBEM, with regards to how dissimilar interface meshes may be.
+Note the significantly different mesh densities at the `Tie-2` pair at the outlet. This should check against the resilience of the TIED pair constraint in pyBEM, with regard to how dissimilar interface meshes may be.
 
 ![PrePoMax BEM model](assets/int_ext_1m_pipes_mesh.png)
 
@@ -649,7 +659,9 @@ Plots below show a comparison of power curves across the three design variants. 
 - All **Active** (real part) SWL(dB) curves show values within a similar scale. **However**, note how the 'sharp' (1) design, seems to deviate (in active power) more than the other two designs, when comparing the outlet vs exterior MICS sphere results.
 - For this specific case, the 'chamfer' (2) design shows very close power levels between the outlet and the sphere of mics. The 'bellmouth' (3) design follows next in terms of sensible active powers. We'd discard the 'sharp' model, as it shows potential numerical singularities affecting the velocities by the outlet near-field.
 
-![pyBEM power plots](assets/int_ext_1m_pipes_powers.png)
+![pyBEM power plots](int_ext_pipe_1m/sharp_int_ext_pipe_1m_power.png)
+![pyBEM power plots](int_ext_pipe_1m/chamfer_int_ext_pipe_1m_power.png)
+![pyBEM power plots](int_ext_pipe_1m/bell_int_ext_pipe_1m_power.png)
 
 > **SPL (dB) Contours**: pyBEM Sound Pressure results in ParaView
 
@@ -662,16 +674,237 @@ Figure shows SPL distribution at the same frequency and contour scales across th
 #### 3.3.1 `int_ext_pipe_1m`: Preliminary Conclusions
 
 - We've been able to pass the methods and learnings from the first two simple test models onto a more realistic case with the 1m pipe exterior acoustics, with sensible results so far.
-- It is emphasised the potential numerical singularities at outlets due to 3D geometries causing sadden flip of the velocity phase in the near-field.
+- It is emphasised the potential numerical singularities at outlets due to 3D geometries causing sudden flip of the velocity phase in the near-field.
 - Nevertheless, the implementation of the **TIED pair constraints in pyBEM** shows a resilient method, even for dissimilar meshes across the interface.
-- It is also emphasised that these issues are application dependant, and initial test work on each project should show a suitable modelling methodology for each case.
+- It is also emphasised that these issues are application dependent, and initial test work on each project should show a suitable modelling methodology for each case.
+
+---
 
 > [!WARNING]
 > Although we are able to generate pretty graphs and contour plots, we shouldn't get over-confident with simulation results too quickly. The primary objective of any CAE work in-production is: **"to allow for fast & informed decision making"**. As such, we should ask ourselves many questions about our work, find the answers and keep clear evidence based material.
 >
 > Imagine that your work will be challenged by a chief engineer with decades of experience on the subject. Be prepared and always come clean if you spot any errors, and offer solutions going forward.
-> 
+>
 > In other words: *"we know nothing till we prove otherwise, with clear evidence"*. **Engineering judgement** wins every time over cold numbers and plots.
+
+---
+
+### 3.4 `Resonators`: Helmholtz & Quarter-wave Pipes
+
+This section takes the learnings shown in previous examples with the simultaneous interior/exterior multi-zone method, onto realistic side branch reactive resonators for noise attenuation. These are very common in automotive intake and exhaust systems.
+
+**Boundary Conditions:**
+
+- **Inlet:** Normal Velocity ($v_n = 5\times 10^{-5}\text{ mm/s}$)  + characteristic Impedance ($Z = \rho c$)
+- **Outlet:** Interior : Exterior TIED pair constraint; i.e. BEM resolves the outlet Impedance at each frequency
+
+**Objectives:** Predict noise attenuation properties on side branch resonators. Compare predicted frequencies to hand calculations. Insertion Loss (IL) is used as the metric for comparisons across design variants.
+
+---
+
+#### 3.4.1 Quarter-wave Pipe Resonator
+
+Classic side branch quarter-wave pipe resonator. L = 1,136mm, 1D Frequency calculation:
+$$f_n = \frac{(2n - 1) c}{4L} = 75.48, 226.45, 377.42, 528.39, 679.36\dots \text{ Hz}$$
+
+> **PrePoMax**: side branch quarter-wave pipe model setup (`ext_qwp.pmx`)
+
+![PrePoMax BEM setup](assets/resonators_01.png)
+
+> **SWL (dB)**: power outputs in pyBEM
+
+![pyBEM power plots](resonators/ext_qwp_power.png)
+
+> **SPL (dB) Contours**: pyBEM Sound Pressure results in ParaView
+
+Figure shows SPL distribution at 380Hz, which corresponds to one of the expected natural frequencies for this case, hand calculated to be at 377Hz. All the other frequencies showing attenuation in SPL graph agree with hand calculated values in 1D formula above.
+
+![pyBEM contour plots in PV](assets/resonators_02.png)
+
+---
+
+#### 3.4.2 Helmholtz Resonator
+
+Classic side branch Helmholtz resonator. 1D Frequency calculation:
+$$f_H = \frac{c}{2\pi}\sqrt{\frac{S}{V L_{\text{eff}}}} = 41.2Hz$$
+
+> **PrePoMax**: side branch Helmholtz resonator setup (`ext_helmholtz.pmx`)
+
+![PrePoMax BEM setup](assets/resonators_03.png)
+
+> **SWL (dB)**: power outputs in pyBEM
+
+![pyBEM power plots](resonators/ext_helmholtz_power.png)
+
+> **SPL (dB) Contours**: pyBEM Sound Pressure results in ParaView
+
+Figure shows SPL distribution at 40Hz, which corresponds to the expected natural frequency for this case, hand calculated to be at 41Hz. Note the 3D SPL distribution in main duct by the resonator; i.e. not plane wave condition.
+
+![pyBEM contour plots in PV](assets/resonators_04.png)
+
+---
+
+#### 3.4.3 Assembly: Quarter-wave Pipe + Helmholtz Resonator
+
+Now we combine both models into a single assembly.
+
+> **PrePoMax**: Helmholtz resonator + quarter-wave pipe assembly setup (`ext_assy_qwp_helmholtz.pmx`)
+
+![PrePoMax BEM setup](assets/resonators_05.png)
+
+> **SWL (dB)**: power outputs in pyBEM
+
+![pyBEM power plots](resonators/ext_assy_qwp_helmholtz_power.png)
+
+> **SPL (dB) Contours**: pyBEM Sound Pressure results in ParaView
+
+Figure shows SPL distribution at 240Hz, which is close to one of the hand calculated natural frequencies for the quarter-wave pipe. All the other frequencies showing attenuation in SPL graph are close to hand calculated values. Note the Helmholtz dip at 40Hz. Once we start assembling resonators, we may get a 3D distribution of pressures around interfaces with main duct. Real and predicted attenuation frequencies may start shifting slightly from 1D calculations.
+
+![pyBEM contour plots in PV](assets/resonators_06.png)
+
+Below is an animation with SPL distribution across all frequencies analysed:
+![pyBEM SPL animation in PV](assets/ext_assy_qwp_helmholtz_SPL_02.gif)
+
+##### 3.4.3.1 Insertion Loss
+
+A good metric to compare acoustics across design variants is:
+$$Insertion Loss (IL) = {SWL_{\text{base}}} - {SWL_{\text{new}}}$$
+
+The Baseline design for this case corresponds to the main duct with the same interior / exterior setup as the models above.
+
+> **Insertion Loss (dB)**
+
+Positive IL values mean noise attenuation with respect to the Baseline design. Note how with the assembly each resonator may have a differently combined IL performance due to 3D effects by intersections of side branch pipe with main duct, and in between the inlets of the resonators in the assembly. Hence 3D BEM acoustics predictions help to optimise assembly designs for best acoustics performance, before prototyping and testing.
+
+![pyBEM resonators Insertion Loss](assets/resonators_07.png)
+
+---
+
+### 3.5 `room`: Room Acoustics
+
+Now we move onto a larger model at low frequency with an attic room coupled with 2 active speakers ([ADAM A5](https://www.adam-audio.com/content/uploads/2016/12/review-adam-audio-A5-HiFiWorld0609_english.pdf)) with 2 ports each for low frequency enhancement; i.e. Helmholtz effect. I use this room for music production work (mixing and mastering), but since it is also a bedroom I have no bass traps, nor acoustic treatment on the walls. A long time ago, I took some SPL measurements at the listening position with the great and free [REW software](https://www.roomeqwizard.com/).
+
+The objective at the time was to assess the low frequency band (< 200Hz) and compare with vs without ports (blocked with socks or gaffer tape). In the end, I opted for blocking the ports as it gave me a more even low end spectrum at the listening position.
+
+> **Room setup**
+
+The poster below shows the measurement setup at the time, the CAD model built of the room, and some preliminary pyBEM results.
+![Room measurements setup](assets/room_01.png)
+
+> **Measured SPL & Insertion Loss** (A-weighted)
+
+![Room REW measurements](assets/room_02.png)
+
+Note how the IL curve shows a sensible low frequency enhancement from the ports below 200Hz. We'll try and see how close `pyBEM` can get to this measured data.
+
+---
+
+**Boundary Conditions:**
+
+- **Speakers:** Normal Velocity on front and back surfaces of the cone. The velocity on each side is 180 degrees out-of-phase, and belong to a separate zone, so that it mimics the speaker cone excitation correctly: into the room, and into the inside of the speaker cabinet connected up to the front 2 ports on each ADAM A5 unit.
+- **Setup:** Multi-zone Interior acoustics: 2 zones for the speakers, TIED to the main room large zone.
+
+**Objectives:** Predict the low frequency properties of the speakers' ports (Helmholtz effect) coupled with the main room standing waves. Insertion Loss (IL) is used to compare this effect vs REW measurements.
+
+This model is driven by two main acoustic effects, already presented and studied in previous examples.
+Therefore, we need to break the project into 2 stages:
+
+- **single speaker model with ports** prediction vs measured data found in published specs. Helmholtz resonant effects at each speaker.
+- **complete assembly room** with 2 speakers coupled to the main standing waves in the room.
+
+---
+
+#### 3.5.1 Single Speaker Model
+
+I found online the graph from measurements of the ports effects at low frequency, and the frequency response of the speaker driver performed on a separate standard test. See the graph at the bottom of this [ADAM A5 HI_FI World article](https://www.adam-audio.com/content/uploads/2016/12/review-adam-audio-A5-HiFiWorld0609_english.pdf).
+
+> **PrePoMax**: Single Speaker Model Setup (`LHS_spk_ports_Z.pmx`)
+
+![PrePoMax single speaker model](assets/room_03.png)
+
+This model comprises 2 zones to model the interior and exterior surfaces of the speaker cabinet. The sphere of MICS belongs to the exterior zone, and it is used by the power calculator in pyBEM to output the RMS SPL(dB) curves. The small box of MICS corresponds to an envelope of surfaces around the mic hardware used in the measurements. This also gives us useful RMS SPL curves on the front surface, without relying on a single (nodal) mic location, which can cause issues due to phasing, when comparing to measured SPL data.
+
+The internal surfaces of the speaker featured a resistive boundary impedance ($Z = 50 * \rho c$), which represents damping / losses of the mass of air bouncing back and forth in the ports.
+
+Only the speaker cone internal surface (to isolate the ports effect) was driven by a velocity load with an amplitude curve to represent the measured driver's frequency response.
+
+The ADAM A5 spec states that the ports were tuned to work around 70Hz, and that is our primary objective with the single speaker model.
+
+> **Single Speaker Results**: Normalised SPL(dB) results - measured vs pyBEM
+
+The agreement between measured and pyBEM is very close, capturing the overall realistic damping (green curve) with a main frequency very close to the target of 70Hz.
+
+The blue curve is shown for context when we don't include the internal impedance (Z) to mimic losses. We'd get a very sharp effect quite different from the measured response.
+![pyBEM speaker SPL](assets/room_04.png)
+
+> **Single Speaker Results**: Paraview SPL(dB) results
+
+The SPL contours show a sensible distribution for a Helmholtz effect: high pressures internally that are transferred via the front ports outlets. Note the SPL graph peaks close to 70Hz.
+![pyBEM speaker SPL](assets/room_05.png)
+
+Now we need to pass this methodology for the assembly model with 2 speakers and the room.
+
+---
+
+#### 3.5.2 Room Assembly
+
+> **PrePoMax**: Room Assembly Model Setup (`ports_attic.pmx`)
+
+![PrePoMax room assembly model](assets/room_06.png)
+
+The speakers are driven by out-of-phase velocities as shown in figure:
+![PrePoMax room assembly model](assets/room_07.png)
+
+The `no-ports_attic.pmx` model can be easily built from the previous assembly by simply deactivating in PrePoMax the TIED pairs and the 2 internal zones of the speakers. Speaker cones are then only driven with velocities on the front surface facing the room.
+
+> **Room Assembly Results**: SPL(dBA) with ports & no-ports - measured vs pyBEM
+
+The graphs show that pyBEM captures similar trends vs measurements for both models. It is emphasised that it is notoriously difficult to match SPL measurements at a single mic location, due to phasing near nodes / anti-nodes during a relevant standing wave.
+![pyBEM room assembly results](assets/room_08.png)
+
+> **Room Assembly Results**: Insertion Loss (IL) - measured vs pyBEM
+
+Our original target was to compare insertion loss curves, which represent for this case the effects of the 2 speakers' ports (Helmholtz) on the low frequency band. We can see that pyBEM gets a very good agreement on the IL vs the measured curve. This means the complete Helmholtz effects on 2 speakers coupled to a room was modelled properly.
+![pyBEM room assembly results](assets/room_09.png)
+
+---
+
+#### 3.5.3 Preliminary Conclusions & Further Work
+
+- The **single speaker model** shows **good correlation** to public measured data on the ports for the Helmholtz effect at low frequency.
+- The **Insertion Loss** results for the models with the complete room assembly show **good correlation** to measurements.
+- The individual comparisons on the **SPL response** for each of the two assembly **rooms** analysed, show **deviations to measurements**. This is most likely due to single microphone location measurements, which may suffer from phasing issues when landing near a node / anti-node during a relevant room standing wave.
+- In hindsight, should I perform the **measurements** again, I'd take several ones by **moving the microphone** slightly around the listening position. In that way, we could assess any strong effects due to specific locations vs standing waves, before comparing to predictions.
+- The **room damping** was applied via a global value (frequency dependent) in pyBEM. In a room, a potentially more accurate way to achieve a more realistic damping would be via **surface impedance** (Z), frequency dependent **on materials variants**: plaster boards, glass, wood, bedding, etc. However, this Z data is hard to obtain, and would involve a large amount of model testing with different values across surface materials. Maybe one day.
+
+---
+
+### 3.6 Automotive Air Intake System
+
+Here, I took an old production model that I analysed at the time, for an automotive client, with a commercial BEM solver (**COMET/Acoustics**). It is a complex assembly going all the way from noise source at the cylinder head inlet valves to the noise outlet to the exterior via the cold air intake openings.
+
+As well as the CAD complexity with irregular 3D geometry, the gas pressure histories at the noise inlet represented an RPM sweep to cover all operating cases. Each cylinder inlet featured the correct phasing, and inputs were frequency dependent tables for the real and imaginary parts of the gas pressure histories in the frequency domain.
+
+> **PrePoMax**: Complete Baseline assembly of an air intake system
+
+![pyBEM Air Intake assembly](assets/intake_01.png)
+
+> **pyBEM Results**: Baseline Sound Power Levels COMET vs pyBEM
+
+pyBEM results show good agreement vs a commercial BEM solver. It is noted that Comet was (most likely) a nodal based, Galerkin method solver, while pyBEM is an element centroid based collocation solver. Therefore, differences are expected on results comparisons between two numerical codes.
+![pyBEM Air Intake assembly](assets/intake_02.png)
+
+> **pyBEM Results**: SPL contours in Paraview
+
+![pyBEM Air Intake assembly](assets/intake_03.png)
+
+> **Insertion Loss**: pyBEM vs Comet
+
+I also modelled and solved in pyBEM a design variant comprising Helmholtz resonators and several quarter-wave pipes to tackle separate noise frequency ranges. Below is the Insertion Loss comparison `Comet` (commercial BEM) vs `pyBEM`.
+
+![pyBEM Air Intake assembly](assets/intake_04.png)
+
+All the **relevant frequency and level trends are captured** close enough by pyBEM, this injects some initial confidence as a competent tool for BEM acoustics with complex assemblies.
 
 ---
 ---

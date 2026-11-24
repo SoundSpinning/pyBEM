@@ -1,0 +1,514 @@
+================================================================================
+                  pyBEM - V0.5.6-alpha | BEM Acoustics Solver
+                     Standard Element (Constant) Collocation
+                  Direct Method | Multi-Zone Analysis & TIED pairs
+================================================================================
+*Heading
+Hash: FU7FqNXE, Date: 11/04/2026, Unit system: MM_TON_S_C
+ports_attic.pmx
+Multi-zone Acoustics of an attic ROOM:
+- 2 x speakers with 2 Helmholtz ports each.
+- All walls and furniture as rigid.
+a) Use damping curve from measured SPL.
+b) Use constant VELO input for transfer function vs REW measured.
+c) The spk VELOs must take account of 180deg-phase shit front vs back.
+d) Apply Z = (50 * rho_c) on internal speaker walls,
+in order to get measured Q width on ports Helmholtz effect.
+See model: LHS_spk_ports_Z.pmx
+e) del_Freq=5Hz to catch peaks vs measured.
+f) mic box with 4 surfaces for poer calcs.
+---
+
+    =====================
+    *** MODEL SUMMARY ***
+    =====================
+    INPUT FILE:   "ports_attic.inp"
+    MODEL NAME:   "ports_attic"
+
+    [ MESH | SETS | SURFACES ]
+      NODES:       14537  = BEM: 12281  + MICS: 2256   
+      ELEMENTS:    14639  = BEM: 12514  + MICS: 2125   
+      NSETS  ( 11 ):   'front_spkrs', 'back_spkrs', 'spk_walls_Z', 'Tie-LHS_spk_Master'
+        'Tie-LHS_spk_Slave', 'Tie-RHS_spk_Master', 'Tie-RHS_spk_Slave', 'front_mic'
+        'back_mic', 'RHS_mic', 'LHS_mic'
+      ELSETS ( 16 ):   'room_els', 'mics_room_els', 'LHS_spk_els', 'RHS_spk_els', 'front_spkrs_S1'
+        'back_spkrs_S2', 'spk_walls_Z_S2', 'Tie-LHS_spk_Master_S2'
+        'Tie-LHS_spk_Slave_S1', 'Tie-RHS_spk_Master_S2', 'Tie-RHS_spk_Slave_S1'
+        'mic_box_els', 'front_mic_S2', 'back_mic_S2', 'RHS_mic_S2', 'LHS_mic_S2'
+      SURFACES ( 11 ):
+        * 'front_spkrs': elset = 'front_spkrs_S1'
+        * 'back_spkrs': elset = 'back_spkrs_S2'
+        * 'spk_walls_Z': elset = 'spk_walls_Z_S2'
+        * 'Tie-LHS_spk_Master': elset = 'Tie-LHS_spk_Master_S2'
+        * 'Tie-LHS_spk_Slave': elset = 'Tie-LHS_spk_Slave_S1'
+        * 'Tie-RHS_spk_Master': elset = 'Tie-RHS_spk_Master_S2'
+        * 'Tie-RHS_spk_Slave': elset = 'Tie-RHS_spk_Slave_S1'
+        * 'front_mic': elset = 'front_mic_S2'
+        * 'back_mic': elset = 'back_mic_S2'
+        * 'RHS_mic': elset = 'RHS_mic_S2'
+        * 'LHS_mic': elset = 'LHS_mic_S2'
+
+    [ BCs | TIED PAIRS | AMPLITUDES ]
+      BCs ( 3 ):
+        * Type: IMPE  | Set: 'spk_walls_Z' | Value: (2.07515e-05+0j)
+        * Type: VELO  | Set: 'front_spkrs' | Value: (10+0j)
+        * Type: VELO  | Set: 'back_spkrs' | Value: (-10+0j)
+
+      TIED PAIRS ( 2 ):
+        * [Tie-LHS_spk] Master: 'Tie-LHS_spk_Master' <---> Slave: 'Tie-LHS_spk_Slave' (Tol: 1.0)
+        * [Tie-RHS_spk] Master: 'Tie-RHS_spk_Master' <---> Slave: 'Tie-RHS_spk_Slave' (Tol: 1.0)
+
+      AMPLITUDES ( 2 ):  'damp_amp', 'spks_vels_amp'
+
+    [ MATERIALS | ZONES ]
+      MATERIALS ( 3 ):
+        * 'z1_Air-room': rho = 1.210e-12, c = 343053.86
+        * 'z2_Air-LHS_spk': rho = 1.210e-12, c = 343053.86
+        * 'z3_Air-RHS_spk': rho = 1.210e-12, c = 343053.86
+
+      BEM ZONES ( 3 ):
+        * Zone 'z1_Air-room': elsets = ['room_els', 'mics_room_els', 'mic_box_els']
+        * Zone 'z2_Air-LHS_spk': elsets = ['LHS_spk_els']
+        * Zone 'z3_Air-RHS_spk': elsets = ['RHS_spk_els']
+
+    [ ANALYSIS ]
+      FREQUENCIES: 97 steps [20.0 Hz --> 500.0 Hz]
+      DAMPING:     Damping Ratio (DR) = 1.0
+                   Solver uses Damping Ratio (DR)
+                   In structures is Loss Factor (LF) = DR * 2
+                   Abaqus uses Volumetric Drag (gamma) = 2 * DR * rho * omega (Freq curve)
+
+
+    ==============================
+    *** INPUT MESH DIAGNOSTICS ***
+    ==============================
+    Found a total of ( 3 ) Acoustic ZONES as follows:
+    
+--> ZONE: [ 'z1_Air-room' ]
+    BEM Surface Area:              ( 7.25713e+07 L^2 )
+    CoG of BEM zone:               [ 2118.47, 884.59, 1701.84 ] L
+    Max Element Aspect Ratio:      ( 4.96 )
+    Element Edge Size (approx):    ( 103.34 L )
+    Element CoG Distance (approx): ( 90.61 L )
+    Suggested Max Freq:            ( 378.6 Hz )
+    Closed (+) Volume detected:    ( 2.80511e+10 L^3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> ZONE: [ 'z2_Air-LHS_spk' ]
+    BEM Surface Area:              ( 283776 L^2 )
+    CoG of BEM zone:               [ 442.71, 1425.32, 212.62 ] L
+    Max Element Aspect Ratio:      ( 7.07 )
+    Element Edge Size (approx):    ( 44.03 L )
+    Element CoG Distance (approx): ( 27.23 L )
+    Suggested Max Freq:            ( 1260.0 Hz )
+    Closed (+) Volume detected:    ( 8.34739e+06 L^3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> ZONE: [ 'z3_Air-RHS_spk' ]
+    BEM Surface Area:              ( 283811 L^2 )
+    CoG of BEM zone:               [ 1357.23, 1425.34, 212.62 ] L
+    Max Element Aspect Ratio:      ( 7.07 )
+    Element Edge Size (approx):    ( 42.87 L )
+    Element CoG Distance (approx): ( 28.25 L )
+    Suggested Max Freq:            ( 1214.2 Hz )
+    Closed (+) Volume detected:    ( 8.44689e+06 L^3 )
+    -> Normals point OUTWARDS ==> Assuming INTERIOR Analysis
+
+--> BC-PROCESSING: BC resolution complete ==> ( 1323 ) elements have active BCs.
+
+    ==========================
+    *** SURFACE TIED PAIRS ***
+    ==========================
+    Found a total of ( 2 ) TIED pair constraint(s). Calculating weights ...
+
+    [i] RECOMMENDATION: Equal or similar mesh sizing is recommended on TIED surfaces.
+        This helps for a stable area-weighted polygon clipping and mortar flux integration.
+        'pyBEM' automatically checks, and if necessary, adjusts slave/master roles during PRE.
+        This is indicated as '[ Auto-Swap ]').
+    [i] 'h_CoG_avg' represents the average characteristic distance between element CoGs (DoF).
+
+
+    ----------------------------------------------------------------------
+    TIE INTERFACE: [ 'Tie-LHS_spk' ]  Zones: z2_Air-LHS_spk <-> z1_Air-room
+    ----------------------------------------------------------------------
+    Input Mesh Master Surface: 'Tie-LHS_spk_Master' | ( 42 ) elements | Zone: z2_Air-LHS_spk
+    Input Mesh Slave Surface: 'Tie-LHS_spk_Slave' | ( 33 ) elements | Zone: z1_Air-room
+    ACTIVE Master Surface: 'Tie-LHS_spk_Master' | ( 42 ) elements | h_CoG_avg = 7.190
+    ACTIVE Slave Surface:  'Tie-LHS_spk_Slave' | ( 33 ) elements | h_CoG_avg = 8.082
+    Mapping Search Tolerance: ( 1.0 ) L
+    Area-Weighted Collocation Mapped Pairs: ( 62 ) element intersections
+
+    AREA CONSERVATION & OVERLAP ANALYSIS
+    ------------------------------------
+    Active Master Surface Area:         3019.14 L^2
+    Active Slave Surface Area:          2944.03 L^2
+    Intersected (Tied) Area:           2944.03 L^2 ( 100.00% ) tied
+    Uncoupled (Non-Tied) Area:            0.00 L^2 (   0.00% ) non-tied
+    Area Mapping Conservation Error:      2.92 L^2 (   0.10% ) flux leakage
+
+    MORTAR INTERFACE WEIGHTS
+    ------------------------
+    [ SLAVE -> MASTER (Area Fractions) ]
+    Slave EID  | Master EIDs & Weights                       | Total Sum
+    ----------------------------------------------------------------------
+    9049       | M697:0.370, M698:0.630                      | 1.000
+    9050       | M695:1.000                                  | 1.000
+    9051       | M694:1.000                                  | 1.000
+    9052       | M692:0.985, M693:0.015                      | 1.000
+    9053       | M693:1.000                                  | 1.000
+    9054       | M690:1.000                                  | 1.000
+    9055       | M695:0.593, M696:0.407                      | 1.000
+    9056       | M691:0.299, M700:0.701                      | 1.000
+    9057       | M689:0.685, M702:0.315                      | 1.000
+    9058       | M697:0.302, M699:0.698                      | 1.000
+    9059       | M696:0.462, M701:0.538                      | 1.000
+    9074       | M46:0.282, M47:0.718                        | 1.000
+    9075       | M45:0.332, M46:0.518, M48:0.106, M50:0.043  | 1.000
+    9076       | M48:1.000                                   | 1.000
+    9077       | M50:0.083, M51:0.917                        | 1.000
+    9078       | M49:1.000                                   | 1.000
+    9081       | M49:0.112, M50:0.888                        | 1.000
+    9082       | M57:0.613, M60:0.387                        | 1.000
+    9083       | M54:0.128, M55:0.204, M58:0.316, M59:0.268, M60:0.084 | 1.000
+    9084       | M55:0.289, M56:0.348, M57:0.097, M60:0.267  | 1.000
+    9085       | M54:0.611, M58:0.304, M59:0.086             | 1.000
+    9794       | M705:0.989, M706:0.011                      | 1.000
+    9795       | M707:0.509, M714:0.491                      | 1.000
+    9796       | M710:0.639, M711:0.361                      | 1.000
+    9797       | M703:1.000                                  | 1.000
+    9798       | M713:1.000                                  | 1.000
+    9799       | M704:1.000                                  | 1.000
+    9800       | M708:1.000                                  | 1.000
+    9801       | M706:1.000                                  | 1.000
+    9802       | M709:0.689, M715:0.311                      | 1.000
+    9803       | M711:0.319, M712:0.681                      | 1.000
+    9804       | M703:0.462, M716:0.538                      | 1.000
+    9805       | M714:1.000                                  | 1.000
+
+    [ MASTER -> SLAVE (Flux Distribution) ]
+    Master EID | Slave EIDs & Weights                        | Total Sum
+    ----------------------------------------------------------------------
+    45         | S9075:1.000                                 | 1.000
+    46         | S9074:0.312, S9075:0.688                    | 1.000
+    47         | S9074:1.000                                 | 1.000
+    48         | S9075:0.132, S9076:0.868                    | 1.000
+    49         | S9075:0.013, S9078:0.852, S9081:0.136       | 1.000
+    50         | S9075:0.050, S9077:0.062, S9081:0.887       | 1.000
+    51         | S9077:1.000                                 | 1.000
+    54         | S9083:0.452, S9085:0.548                    | 1.000
+    55         | S9083:0.477, S9084:0.523                    | 1.000
+    56         | S9084:1.000                                 | 1.000
+    57         | S9082:0.783, S9084:0.217                    | 1.000
+    58         | S9083:0.804, S9085:0.196                    | 1.000
+    59         | S9083:0.925, S9085:0.075                    | 1.000
+    60         | S9082:0.371, S9083:0.182, S9084:0.447       | 1.000
+    689        | S9057:0.716                                 | 0.716
+    690        | S9054:1.000                                 | 1.000
+    691        | S9056:0.607                                 | 0.607
+    692        | S9052:1.000                                 | 1.000
+    693        | S9052:0.014, S9053:0.986                    | 1.000
+    694        | S9051:1.000                                 | 1.000
+    695        | S9050:0.500, S9055:0.500                    | 1.000
+    696        | S9055:0.528, S9059:0.472                    | 1.000
+    697        | S9049:0.564, S9058:0.436                    | 1.000
+    698        | S9049:1.000                                 | 1.000
+    699        | S9058:1.000                                 | 1.000
+    700        | S9056:0.713                                 | 0.713
+    701        | S9059:1.000                                 | 1.000
+    702        | S9057:0.606                                 | 0.606
+    703        | S9797:0.541, S9804:0.459                    | 1.000
+    704        | S9799:1.000                                 | 1.000
+    705        | S9794:1.000                                 | 1.000
+    706        | S9794:0.012, S9801:0.988                    | 1.000
+    707        | S9795:1.000                                 | 1.000
+    708        | S9800:1.000                                 | 1.000
+    709        | S9802:0.715                                 | 0.715
+    710        | S9796:1.000                                 | 1.000
+    711        | S9796:0.543, S9803:0.457                    | 1.000
+    712        | S9803:1.000                                 | 1.000
+    713        | S9798:1.000                                 | 1.000
+    714        | S9795:0.502, S9805:0.498                    | 1.000
+    715        | S9802:0.606                                 | 0.606
+    716        | S9804:1.000                                 | 1.000
+
+    ----------------------------------------------------------------------
+    TIE INTERFACE: [ 'Tie-RHS_spk' ]  Zones: z3_Air-RHS_spk <-> z1_Air-room
+    ----------------------------------------------------------------------
+    Input Mesh Master Surface: 'Tie-RHS_spk_Master' | ( 42 ) elements | Zone: z3_Air-RHS_spk
+    Input Mesh Slave Surface: 'Tie-RHS_spk_Slave' | ( 34 ) elements | Zone: z1_Air-room
+    ACTIVE Master Surface: 'Tie-RHS_spk_Master' | ( 42 ) elements | h_CoG_avg = 7.103
+    ACTIVE Slave Surface:  'Tie-RHS_spk_Slave' | ( 34 ) elements | h_CoG_avg = 7.886
+    Mapping Search Tolerance: ( 1.0 ) L
+    Area-Weighted Collocation Mapped Pairs: ( 67 ) element intersections
+
+    AREA CONSERVATION & OVERLAP ANALYSIS
+    ------------------------------------
+    Active Master Surface Area:         3019.19 L^2
+    Active Slave Surface Area:          2918.80 L^2
+    Intersected (Tied) Area:           2918.80 L^2 ( 100.00% ) tied
+    Uncoupled (Non-Tied) Area:            0.00 L^2 (   0.00% ) non-tied
+    Area Mapping Conservation Error:      3.51 L^2 (   0.12% ) flux leakage
+
+    MORTAR INTERFACE WEIGHTS
+    ------------------------
+    [ SLAVE -> MASTER (Area Fractions) ]
+    Slave EID  | Master EIDs & Weights                       | Total Sum
+    ----------------------------------------------------------------------
+    8949       | M1629:0.337, M1638:0.663                    | 1.000
+    8950       | M1636:1.000                                 | 1.000
+    8951       | M1635:1.000                                 | 1.000
+    8952       | M1633:1.000                                 | 1.000
+    8953       | M1631:1.000                                 | 1.000
+    8954       | M1628:0.059, M1636:0.579, M1641:0.362       | 1.000
+    8955       | M1634:1.000                                 | 1.000
+    8956       | M1632:0.684, M1640:0.316                    | 1.000
+    8957       | M1630:0.318, M1639:0.682                    | 1.000
+    8958       | M1629:0.331, M1637:0.669                    | 1.000
+    8959       | M1628:1.000                                 | 1.000
+    8960       | M1615:0.355, M1622:0.645                    | 1.000
+    8961       | M1621:1.000                                 | 1.000
+    8962       | M1618:0.954, M1619:0.046                    | 1.000
+    8963       | M1619:1.000                                 | 1.000
+    8964       | M1617:1.000                                 | 1.000
+    8965       | M1623:1.000                                 | 1.000
+    8966       | M1616:1.000                                 | 1.000
+    8967       | M1620:0.686, M1625:0.314                    | 1.000
+    8968       | M1614:0.703, M1626:0.297                    | 1.000
+    8969       | M1615:0.309, M1624:0.691                    | 1.000
+    8970       | M1616:0.468, M1627:0.532                    | 1.000
+    9060       | M991:0.422, M992:0.415, M993:0.163          | 1.000
+    9061       | M993:0.622, M994:0.309, M997:0.069          | 1.000
+    9062       | M994:0.282, M996:0.686, M997:0.032          | 1.000
+    9063       | M996:0.269, M997:0.731                      | 1.000
+    9064       | M992:0.816, M995:0.184                      | 1.000
+    9067       | M992:0.021, M995:0.522, M997:0.458          | 1.000
+    9068       | M983:0.798, M986:0.138, M987:0.064          | 1.000
+    9069       | M982:0.569, M983:0.431                      | 1.000
+    9070       | M983:0.355, M986:0.645                      | 1.000
+    9071       | M984:0.299, M985:0.701                      | 1.000
+    9072       | M984:0.185, M985:0.257, M989:0.558          | 1.000
+    9073       | M982:0.112, M983:0.192, M984:0.185, M987:0.361, M989:0.150 | 1.000
+
+    [ MASTER -> SLAVE (Flux Distribution) ]
+    Master EID | Slave EIDs & Weights                        | Total Sum
+    ----------------------------------------------------------------------
+    982        | S9069:0.534, S9072:0.010, S9073:0.456       | 1.000
+    983        | S9068:0.455, S9069:0.133, S9070:0.155, S9073:0.257 | 1.000
+    984        | S9071:0.234, S9072:0.261, S9073:0.505       | 1.000
+    985        | S9071:0.601, S9072:0.399                    | 1.000
+    986        | S9068:0.219, S9070:0.781                    | 1.000
+    987        | S9068:0.070, S9073:0.930                    | 1.000
+    989        | S9072:0.659, S9073:0.341                    | 1.000
+    991        | S9060:0.975, S9061:0.025                    | 1.000
+    992        | S9060:0.390, S9064:0.590, S9067:0.019       | 1.000
+    993        | S9060:0.182, S9061:0.818                    | 1.000
+    994        | S9061:0.601, S9062:0.399                    | 1.000
+    995        | S9064:0.216, S9067:0.784                    | 1.000
+    996        | S9062:0.744, S9063:0.256                    | 1.000
+    997        | S9061:0.073, S9062:0.025, S9063:0.494, S9067:0.408 | 1.000
+    1614       | S8968:0.713                                 | 0.713
+    1615       | S8960:0.548, S8969:0.452                    | 1.000
+    1616       | S8966:0.532, S8970:0.468                    | 1.000
+    1617       | S8964:1.000                                 | 1.000
+    1618       | S8962:1.000                                 | 1.000
+    1619       | S8962:0.046, S8963:0.954                    | 1.000
+    1620       | S8967:0.715                                 | 0.715
+    1621       | S8961:1.000                                 | 1.000
+    1622       | S8960:1.000                                 | 1.000
+    1623       | S8965:1.000                                 | 1.000
+    1624       | S8969:1.000                                 | 1.000
+    1625       | S8967:0.606                                 | 0.606
+    1626       | S8968:0.607                                 | 0.607
+    1627       | S8970:1.000                                 | 1.000
+    1628       | S8954:0.075, S8959:0.925                    | 1.000
+    1629       | S8949:0.522, S8958:0.478                    | 1.000
+    1630       | S8957:0.606                                 | 0.606
+    1631       | S8953:1.000                                 | 1.000
+    1632       | S8956:0.716                                 | 0.716
+    1633       | S8952:1.000                                 | 1.000
+    1634       | S8955:1.000                                 | 1.000
+    1635       | S8951:1.000                                 | 1.000
+    1636       | S8950:0.500, S8954:0.500                    | 1.000
+    1637       | S8958:1.000                                 | 1.000
+    1638       | S8949:1.000                                 | 1.000
+    1639       | S8957:0.716                                 | 0.716
+    1640       | S8956:0.606                                 | 0.606
+    1641       | S8954:1.000                                 | 1.000
+    ======================================================================
+
+======================================================================
+*** ACOUSTICS multi-zone job started   |  Wed Nov  4 15:53:20 2026 ***
+======================================================================
+--> SOLVING ( 97 ) Frequencies [20.0Hz --> 500.0Hz | delta_Hz = 5.00] Steady State Direct <--
+
+ Number of CPUs found on this machine: ( 6 ) | Number of threads: ( 12 )
+ MAX number of CPUs assigned to Numba parallel loops in PRE is: ( 6 )
+ Available RAM found at job start:     ( 51.480 GB )
+ Global Multi-Zone Matrix Structure:   ( 13550 x 13550 ) DOF
+
+ [i] First PRE Assembly (and compile) of [G] & [H] matrices takes longer. 
+     Hold tight, it gets faster, see table with times per Freq in 'ports_attic.log'.
+
+ --> ZONES matrix sizing:
+     Zone 'z1_Air-room ': Matrix Index Range [    0 -> 10647] ( 10648 ) elements
+     Zone 'z2_Air-LHS_spk': Matrix Index Range [10648 -> 11584] ( 937 ) elements
+     Zone 'z3_Air-RHS_spk': Matrix Index Range [11585 -> 12513] ( 929 ) elements
+
+ --> PRE Assembly calculations started:
+     Pre - BEM Geometric Static Kernels for Zone: [ z1_Air-room ]
+     Pre - MICS data and arrays for Zone:         [ z1_Air-room ]
+     Pre - BEM Geometric Static Kernels for Zone: [ z2_Air-LHS_spk ]
+     Pre - BEM Geometric Static Kernels for Zone: [ z3_Air-RHS_spk ]
+
+ [i] PRE Assembly (and compile) of multi-zone [G] & [H] matrices took: ( 19.42s )
+     BEM: ( 17.073s ) | MICS: ( 2.348s ) | allocated RAM ( 28.310 GB )
+     
+ [i] Execution Mode: Single-Worker Sequential Solve (Direct RAM Access, No Pickling Overhead)
+     Numba MAX CPUs set to: ( 6 )
+     Numpy / LAPACK internal multithreading set to: ( 6 ) cores
+     Estimated total RAM per Freq: ( 32.022 GB )
+
+ [i] Running sequential frequency sweep in main process...
+
+==================================================================================================
+ Freq (Hz) | Assembly | Solve All:   BEM    +   Mics   |  RAM (GB)  | Results file       | Status
+==================================================================================================
+ 20.0   Hz |  7.591 s |  75.755s :  75.345  +  0.410   |   31.047   | In Memory          |   OK  
+ 25.0   Hz |  7.955 s |  87.325s :  86.892  +  0.433   |   31.051   | In Memory          |   OK  
+ 30.0   Hz |  8.263 s |  99.146s :  98.608  +  0.538   |   31.053   | In Memory          |   OK  
+ 35.0   Hz |  8.860 s | 103.895s : 103.418  +  0.477   |   31.055   | In Memory          |   OK  
+ 40.0   Hz |  8.758 s | 100.120s :  99.531  +  0.589   |   31.057   | In Memory          |   OK  
+ 45.0   Hz |  8.886 s |  95.798s :  95.263  +  0.535   |   31.058   | In Memory          |   OK  
+ 50.0   Hz |  8.692 s |  94.786s :  94.307  +  0.479   |   31.060   | In Memory          |   OK  
+ 55.0   Hz |  8.466 s |  95.683s :  95.195  +  0.488   |   31.062   | In Memory          |   OK  
+ 60.0   Hz |  8.709 s |  99.099s :  98.519  +  0.580   |   31.064   | In Memory          |   OK  
+ 65.0   Hz |  8.575 s |  99.830s :  99.234  +  0.596   |   31.065   | In Memory          |   OK  
+ 70.0   Hz |  8.475 s |  99.720s :  99.241  +  0.479   |   30.992   | In Memory          |   OK  
+ 75.0   Hz |  8.447 s |  95.493s :  94.940  +  0.552   |   30.994   | In Memory          |   OK  
+ 80.0   Hz |  8.813 s |  99.013s :  98.417  +  0.597   |   30.995   | In Memory          |   OK  
+ 85.0   Hz |  8.856 s |  98.414s :  97.937  +  0.477   |   30.951   | In Memory          |   OK  
+ 90.0   Hz |  8.438 s |  94.774s :  94.289  +  0.484   |   30.953   | In Memory          |   OK  
+ 95.0   Hz |  8.570 s | 100.578s :  99.995  +  0.583   |   30.955   | In Memory          |   OK  
+ 100.0  Hz |  8.786 s |  97.680s :  97.174  +  0.506   |   30.952   | In Memory          |   OK  
+ 105.0  Hz |  8.612 s | 105.812s : 105.162  +  0.650   |   30.954   | In Memory          |   OK  
+ 110.0  Hz |  8.958 s |  98.946s :  98.464  +  0.483   |   30.956   | In Memory          |   OK  
+ 115.0  Hz |  9.198 s | 105.506s : 105.011  +  0.495   |   30.955   | In Memory          |   OK  
+ 120.0  Hz |  8.965 s | 101.312s : 100.764  +  0.548   |   30.956   | In Memory          |   OK  
+ 125.0  Hz |  9.023 s |  97.943s :  97.461  +  0.482   |   30.952   | In Memory          |   OK  
+ 130.0  Hz |  8.599 s |  98.060s :  97.574  +  0.487   |   30.954   | In Memory          |   OK  
+ 135.0  Hz |  8.316 s |  94.241s :  93.743  +  0.499   |   30.955   | In Memory          |   OK  
+ 140.0  Hz |  8.320 s |  94.218s :  93.738  +  0.480   |   30.952   | In Memory          |   OK  
+ 145.0  Hz |  8.328 s | 100.112s :  99.627  +  0.484   |   30.954   | In Memory          |   OK  
+ 150.0  Hz |  8.668 s |  94.546s :  94.076  +  0.470   |   30.956   | In Memory          |   OK  
+ 155.0  Hz |  8.429 s |  94.500s :  94.031  +  0.469   |   30.949   | In Memory          |   OK  
+ 160.0  Hz |  8.681 s |  94.688s :  94.212  +  0.476   |   30.950   | In Memory          |   OK  
+ 165.0  Hz |  8.506 s |  94.311s :  93.834  +  0.477   |   30.953   | In Memory          |   OK  
+ 170.0  Hz |  8.695 s |  93.985s :  93.515  +  0.470   |   30.954   | In Memory          |   OK  
+ 175.0  Hz |  8.446 s |  95.253s :  94.770  +  0.484   |   30.956   | In Memory          |   OK  
+ 180.0  Hz |  8.613 s |  94.337s :  93.794  +  0.543   |   30.958   | In Memory          |   OK  
+ 185.0  Hz |  8.278 s |  94.985s :  94.509  +  0.475   |   30.960   | In Memory          |   OK  
+ 190.0  Hz |  8.503 s |  94.178s :  93.707  +  0.471   |   30.961   | In Memory          |   OK  
+ 195.0  Hz |  8.263 s |  94.728s :  94.253  +  0.475   |   30.963   | In Memory          |   OK  
+ 200.0  Hz |  8.372 s |  94.267s :  93.785  +  0.482   |   30.965   | In Memory          |   OK  
+ 205.0  Hz |  8.348 s |  93.779s :  93.310  +  0.469   |   30.966   | In Memory          |   OK  
+ 210.0  Hz |  8.464 s |  94.969s :  94.500  +  0.469   |   30.968   | In Memory          |   OK  
+ 215.0  Hz |  8.413 s |  95.432s :  94.940  +  0.492   |   30.970   | In Memory          |   OK  
+ 220.0  Hz |  8.372 s |  94.652s :  94.180  +  0.473   |   30.972   | In Memory          |   OK  
+ 225.0  Hz |  8.310 s |  94.220s :  93.751  +  0.469   |   30.974   | In Memory          |   OK  
+ 230.0  Hz |  8.344 s |  94.176s :  93.692  +  0.484   |   30.976   | In Memory          |   OK  
+ 235.0  Hz |  8.412 s |  94.570s :  94.075  +  0.495   |   30.977   | In Memory          |   OK  
+ 240.0  Hz |  8.287 s |  94.911s :  94.441  +  0.470   |   30.979   | In Memory          |   OK  
+ 245.0  Hz |  8.328 s |  95.013s :  94.473  +  0.541   |   30.981   | In Memory          |   OK  
+ 250.0  Hz |  8.309 s |  94.201s :  93.732  +  0.469   |   30.983   | In Memory          |   OK  
+ 255.0  Hz |  8.467 s |  94.194s :  93.730  +  0.464   |   30.985   | In Memory          |   OK  
+ 260.0  Hz |  8.378 s |  94.420s :  93.954  +  0.465   |   30.986   | In Memory          |   OK  
+ 265.0  Hz |  8.352 s |  94.396s :  93.918  +  0.478   |   30.988   | In Memory          |   OK  
+ 270.0  Hz |  8.281 s |  94.872s :  94.401  +  0.471   |   30.990   | In Memory          |   OK  
+ 275.0  Hz |  8.288 s |  94.180s :  93.710  +  0.471   |   30.992   | In Memory          |   OK  
+ 280.0  Hz |  8.367 s |  98.678s :  98.195  +  0.484   |   30.994   | In Memory          |   OK  
+ 285.0  Hz |  8.310 s |  94.887s :  94.403  +  0.484   |   30.995   | In Memory          |   OK  
+ 290.0  Hz |  8.337 s |  94.482s :  93.983  +  0.499   |   30.997   | In Memory          |   OK  
+ 295.0  Hz |  8.276 s |  95.557s :  95.093  +  0.464   |   30.999   | In Memory          |   OK  
+ 300.0  Hz |  8.390 s |  94.802s :  94.332  +  0.470   |   31.001   | In Memory          |   OK  
+ 305.0  Hz |  8.360 s |  95.273s :  94.789  +  0.484   |   31.003   | In Memory          |   OK  
+ 310.0  Hz |  8.251 s |  94.320s :  93.818  +  0.501   |   31.004   | In Memory          |   OK  
+ 315.0  Hz |  8.381 s |  94.285s :  93.765  +  0.520   |   31.006   | In Memory          |   OK  
+ 320.0  Hz |  8.227 s |  99.518s :  99.013  +  0.504   |   31.008   | In Memory          |   OK  
+ 325.0  Hz |  8.423 s | 103.261s : 102.680  +  0.581   |   31.010   | In Memory          |   OK  
+ 330.0  Hz |  8.614 s | 102.721s : 102.240  +  0.481   |   31.012   | In Memory          |   OK  
+ 335.0  Hz |  9.074 s | 105.506s : 105.011  +  0.495   |   31.014   | In Memory          |   OK  
+ 340.0  Hz |  8.692 s | 101.958s : 101.444  +  0.515   |   31.005   | In Memory          |   OK  
+ 345.0  Hz |  9.263 s | 101.807s : 101.287  +  0.521   |   31.007   | In Memory          |   OK  
+ 350.0  Hz |  9.024 s | 105.053s : 104.344  +  0.709   |   31.008   | In Memory          |   OK  
+ 355.0  Hz | 10.071 s | 104.749s : 104.181  +  0.568   |   31.001   | In Memory          |   OK  
+ 360.0  Hz |  9.061 s | 103.145s : 102.665  +  0.481   |   31.003   | In Memory          |   OK  
+ 365.0  Hz |  9.043 s | 104.608s : 104.111  +  0.497   |   31.005   | In Memory          |   OK  
+ 370.0  Hz |  8.972 s | 101.464s : 100.837  +  0.627   |   30.987   | In Memory          |   OK  
+ 375.0  Hz |  9.667 s | 110.566s : 109.837  +  0.729   |   30.989   | In Memory          |   OK  
+ 380.0  Hz | 10.773 s | 107.406s : 106.910  +  0.496   |   30.945   | In Memory          |   OK  
+ 385.0  Hz |  8.986 s | 102.176s : 101.581  +  0.595   |   30.947   | In Memory          |   OK  
+ 390.0  Hz |  8.909 s | 102.743s : 102.250  +  0.493   |   30.949   | In Memory          |   OK  
+ 395.0  Hz |  9.011 s | 106.540s : 106.029  +  0.511   |   30.949   | In Memory          |   OK  
+ 400.0  Hz |  8.988 s | 105.552s : 105.058  +  0.494   |   30.951   | In Memory          |   OK  
+ 405.0  Hz |  9.007 s | 102.138s : 101.651  +  0.487   |   30.953   | In Memory          |   OK  
+ 410.0  Hz |  9.234 s |  99.782s :  99.189  +  0.594   |   30.949   | In Memory          |   OK  
+ 415.0  Hz |  8.946 s |  99.813s :  99.329  +  0.483   |   30.951   | In Memory          |   OK  
+ 420.0  Hz |  9.287 s |  99.476s :  98.946  +  0.530   |   30.947   | In Memory          |   OK  
+ 425.0  Hz |  8.751 s | 100.277s :  99.678  +  0.599   |   30.949   | In Memory          |   OK  
+ 430.0  Hz |  8.818 s |  99.074s :  98.571  +  0.503   |   30.951   | In Memory          |   OK  
+ 435.0  Hz |  8.884 s | 104.247s : 103.612  +  0.634   |   30.947   | In Memory          |   OK  
+ 440.0  Hz |  9.014 s | 116.060s : 115.471  +  0.589   |   30.949   | In Memory          |   OK  
+ 445.0  Hz |  9.117 s |  99.536s :  99.047  +  0.489   |   30.951   | In Memory          |   OK  
+ 450.0  Hz |  8.836 s |  99.830s :  99.300  +  0.530   |   30.947   | In Memory          |   OK  
+ 455.0  Hz |  9.177 s | 107.189s : 106.500  +  0.690   |   30.949   | In Memory          |   OK  
+ 460.0  Hz |  8.957 s |  94.265s :  93.773  +  0.492   |   30.946   | In Memory          |   OK  
+ 465.0  Hz |  8.820 s |  94.496s :  94.000  +  0.496   |   30.948   | In Memory          |   OK  
+ 470.0  Hz |  8.892 s |  93.921s :  93.440  +  0.480   |   30.950   | In Memory          |   OK  
+ 475.0  Hz |  8.796 s |  94.090s :  93.594  +  0.496   |   30.944   | In Memory          |   OK  
+ 480.0  Hz |  8.734 s |  94.517s :  94.009  +  0.508   |   30.946   | In Memory          |   OK  
+ 485.0  Hz |  9.055 s |  94.782s :  94.296  +  0.486   |   30.948   | In Memory          |   OK  
+ 490.0  Hz |  8.752 s |  94.933s :  94.422  +  0.511   |   30.950   | In Memory          |   OK  
+ 495.0  Hz |  8.798 s |  96.327s :  95.854  +  0.473   |   30.951   | In Memory          |   OK  
+ 500.0  Hz |  8.472 s |  93.877s :  93.392  +  0.485   |   30.953   | In Memory          |   OK  
+==================================================================================================
+[i] No shared memory to clean up (single-worker mode).
+
+--> Writing 97 binary frequency steps
+    Export Complete. PV results file written to: ( 'ports_attic_Results.pvd' )
+
+--> Calculating Sound POWERS:
+    SWL(dB), RMS Pressure, SPL(dB) and Mean Velocity on all Input & Tied surfaces:
+    A = Input or TIED Area | TSW = Total Sound Power sum from all frequencies
+
+     'front_spkrs' | A = 25837.9 L^2 | TSW_real = 3.114 | TSW_imag = -14.03 | TSW_mag = 14.48
+     'back_spkrs' | A = 28308.3 L^2 | TSW_real = 17.38 | TSW_imag = 6.609 | TSW_mag = 29.07
+     'spk_walls_Z' | A = 494706 L^2 | TSW_real = 14.05 | TSW_imag = 1.052e-17 | TSW_mag = 14.05
+     'Tie-LHS_spk_Master' | A = 2944.03 L^2 | TSW_real = 0.3241 | TSW_imag = 0.8388 | TSW_mag = 0.9734
+     'Tie-LHS_spk_Slave' | A = 2944.03 L^2 | TSW_real = 0.333 | TSW_imag = -0.8626 | TSW_mag = 0.9979
+     'Tie-RHS_spk_Master' | A = 2918.8 L^2 | TSW_real = 0.3125 | TSW_imag = 0.8871 | TSW_mag = 1.011
+     'Tie-RHS_spk_Slave' | A = 2918.8 L^2 | TSW_real = 0.3129 | TSW_imag = -0.8993 | TSW_mag = 1.024
+     'front_mic' | A = 5000 L^2 | TSW_real = 0.0006294 | TSW_imag = -7.92e-05 | TSW_mag = 0.0008186
+     'back_mic' | A = 5000 L^2 | TSW_real = 0.0005603 | TSW_imag = 5.723e-05 | TSW_mag = 0.0007487
+     'RHS_mic' | A = 5000 L^2 | TSW_real = 0.0001803 | TSW_imag = 0.0001145 | TSW_mag = 0.00032
+     'LHS_mic' | A = 5000 L^2 | TSW_real = 0.0001786 | TSW_imag = -0.0001136 | TSW_mag = 0.0003211
+
+     Freq / Power results written to: ( 'ports_attic_power.csv' )
+     Freq / Power graphs plotted to: ( 'ports_attic_power.png' )
+
+--> COMPLETED all Multi-Zone Frequency Steps + POST power sums <--
+    Function 'averaged_at_nodes' took: ( 5.91s )
+    Export Write and VTU Processing:   ( 4.13s )
+
+    ==========================
+    *** SIMULATION SUMMARY ***
+    ==========================
+    Simulation Finished at: Wed Nov  4 18:46:51 2026
+    Total Elapsed Time:     10410.73 seconds ( 173.51 minutes )
+    Total Frequencies:      97
+    Avg Time per Freq:      107.327 seconds/Freq: 
+                            Assy ( 8.857s ) + BEM ( 97.434s ) + Mics ( 0.536s ) + Export ( 0.104s )
+
+    Check 'ports_attic.log' for more details.
+    Open  'ports_attic_Results.pvd' in ParaView.
+==================================================================================================
+
