@@ -1253,8 +1253,8 @@ def _get_a_weighting(f):
     r_a = term1 / term2
     return 20.0 * np.log10(r_a) + 2.00
 
-# ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
-def calculate_total_sound_power(
+# OLD - ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
+def old_calculate_total_sound_power(
     csv_filepath,
     surface_elements,
     freqs,
@@ -1720,6 +1720,491 @@ def calculate_total_sound_power(
             writer.writerow(row)
 
     return surf_pwr_labels
+
+# Improved ELEMENT based power calcs, including Active sub-patches from TIED pair surfaces
+# Refactored into helper functions for maintenance
+def _resolve_surfaces_and_areas(
+    surface_elements,
+    global_bem_elements_map,
+    global_bem_areas,
+    global_mics_elements_conn,
+    global_mics_areas,
+    tie_registry=None,
+    zones_mesh=None,
+    global_rho=None,
+    global_c=None,
+):
+    """Build extended surface map (including active tied sub-patches), areas, and rho*c."""
+    all_surface_elements = dict(surface_elements)
+    surface_zone_map = {}
+    tied_area_lookup = {}
+
+    if tie_registry:
+        for tie_name, info in tie_registry.items():
+            master_key = f"{tie_name}_Master"
+            slave_key = f"{tie_name}_Slave"
+
+            all_surface_elements[master_key] = info["active_master_eids"]
+            all_surface_elements[slave_key] = info["active_slave_eids"]
+            tied_area_lookup[master_key] = info["intersected_area"]
+            tied_area_lookup[slave_key] = info["intersected_area"]
+
+            if "master_zone" in info:
+                surface_zone_map[master_key] = info["master_zone"]
+            if "slave_zone" in info:
+                surface_zone_map[slave_key] = info["slave_zone"]
+
+    if zones_mesh:
+        for surf_name, surf_elems in all_surface_elements.items():
+            if surf_name in surface_zone_map or len(surf_elems) == 0:
+                continue
+            first_eid = surf_elems[0]
+            for zone_name, z_mesh in zones_mesh.items():
+                if first_eid in z_mesh.get("elements", {}) or first_eid in z_mesh.get("mics_elements", {}):
+                    surface_zone_map[surf_name] = zone_name
+                    break
+
+    surface_rho_c = {}
+    if global_rho and global_c:
+        for surf_name, zone_name in surface_zone_map.items():
+            if zone_name in global_rho and zone_name in global_c:
+                surface_rho_c[surf_name] = global_rho[zone_name] * global_c[zone_name]
+
+    surface_metrics = {
+        surf_name: {
+            "area": 0.0,
+            "total_energy_sum_real": 0.0,
+            "total_energy_sum_imag": 0.0,
+            "total_energy_sum_mag": 0.0,
+        }
+        for surf_name in all_surface_elements.keys()
+    }
+
+    for surf_name, surf_elems in all_surface_elements.items():
+        if len(surf_elems) == 0:
+            continue
+
+        if surf_name in tied_area_lookup:
+            surface_metrics[surf_name]["area"] = tied_area_lookup[surf_name]
+            continue
+
+        first_eid = surf_elems[0]
+        if first_eid in global_bem_elements_map:
+            surface_metrics[surf_name]["area"] = sum(
+                global_bem_areas[eid] for eid in surf_elems if eid in global_bem_areas
+            )
+        elif first_eid in global_mics_elements_conn:
+            surface_metrics[surf_name]["area"] = sum(
+                global_mics_areas[meid] for meid in surf_elems if meid in global_mics_areas
+            )
+
+    return all_surface_elements, surface_rho_c, surface_metrics
+
+def _log_tie_flux_balance(
+    freq,
+    tie_registry,
+    all_surface_elements,
+    p_surf_f,
+    v_surf_f,
+    global_bem_elements_map,
+    global_bem_areas,
+):
+    """Log interface volume-velocity flux balance and mean (P-V) phase angles for tied pairs."""
+    if not tie_registry or not constants.debug_mode:
+        return
+
+    for tie_name, _ in tie_registry.items():
+        master_eids = all_surface_elements.get(f"{tie_name}_Master", [])
+        slave_eids = all_surface_elements.get(f"{tie_name}_Slave", [])
+
+        q_master_complex = 0.0 + 0.0j
+        q_slave_complex = 0.0 + 0.0j
+        master_phases = []
+        slave_phases = []
+
+        for eid in master_eids:
+            if eid in global_bem_elements_map:
+                g_idx = global_bem_elements_map[eid]
+                p_el = p_surf_f[g_idx]
+                v_el = v_surf_f[g_idx]
+                q_master_complex += v_el * global_bem_areas[eid]
+                if abs(p_el) > constants.tol and abs(v_el) > constants.tol:
+                    master_phases.append(np.angle(p_el) - np.angle(v_el))
+
+        for eid in slave_eids:
+            if eid in global_bem_elements_map:
+                g_idx = global_bem_elements_map[eid]
+                p_el = p_surf_f[g_idx]
+                v_el = v_surf_f[g_idx]
+                q_slave_complex += v_el * global_bem_areas[eid]
+                if abs(p_el) > constants.tol and abs(v_el) > constants.tol:
+                    slave_phases.append(np.angle(p_el) - np.angle(v_el))
+
+        q_m_abs = abs(q_master_complex)
+        q_s_abs = abs(q_slave_complex)
+        q_net_err = abs(q_master_complex + q_slave_complex)
+        q_avg = 0.5 * (q_m_abs + q_s_abs)
+        q_rel_err = (q_net_err / (q_avg + constants.eps)) * 100.0
+
+        mean_phi_m = np.degrees(np.mean(master_phases)) if master_phases else 0.0
+        mean_phi_s = np.degrees(np.mean(slave_phases)) if slave_phases else 0.0
+
+        file_logger.debug(
+            f"Freq: {freq:6.1f} Hz | '{tie_name}': "
+            f"Q_master: {q_m_abs:.4e} | Q_slave: {q_s_abs:.4e} | "
+            f"Flux Error: {q_net_err:.4e} ({q_rel_err:.2f}%) | "
+            f"Mean Phase(P-V): Master={mean_phi_m:5.1f}deg, Slave={mean_phi_s:5.1f}deg"
+        )
+
+def _integrate_surface_frequency(
+    surf_name,
+    surf_elems,
+    total_surf_area,
+    rho_c_val,
+    p_surf_f,
+    v_surf_f,
+    p_mics_f,
+    vx_mics_f,
+    vy_mics_f,
+    vz_mics_f,
+    global_bem_elements_map,
+    global_bem_areas,
+    global_mics_nodes_map,
+    global_mics_elements_conn,
+    global_mics_areas,
+    global_mics_normals,
+):
+    """Integrate power, velocity/pressure metrics, and power-based R_mag_pwr / alpha_pwr."""
+    if len(surf_elems) == 0 or total_surf_area <= constants.eps:
+        return {
+            "real": 0.0, "imag": 0.0, "mag": 0.0, "react_active_ratio": 0.0,
+            "p_rms": 0.0, "v_complex": 0.0 + 0.0j, "v_mag": 0.0,
+            "r_mag_pwr": 0.0, "alpha_pwr": 0.0,
+            "spl": 0.0, "svl": 0.0,
+        }
+
+    first_eid = surf_elems[0]
+    surf_real_pwr = 0.0
+    surf_imag_pwr = 0.0
+    surf_p_sq_accum = 0.0
+    surf_v_accum = 0.0 + 0.0j
+
+    if first_eid in global_bem_elements_map:
+        for eid in surf_elems:
+            if eid not in global_bem_elements_map:
+                continue
+            g_idx = global_bem_elements_map[eid]
+            p_elem = p_surf_f[g_idx]
+            v_elem = v_surf_f[g_idx]
+            area_elem = global_bem_areas[eid]
+
+            s_elem = 0.5 * p_elem * np.conj(v_elem)
+            surf_real_pwr += np.real(s_elem) * area_elem
+            surf_imag_pwr += np.imag(s_elem) * area_elem
+
+            surf_p_sq_accum += (np.abs(p_elem) ** 2) * area_elem
+            surf_v_accum += v_elem * area_elem
+
+        if (
+            "tied" not in surf_name.lower()
+            and "[active]" not in surf_name.lower()
+            and surf_real_pwr < 0
+        ):
+            surf_real_pwr = -surf_real_pwr
+
+    elif first_eid in global_mics_elements_conn:
+        for meid in surf_elems:
+            if meid not in global_mics_elements_conn:
+                continue
+            elem_nodes = global_mics_elements_conn[meid]
+            area_m_elem = global_mics_areas[meid]
+            normal_m_elem = global_mics_normals[meid]
+
+            p_centroid = 0.0 + 0.0j
+            vx_centroid = 0.0 + 0.0j
+            vy_centroid = 0.0 + 0.0j
+            vz_centroid = 0.0 + 0.0j
+
+            for nid in elem_nodes:
+                g_n_idx = global_mics_nodes_map[nid]
+                p_centroid += p_mics_f[g_n_idx]
+                vx_centroid += vx_mics_f[g_n_idx]
+                vy_centroid += vy_mics_f[g_n_idx]
+                vz_centroid += vz_mics_f[g_n_idx]
+
+            num_nodes = len(elem_nodes)
+            p_centroid /= num_nodes
+            vx_centroid /= num_nodes
+            vy_centroid /= num_nodes
+            vz_centroid /= num_nodes
+
+            v_normal_centroid = (
+                vx_centroid * normal_m_elem[0]
+                + vy_centroid * normal_m_elem[1]
+                + vz_centroid * normal_m_elem[2]
+            )
+
+            s_elem = 0.5 * p_centroid * np.conj(v_normal_centroid)
+            surf_real_pwr += np.real(s_elem) * area_m_elem
+            surf_imag_pwr += np.imag(s_elem) * area_m_elem
+
+            surf_p_sq_accum += (np.abs(p_centroid) ** 2) * area_m_elem
+            surf_v_accum += v_normal_centroid * area_m_elem
+
+        if surf_real_pwr < 0:
+            surf_real_pwr = -surf_real_pwr
+
+    surf_mag_pwr = float(np.sqrt(surf_real_pwr**2 + surf_imag_pwr**2))
+    react_active_ratio_val = (
+        surf_imag_pwr / surf_real_pwr if abs(surf_real_pwr) > constants.eps else 0.0
+    )
+
+    p_rms_val = float(np.sqrt(max(surf_p_sq_accum / total_surf_area, 0.0)))
+    v_complex_val = surf_v_accum / total_surf_area
+    v_mag_val = float(np.abs(v_complex_val))
+
+    # Power-based reflection & absorption (avoids <v> phase cancellation across non-uniform faces)
+    if abs(rho_c_val) > constants.eps and abs(surf_real_pwr) > constants.eps:
+        z_pwr_real = (0.5 * surf_p_sq_accum) / surf_real_pwr
+        z_pwr_imag = (
+            (0.5 * surf_p_sq_accum) / surf_imag_pwr
+            if abs(surf_imag_pwr) > constants.eps
+            else 0.0
+        )
+        z_pwr_norm = (z_pwr_real + 1j * z_pwr_imag) / rho_c_val
+        denom_pwr = z_pwr_norm + 1.0 + 0.0j
+        if abs(denom_pwr) > constants.eps:
+            r_pwr_complex = (z_pwr_norm - 1.0 + 0.0j) / denom_pwr
+            r_mag_pwr_val = float(np.abs(r_pwr_complex))
+            alpha_pwr_val = float(1.0 - (r_mag_pwr_val**2))
+        else:
+            r_mag_pwr_val = 0.0
+            alpha_pwr_val = 0.0
+    else:
+        r_mag_pwr_val = 0.0
+        alpha_pwr_val = 0.0
+
+    surf_spl_db = float(20.0 * np.log10(max(p_rms_val, constants.log_floor) / constants.Pref))
+    surf_svl_db = float(20.0 * np.log10(max(v_mag_val, constants.log_floor) / constants.Vref))
+
+    return {
+        "real": surf_real_pwr,
+        "imag": surf_imag_pwr,
+        "mag": surf_mag_pwr,
+        "react_active_ratio": react_active_ratio_val,
+        "p_rms": p_rms_val,
+        "v_complex": v_complex_val,
+        "v_mag": v_mag_val,
+        "r_mag_pwr": r_mag_pwr_val,
+        "alpha_pwr": alpha_pwr_val,
+        "spl": surf_spl_db,
+        "svl": surf_svl_db,
+    }
+
+def _write_power_csv(csv_filepath, freqs, all_surf_names, surface_metrics, surface_power_results):
+    """Write headers and frequency rows to the power CSV file and return legend summary labels."""
+    surf_pwr_labels = []
+
+    with open(csv_filepath, mode="w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+
+        headers = ["Freq(Hz)"]
+        for sname in all_surf_names:
+            a_val = surface_metrics[sname]["area"]
+            tsw_real = surface_metrics[sname]["total_energy_sum_real"]
+            tsw_imag = surface_metrics[sname]["total_energy_sum_imag"]
+            tsw_mag = surface_metrics[sname]["total_energy_sum_mag"]
+
+            hdr_base = f"{sname} | A = {a_val:.6g} L^2"
+            hdr_log = (
+                f"'{sname}' | A = {a_val:.6g} L^2 | TSW_real = {tsw_real:.4g} | "
+                f"TSW_imag = {tsw_imag:.4g} | TSW_mag = {tsw_mag:.4g}"
+            )
+            surf_pwr_labels.append(hdr_log)
+
+            headers.extend([
+                f"{hdr_base} | TSW_real (mW) = {tsw_real:.4g}",
+                f"{hdr_base} | TSW_imag (mW) = {tsw_imag:.4g}",
+                f"{hdr_base} | TSW_mag (mW) = {tsw_mag:.4g}",
+                f"{hdr_base} | W_imag/W_real",
+                f"{hdr_base} | TSW_real (mW) = {tsw_real:.4g} | SWL_real (dB)",
+                f"{hdr_base} | TSW_real (mW) = {tsw_real:.4g} | SWL_real (dBA)",
+                f"{hdr_base} | TSW_imag (mW) = {tsw_imag:.4g} | SWL_imag (dB)",
+                f"{hdr_base} | TSW_imag (mW) = {tsw_imag:.4g} | SWL_imag (dBA)",
+                f"{hdr_base} | TSW_mag (mW) = {tsw_mag:.4g} | SWL_mag (dB)",
+                f"{hdr_base} | TSW_mag (mW) = {tsw_mag:.4g} | SWL_mag (dBA)",
+                f"{hdr_base} | P_rms (MPa)",
+                f"{hdr_base} | V_mean_real (mm/s)",
+                f"{hdr_base} | V_mean_imag (mm/s)",
+                f"{hdr_base} | V_mag (mm/s)",
+                f"{hdr_base} | R_mag_pwr",
+                f"{hdr_base} | alpha_pwr",
+                f"{hdr_base} | SPL (dB)",
+                f"{hdr_base} | SPL (dBA)",
+                f"{hdr_base} | SVL (dB)",
+            ])
+
+        writer.writerow(headers)
+
+        for f_idx, freq in enumerate(freqs):
+            row = [freq]
+            a_wt = _get_a_weighting(freq)
+
+            for sname in all_surf_names:
+                res = surface_power_results[sname]
+                w_real = res["real"][f_idx]
+                w_imag = res["imag"][f_idx]
+                w_mag = res["mag"][f_idx]
+                react_active_ratio = res["react_active_ratio"][f_idx]
+
+                p_rms = res["p_rms"][f_idx]
+                v_complex = res["v_complex"][f_idx]
+                v_mag = res["v_mag"][f_idx]
+                r_mag_pwr = res["r_mag_pwr"][f_idx]
+                alpha_pwr = res["alpha_pwr"][f_idx]
+                spl_db = res["spl"][f_idx]
+                svl_db = res["svl"][f_idx]
+
+                swl_real = 10.0 * np.log10(max(abs(w_real), constants.log_floor) / constants.Wref)
+                swl_imag = 10.0 * np.log10(max(abs(w_imag), constants.log_floor) / constants.Wref)
+                swl_mag = 10.0 * np.log10(max(abs(w_mag), constants.log_floor) / constants.Wref)
+
+                row.extend([
+                    w_real, w_imag, w_mag, react_active_ratio,
+                    swl_real, swl_real + a_wt,
+                    swl_imag, swl_imag + a_wt,
+                    swl_mag, swl_mag + a_wt,
+                    p_rms, np.real(v_complex), np.imag(v_complex), v_mag,
+                    r_mag_pwr, alpha_pwr,
+                    spl_db, spl_db + a_wt,
+                    svl_db,
+                ])
+
+            writer.writerow(row)
+
+    return surf_pwr_labels
+
+def calculate_total_sound_power(
+    csv_filepath,
+    surface_elements,
+    freqs,
+    global_p_surf,
+    global_v_surf,
+    global_p_mics,
+    global_v_mics_x,
+    global_v_mics_y,
+    global_v_mics_z,
+    global_bem_elements_map,
+    global_mics_nodes_map,
+    global_bem_areas,
+    global_mics_areas,
+    global_mics_normals,
+    global_mics_elements_conn,
+    tie_registry=None,
+    zones_mesh=None,
+    global_rho=None,
+    global_c=None,
+):
+    """
+    COMPUTES:
+- SWL(dB) & SWL(dBA) & total sound power (TSW) passing through BEM and MICS surfaces
+- Average RMS pressure, SPL(dB), SPL(dBA), mean Velocity (V_mean_real, V_mean_imag, V_mag),
+  mean Impedance (Z_mean), normalized Impedance (Z_norm), Reflection coeff (R),
+  Absorption factor (alpha = 1 - |R|^2), power-based R_mag_pwr & alpha_pwr,
+  and Reactive/Active power ratio (W_imag / W_real)
+
+    OUTPUTS: single 'model_name_power.csv' file
+- Surface Area (A); for tied surfaces is the Active area
+- TSW = Total Sound Power sum from all frequencies
+- net acoustic power transmission values (mag, real, imag) and W_imag / W_real ratio
+- Sound Power Levels (SWL - dB and dBA)
+- Average SPL(dB, dBA), mean Velocity (V_mean_real, V_mean_imag, V_mag),
+  Z_mean, Z_norm, R, alpha, R_mag_pwr & alpha_pwr per surface
+
+    Each Surface (BEM or MICS), as defined in PrePoMax, belongs to one zone.
+    Solver is unit-agnostic; rho * c is expected in consistent solver units.
+
+    If TIED pairs present, it also calculates the Active (area clipped / intersected elements) power for slave and master surfaces.
+    """
+    all_surface_elements, surface_rho_c, surface_metrics = _resolve_surfaces_and_areas(
+        surface_elements=surface_elements,
+        global_bem_elements_map=global_bem_elements_map,
+        global_bem_areas=global_bem_areas,
+        global_mics_elements_conn=global_mics_elements_conn,
+        global_mics_areas=global_mics_areas,
+        tie_registry=tie_registry,
+        zones_mesh=zones_mesh,
+        global_rho=global_rho,
+        global_c=global_c,
+    )
+
+    metric_keys = (
+        "real", "imag", "mag", "react_active_ratio",
+        "p_rms", "v_complex", "v_mag",
+        "r_mag_pwr", "alpha_pwr",
+        "spl", "svl",
+    )
+    surface_power_results = {
+        surf_name: {k: [] for k in metric_keys}
+        for surf_name in all_surface_elements.keys()
+    }
+
+    file_logger.debug("\nDEBUG: TIED pairs power checks:")
+    file_logger.debug("===============================")
+    file_logger.debug("Calculate Net Interface Flux Leakage (Error) & Mean Phase Offsets")
+
+    for f_idx, freq in enumerate(freqs):
+        p_surf_f = global_p_surf[f_idx, :]
+        v_surf_f = global_v_surf[f_idx, :]
+        p_mics_f = global_p_mics[f_idx, :]
+        vx_mics_f = global_v_mics_x[f_idx, :]
+        vy_mics_f = global_v_mics_y[f_idx, :]
+        vz_mics_f = global_v_mics_z[f_idx, :]
+
+        _log_tie_flux_balance(
+            freq=freq,
+            tie_registry=tie_registry,
+            all_surface_elements=all_surface_elements,
+            p_surf_f=p_surf_f,
+            v_surf_f=v_surf_f,
+            global_bem_elements_map=global_bem_elements_map,
+            global_bem_areas=global_bem_areas,
+        )
+
+        for surf_name, surf_elems in all_surface_elements.items():
+            step_res = _integrate_surface_frequency(
+                surf_name=surf_name,
+                surf_elems=surf_elems,
+                total_surf_area=surface_metrics[surf_name]["area"],
+                rho_c_val=surface_rho_c.get(surf_name, 0.0),
+                p_surf_f=p_surf_f,
+                v_surf_f=v_surf_f,
+                p_mics_f=p_mics_f,
+                vx_mics_f=vx_mics_f,
+                vy_mics_f=vy_mics_f,
+                vz_mics_f=vz_mics_f,
+                global_bem_elements_map=global_bem_elements_map,
+                global_bem_areas=global_bem_areas,
+                global_mics_nodes_map=global_mics_nodes_map,
+                global_mics_elements_conn=global_mics_elements_conn,
+                global_mics_areas=global_mics_areas,
+                global_mics_normals=global_mics_normals,
+            )
+
+            for k in metric_keys:
+                surface_power_results[surf_name][k].append(step_res[k])
+
+            surface_metrics[surf_name]["total_energy_sum_real"] += step_res["real"]
+            surface_metrics[surf_name]["total_energy_sum_imag"] += step_res["imag"]
+            surface_metrics[surf_name]["total_energy_sum_mag"] += step_res["mag"]
+
+    return _write_power_csv(
+        csv_filepath=csv_filepath,
+        freqs=freqs,
+        all_surf_names=list(all_surface_elements.keys()),
+        surface_metrics=surface_metrics,
+        surface_power_results=surface_power_results,
+    )
 
 def generate_power_flux_plot(model_name, csv_filepath, png_filepath, plot_dBA=False):
     """

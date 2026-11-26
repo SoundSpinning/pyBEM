@@ -76,6 +76,12 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
         default = constants.results_type,
         help = f"Results output (default: {constants.results_type}). Set to None to turn off, Power results still get output.",
     )
+    parser.add_argument(
+        "--batch",
+        action="store_true",
+        default=False,
+        help="Run pyBEM sequentially on all *.inp files in the given folder",
+    )
 
     # Pre-process arguments to support key=value formats (e.g., debug=yes or cpus=4)
     processed_args = []
@@ -100,6 +106,29 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
     constants.results_type = args.results
     user_ncpus = args.cpus
     filename = args.filename
+
+    # --- 1.3 BATCH MODE ---
+    if args.batch:
+        target_folder = filename
+        if not target_folder:
+            target_folder = input("\n Enter folder path containing *.inp files: ").strip()
+
+        if not target_folder:
+            print(" [!] ERROR: No folder specified for --batch.")
+            return
+
+        from run_suite import run_batch_suite
+
+        run_batch_suite(
+            target_folder=target_folder,
+            cpus=user_ncpus,
+            debug=constants.debug_mode,
+            pref=constants.Pref,
+            wref=constants.Wref,
+            vref=constants.Vref,
+            results=constants.results_type,
+        )
+        return
 
     # Handle boolean text conversions if passed as --debug=yes or --debug=1
     if isinstance(args.debug, str):
@@ -728,12 +757,23 @@ def start_pybem_app(n_CPUs, used_CPUs, n_threads, RAM_gb):
                 logger.info("[i] No shared memory to clean up (single-worker mode).")
 
         # 13.5 Finalize and write complete VTU outputs to disk
-        if constants.results_type == "paraview":
+        results_mode = str(constants.results_type).strip().lower() if constants.results_type is not None else ""
+
+        if results_mode == "paraview":
             logger.info(f"\n--> Writing {num_freqs} binary frequency steps")
             exporter.finalise()
             logger.info(f"    Export Complete. PV results file written to: ( '{parser.model_name}_Results.pvd' )")
+        elif results_mode in ("none", "null", "off", "false", "0", ""):
+            logger.info("\n --> Results output was turned off. Set --results=paraview if required")
         else:
-            logger.info(f"\n --> Results output was turned off. Set --results=paraview if required")
+            logger.warning(f"\n [!] Unknown --results value '{constants.results_type}'; skipping VTU export. Use --results=paraview or --results=None.")
+
+        # if constants.results_type == "paraview":
+        #     logger.info(f"\n--> Writing {num_freqs} binary frequency steps")
+        #     exporter.finalise()
+        #     logger.info(f"    Export Complete. PV results file written to: ( '{parser.model_name}_Results.pvd' )")
+        # else:
+        #     logger.info(f"\n --> Results output was turned off. Set --results=paraview if required")
 
         t_exp_0 = time.time()
 
